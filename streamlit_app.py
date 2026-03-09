@@ -41,7 +41,7 @@ RERANK_CANDIDATES = 120      # Candidats envoyés au reranker (avant filtrage fi
 PRIMARY_DOC_TYPES = {"SINISTRE", "ENTRETIEN", "COMPTABILITE", "DEVIS", "FACTURE"}
 
 # Liens 3D pour la démo — fichier texte avec format "MOT_CLE : URL" (une paire par ligne)
-DEMO_3D_LINKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "URL_SP_-_demo.txt")
+DEMO_3D_LINKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "URL_SP_demo.txt")
 DEMO_3D_LINKS = {}
 
 
@@ -823,4 +823,3 @@ if query:
                 _ = st.markdown(f'<div id="source-{i+1}"></div>', unsafe_allow_html=True)
                 st.markdown("---")
                 st.text(text[:2000] + ("..." if len(text) > 2000 else ""))
-
