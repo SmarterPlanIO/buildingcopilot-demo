@@ -1,8 +1,7 @@
 """
-ÉTAPE 7 — Interface de requête RAG (Streamlit)
-Pipeline : Vector + BM25 → RRF fusion → Source diversity → FlashRank rerank → Claude
-Lance : streamlit run 07_query_rag_ui.py
-Prérequis : pip install flashrank --break-system-packages
+ÉTAPE 7 — Interface de requête RAG (Streamlit Cloud)
+Pipeline : Vector + BM25 → RRF fusion → Source diversity → Claude
+Lance : streamlit run streamlit_app.py
 """
 import json
 import re
@@ -10,7 +9,6 @@ import os
 import boto3
 import psycopg2
 import streamlit as st
-from flashrank import Ranker, RerankRequest
 
 # =====================================================
 # CONFIGURATION — credentials via st.secrets (Streamlit Cloud)
@@ -35,7 +33,7 @@ MAX_CHUNKS_PER_SOURCE = 3     # Défaut (override par stratégie auto)
 SIMILARITY_THRESHOLD = 0.15
 THEME_BOOST = 0.05
 RRF_K = 60                   # Constante RRF (standard = 60)
-RERANK_CANDIDATES = 120      # Candidats envoyés au reranker (avant filtrage final)
+RERANK_CANDIDATES = 80       # Candidats SQL (pas de reranker en mode cloud)
 
 # Types de documents considérés comme sources PRIMAIRES (événements distincts)
 PRIMARY_DOC_TYPES = {"SINISTRE", "ENTRETIEN", "COMPTABILITE", "DEVIS", "FACTURE"}
@@ -272,13 +270,6 @@ def get_bedrock_client():
         config=Config(read_timeout=300, retries={"max_attempts": 3})
     )
 
-@st.cache_resource
-def get_reranker():
-    """FlashRank multilingue — modèle léger, pas de PyTorch, supporte le français."""
-    import tempfile
-    cache = os.path.join(tempfile.gettempdir(), "flashrank")
-    return Ranker(model_name="ms-marco-MultiBERT-L-12", cache_dir=cache)
-
 @st.cache_data(ttl=300)
 def get_copros():
     conn = get_db_connection()
@@ -461,15 +452,6 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT, si
         if text_sig not in seen_texts:
             seen_texts.add(text_sig)
             deduped.append(r)
-
-    # ── FlashRank rerank ──
-    if len(deduped) > 1:
-        reranker = get_reranker()
-        passages = [{"id": i, "text": r[6][:2000]} for i, r in enumerate(deduped)]
-        rerank_request = RerankRequest(query=query, passages=passages)
-        reranked = reranker.rerank(rerank_request)
-        rerank_order = [item["id"] for item in reranked]
-        deduped = [deduped[idx] for idx in rerank_order if idx < len(deduped)]
 
     return deduped[:max_chunks], themes, doc_type_hint
 
@@ -815,7 +797,7 @@ if query:
                     st.markdown(f"""
                     <div style="text-align:center">
                         <div style="font-size:1.4rem;font-weight:700;color:{sim_color}">#{i+1}</div>
-                        <div style="font-size:0.7rem;color:#a0aec0">rang reranké</div>
+                        <div style="font-size:0.7rem;color:#a0aec0">rang RRF</div>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -823,3 +805,4 @@ if query:
                 _ = st.markdown(f'<div id="source-{i+1}"></div>', unsafe_allow_html=True)
                 st.markdown("---")
                 st.text(text[:2000] + ("..." if len(text) > 2000 else ""))
+
