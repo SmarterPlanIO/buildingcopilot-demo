@@ -668,11 +668,13 @@ def linkify_sources(text, max_source_num):
 # POINT 2 : boutons copier / sauvegarder
 # =====================================================
 def render_action_buttons(answer_text, key_suffix=""):
-    escaped = answer_text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+    import base64
+    b64 = base64.b64encode(answer_text.encode("utf-8")).decode("ascii")
     bid = f"btn-{key_suffix}"
     _ = st.markdown(f"""
     <button id="{bid}" class="action-btn" onclick="
-        navigator.clipboard.writeText(`{escaped}`).then(function(){{
+        var t=atob('{b64}');
+        navigator.clipboard.writeText(t).then(function(){{
             document.getElementById('{bid}').textContent='✅ Copié !';
             setTimeout(function(){{document.getElementById('{bid}').textContent='📋 Copier';}},2000);
         }});
