@@ -1,11 +1,23 @@
 """
-ÉTAPE 7 — Interface de requête RAG (Streamlit Cloud)
+ÉTAPE 7 — Interface de requête RAG (Streamlit Cloud) — v2 Multi-turn
 Pipeline : Vector + BM25 → RRF fusion → Source diversity → Claude
 Lance : streamlit run streamlit_app.py
+
+Changelog v2 :
+  1. Sidebar lisible en mobile (labels blancs)
+  2. Boutons copier / sauvegarder la réponse
+  3. Multi-turn UX (st.chat_input / st.chat_message)
+  4. Multi-turn backend (historique injecté dans les messages LLM, max 3 tours)
+  5. Seuil inventaire élargi (détection temporelle >2 ans → inventaire 80 chunks)
+  6. Boost RCP (quota minimum garanti dans la diversité par source)
+  7. Query expansion pour questions de suivi courtes
+  8. Concision du prompt (instruction explicite + max_tokens réduits)
+  9. Adaptation prompt multi-turn (ne pas répéter les infos déjà données)
 """
 import json
 import re
 import os
+import html as html_lib
 import boto3
 import psycopg2
 import streamlit as st
@@ -24,21 +36,26 @@ AWS_SECRET_KEY = st.secrets["aws"]["secret_access_key"]
 
 EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 LLM_MODEL = "eu.anthropic.claude-sonnet-4-6"
-LLM_MODEL_FAST = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"  # Mode démo — 5-10x plus rapide
+LLM_MODEL_FAST = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 
-MAX_CHUNKS_LLM_DEFAULT = 50   # Défaut pour Équilibré et Ciblé
-MAX_CHUNKS_LLM_BROAD = 80    # Pour requêtes inventaire (couverture max)
-TOP_K_DISPLAY = 15            # Chunks affichés dans les sources de l'UI
-MAX_CHUNKS_PER_SOURCE = 3     # Défaut (override par stratégie auto)
+MAX_CHUNKS_LLM_DEFAULT = 50
+MAX_CHUNKS_LLM_BROAD = 80
+TOP_K_DISPLAY = 15
+MAX_CHUNKS_PER_SOURCE = 3
 SIMILARITY_THRESHOLD = 0.15
 THEME_BOOST = 0.05
-RRF_K = 60                   # Constante RRF (standard = 60)
-RERANK_CANDIDATES = 80       # Candidats SQL (pas de reranker en mode cloud)
+RRF_K = 60
+RERANK_CANDIDATES = 80        # Candidats SQL (pas de reranker en mode cloud)
+RCP_MIN_SLOTS = 3             # POINT 6 : quota minimum RCP
 
-# Types de documents considérés comme sources PRIMAIRES (événements distincts)
+# Multi-turn
+MAX_HISTORY_TURNS = 3
+MAX_HISTORY_CHARS = 16000     # ~4K tokens budget
+FOLLOWUP_QUERY_THRESHOLD = 60
+
 PRIMARY_DOC_TYPES = {"SINISTRE", "ENTRETIEN", "COMPTABILITE", "DEVIS", "FACTURE"}
 
-# Liens 3D pour la démo — fichier texte avec format "MOT_CLE : URL" (une paire par ligne)
+# Liens 3D démo — fichier texte avec format "MOT_CLE : URL" (une paire par ligne)
 DEMO_3D_LINKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "URL_SP_demo.txt")
 DEMO_3D_LINKS = {}
 
@@ -139,34 +156,23 @@ st.set_page_config(
 )
 
 # =====================================================
-# CSS personnalisé
+# CSS — POINT 1 : sidebar lisible en mobile
 # =====================================================
 _ = st.markdown("""
 <style>
-    /* Typographie */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
-    /* Header gradient */
     .main-header {
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-        padding: 2rem 2.5rem;
-        border-radius: 16px;
-        margin-bottom: 2rem;
-        color: white;
+        padding: 2rem 2.5rem; border-radius: 16px; margin-bottom: 1rem; color: white;
     }
     .main-header h1 { color: white; margin: 0 0 0.3rem 0; font-size: 1.8rem; font-weight: 700; }
     .main-header p { color: #a0aec0; margin: 0; font-size: 0.95rem; }
 
-    /* Answer card */
     .answer-card {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 1.5rem 2rem;
-        margin: 1rem 0;
-        line-height: 1.7;
-        color: #1a202c;
+        background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;
+        padding: 1.5rem 2rem; margin: 1rem 0; line-height: 1.7; color: #1a202c;
     }
     .answer-card h1, .answer-card h2, .answer-card h3,
     .answer-card h4, .answer-card h5, .answer-card h6 { color: #1a202c; }
@@ -175,61 +181,58 @@ _ = st.markdown("""
     .answer-card code { background: #edf2f7; padding: 2px 6px; border-radius: 4px; color: #2d3748; }
     .answer-card a { color: #667eea; }
 
-    /* Source badge */
     .source-badge {
-        display: inline-block;
-        background: linear-gradient(135deg, #667eea, #764ba2);
-        color: white;
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        margin-right: 6px;
+        display: inline-block; background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white; padding: 2px 10px; border-radius: 12px;
+        font-size: 0.75rem; font-weight: 600; margin-right: 6px;
     }
-
-    /* Similarity bar */
-    .sim-bar {
-        height: 6px;
-        border-radius: 3px;
-        background: #e2e8f0;
-        margin-top: 4px;
-    }
-    .sim-fill {
-        height: 100%;
-        border-radius: 3px;
-        background: linear-gradient(90deg, #667eea, #48bb78);
-    }
-
-    /* Theme tag */
+    .sim-bar { height: 6px; border-radius: 3px; background: #e2e8f0; margin-top: 4px; }
+    .sim-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #667eea, #48bb78); }
     .theme-tag {
-        display: inline-block;
-        background: #edf2f7;
-        color: #4a5568;
-        padding: 2px 8px;
-        border-radius: 6px;
-        font-size: 0.75rem;
-        margin: 2px;
+        display: inline-block; background: #edf2f7; color: #4a5568;
+        padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; margin: 2px;
     }
 
-    /* Sidebar styling */
+    /* ── Sidebar — fond bleu marine ── */
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
     }
     [data-testid="stSidebar"] .stMarkdown { color: #e2e8f0; }
-    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
-    [data-testid="stSidebar"] h3, [data-testid="stSidebar"] label { color: #e2e8f0 !important; }
+    /* POINT 1 : TOUT le texte sidebar en blanc */
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] span,
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary,
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary span,
+    [data-testid="stSidebar"] [data-testid="stExpander"] p,
+    [data-testid="stSidebar"] .stSelectbox label,
+    [data-testid="stSidebar"] .stSlider label,
+    [data-testid="stSidebar"] .stCheckbox label span { color: #e2e8f0 !important; }
 
-    /* Stats cards */
     .stat-card {
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 10px;
-        padding: 0.8rem 1rem;
-        text-align: center;
-        margin-bottom: 0.5rem;
+        background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 10px; padding: 0.8rem 1rem; text-align: center; margin-bottom: 0.5rem;
     }
     .stat-card .number { font-size: 1.5rem; font-weight: 700; color: #48bb78; }
     .stat-card .label { font-size: 0.75rem; color: #a0aec0; }
+
+    .action-btn {
+        background: none; border: 1px solid #cbd5e0; border-radius: 6px;
+        padding: 4px 14px; cursor: pointer; font-size: 0.82rem; color: #4a5568;
+        margin-right: 6px; transition: all 0.15s;
+    }
+    .action-btn:hover { background: #edf2f7; border-color: #a0aec0; }
+
+    .followup-badge {
+        display: inline-block; background: #ebf8ff; color: #2b6cb0;
+        padding: 2px 10px; border-radius: 8px; font-size: 0.75rem; margin-bottom: 0.3rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -238,11 +241,10 @@ _ = st.markdown("""
 # Connexions (cached)
 # =====================================================
 def get_db_connection():
-    """Retourne une connexion valide, en la recréant si nécessaire."""
     conn = st.session_state.get("_db_conn")
     if conn is not None:
         try:
-            conn.isolation_level  # test rapide de vivacité
+            conn.isolation_level
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
             return conn
@@ -284,8 +286,7 @@ def get_total_chunks():
         cur.execute("SELECT COUNT(*) FROM chunks;")
         return cur.fetchone()[0]
 
-
-# Pré-chauffage Bedrock (TLS + auth) — élimine ~2-3s de latence sur la 1ère requête
+# Pré-chauffage Bedrock
 if "bedrock_warm" not in st.session_state:
     try:
         _client = get_bedrock_client()
@@ -298,17 +299,17 @@ if "bedrock_warm" not in st.session_state:
     except Exception:
         st.session_state["bedrock_warm"] = False
 
+# Session state — multi-turn
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
 
 # =====================================================
 # Fonctions RAG
 # =====================================================
 def detect_query_themes(query):
     query_lower = query.lower()
-    matched = []
-    for theme, keywords in THEMES_KEYWORDS.items():
-        if any(kw in query_lower for kw in keywords):
-            matched.append(theme)
-    return matched
+    return [t for t, kws in THEMES_KEYWORDS.items() if any(kw in query_lower for kw in kws)]
 
 def detect_doc_type_hint(query):
     query_lower = query.lower()
@@ -317,36 +318,78 @@ def detect_doc_type_hint(query):
             return doc_type
     return None
 
+
 def detect_retrieval_strategy(query, demo_mode=False):
     """
-    Détermine automatiquement les paramètres de retrieval.
-    Retourne (chunks_per_source, doc_type_boost, max_chunks_llm, label).
+    POINT 5 : détection temporelle >2 ans → force inventaire (80 chunks).
     """
     q = query.lower()
+
+    # ── Détection temporelle : plage > 2 ans ──
+    year_matches = re.findall(r'20[0-2]\d', q)
+    if len(year_matches) >= 2:
+        years = sorted(set(int(y) for y in year_matches))
+        if years[-1] - years[0] > 2:
+            mcl = 40 if demo_mode else 80
+            return 2, 0.03, mcl, "🔎 Inventaire (plage temporelle)"
+
+    since_match = re.search(r'depuis\s+20([0-2]\d)', q)
+    if since_match:
+        since_year = 2000 + int(since_match.group(1))
+        if 2026 - since_year > 2:
+            mcl = 40 if demo_mode else 80
+            return 2, 0.03, mcl, "🔎 Inventaire (historique)"
 
     broad_keywords = [
         "tous les", "toutes les", "liste", "lister", "inventaire",
         "historique", "depuis", "au fil des", "combien de",
         "comparer", "comparaison", "entre les",
         "chaque", "ensemble des", "récapitulatif", "synthèse globale",
-        "quels sont", "quelles sont", "y a-t-il eu"
+        "quels sont", "quelles sont", "y a-t-il eu",
+        "évolution", "tendance", "progression",
     ]
     if any(kw in q for kw in broad_keywords):
         mcl = 40 if demo_mode else 80
-        return 2, 0.03, mcl, "🔎 Diversité (inventaire)"
+        return 2, 0.03, mcl, "🔎 Inventaire"
 
     deep_keywords = [
         "article ", "lot n°", "lot ", "résolution n°",
         "que dit", "que prévoit", "détaille", "explique",
         "dans le règlement", "dans le pv", "dans le contrat",
-        "ce document", "ce rapport"
+        "ce document", "ce rapport",
     ]
     if any(kw in q for kw in deep_keywords):
         mcl = 30 if demo_mode else 50
-        return 8, 0.005, mcl, "🔬 Profondeur (document ciblé)"
+        return 8, 0.005, mcl, "🔬 Ciblé"
 
     mcl = 30 if demo_mode else 50
     return 3, 0.01, mcl, "⚖️ Équilibré"
+
+
+def expand_followup_query(current_query, chat_history):
+    """POINT 7 : enrichit les questions de suivi courtes."""
+    if not chat_history:
+        return current_query, False
+
+    q = current_query.strip()
+    followup_markers = [
+        "et ", "aussi", "même", "pareil", "idem",
+        "ça", "ce ", "ces ", "le même", "la même", "les mêmes",
+        "celui", "celle", "précise", "détaille", "développe",
+        "pour quelle", "quel montant", "à quelle date",
+        "combien", "pourquoi", "comment",
+    ]
+    is_short = len(q) < FOLLOWUP_QUERY_THRESHOLD
+    has_marker = any(q.lower().startswith(m) or f" {m}" in q.lower() for m in followup_markers)
+    year_only = bool(re.match(r'^(et\s+)?(en\s+|pour\s+)?20\d{2}\s*\??$', q, re.IGNORECASE))
+
+    if is_short and (has_marker or year_only):
+        prev_queries = [h["content"] for h in chat_history if h["role"] == "user"]
+        if prev_queries:
+            return f"{prev_queries[-1]} — {q}", True
+
+    return current_query, False
+
 
 def get_embedding(text):
     bedrock = get_bedrock_client()
@@ -359,18 +402,12 @@ def get_embedding(text):
     )
     return json.loads(response["body"].read())["embedding"]
 
-def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT, sim_threshold=SIMILARITY_THRESHOLD, chunks_per_source=MAX_CHUNKS_PER_SOURCE, doc_type_boost=0.01):
-    """
-    Pipeline de retrieval hybride en 4 étapes :
-      1. SQL : vec_rank + bm25_rank indépendants
-      2. SQL : RRF fusion + theme_boost + doc_type_boost dynamique
-      3. SQL : source diversity (PARTITION BY source_file)
-      4. Python : FlashRank rerank (cross-encoder multilingue)
 
-    doc_type_boost est dynamique :
-      - Inventaire → 0.03 (fort, pour que les SINISTRE dominent le top 50)
-      - Équilibré  → 0.01
-      - Ciblé      → 0.005 (léger, pour ne pas biaiser)
+def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
+                  sim_threshold=SIMILARITY_THRESHOLD, chunks_per_source=MAX_CHUNKS_PER_SOURCE,
+                  doc_type_boost=0.01):
+    """
+    Pipeline hybride 4 étapes (sans FlashRank en cloud) + POINT 6 : quota minimum RCP.
     """
     conn = get_db_connection()
     query_embedding = get_embedding(query)
@@ -378,9 +415,7 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT, si
     doc_type_hint = detect_doc_type_hint(query)
 
     with conn.cursor() as cur:
-        where_clauses = []
-        params_before = []
-
+        where_clauses, params_before = [], []
         if copropriete:
             where_clauses.append("copropriete = %s")
             params_before.append(copropriete)
@@ -430,57 +465,73 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT, si
         """
 
         params = [
-            str(query_embedding),       # vec_similarity
-            themes if themes else [],   # theme_boost CASE
-            query,                      # bm25 ts_rank
-            doc_type_for_boost,         # doc_type CASE — quel type
-            doc_type_boost,             # doc_type CASE — valeur
-            *params_before,             # WHERE clauses (copropriete only)
-            chunks_per_source,          # rank_in_source <=
-            sim_threshold,              # vec_similarity >=
-            RERANK_CANDIDATES,          # LIMIT
+            str(query_embedding), themes if themes else [], query,
+            doc_type_for_boost, doc_type_boost,
+            *params_before,
+            chunks_per_source, sim_threshold, RERANK_CANDIDATES,
         ]
-
         cur.execute(sql, params)
         raw_results = cur.fetchall()
 
-    # Déduplication par contenu
-    seen_texts = set()
-    deduped = []
+    # Déduplication
+    seen_texts, deduped = set(), []
     for r in raw_results:
-        text_sig = r[6][:300].strip()
-        if text_sig not in seen_texts:
-            seen_texts.add(text_sig)
+        sig = r[6][:300].strip()
+        if sig not in seen_texts:
+            seen_texts.add(sig)
             deduped.append(r)
 
-    return deduped[:max_chunks], themes, doc_type_hint
+    # ── POINT 6 : quota minimum RCP ──
+    top = deduped[:max_chunks]
+    rcp_in_top = sum(1 for r in top if r[4] == "RCP")
+    if rcp_in_top < RCP_MIN_SLOTS:
+        rcp_below = [r for r in deduped[max_chunks:] if r[4] == "RCP"]
+        needed = min(RCP_MIN_SLOTS - rcp_in_top, len(rcp_below))
+        if needed > 0:
+            extra_rcp = rcp_below[:needed]
+            for _ in range(needed):
+                for j in range(len(top) - 1, -1, -1):
+                    if top[j][4] != "RCP":
+                        top.pop(j)
+                        break
+            top.extend(extra_rcp)
 
-def generate_answer(query, search_results, themes, doc_type_hint, model_id=LLM_MODEL):
-    """Synchrone (non-streaming) — mode production Sonnet."""
-    bedrock = get_bedrock_client()
-    system_prompt, user_prompt, max_tokens_response = build_llm_payload(query, search_results, themes, doc_type_hint)
-
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": max_tokens_response,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": user_prompt}]
-    })
-
-    response = bedrock.invoke_model(
-        modelId=model_id, body=body,
-        contentType="application/json", accept="application/json"
-    )
-    result = json.loads(response["body"].read())
-    return result["content"][0]["text"]
+    return top, themes, doc_type_hint
 
 
-def build_llm_payload(query, search_results, themes, doc_type_hint):
-    """Construit le system prompt, user prompt et body JSON pour l'appel LLM.
-    Utilisé par generate_answer (sync) et generate_answer_stream (streaming)."""
+# =====================================================
+# Multi-turn — historique LLM (POINT 4)
+# =====================================================
+def build_history_messages(chat_history):
+    pairs, total_chars = [], 0
+    i = len(chat_history) - 1
+    while i >= 1 and len(pairs) < MAX_HISTORY_TURNS:
+        if chat_history[i]["role"] == "assistant" and chat_history[i - 1]["role"] == "user":
+            u = chat_history[i - 1]["content"]
+            a = chat_history[i]["content"]
+            pc = len(u) + len(a)
+            if total_chars + pc > MAX_HISTORY_CHARS:
+                break
+            pairs.append((u, a))
+            total_chars += pc
+            i -= 2
+        else:
+            i -= 1
+
+    messages = []
+    for u, a in reversed(pairs):
+        messages.append({"role": "user", "content": u})
+        messages.append({"role": "assistant", "content": a[:4000] + "…" if len(a) > 4000 else a})
+    return messages
+
+
+# =====================================================
+# LLM — POINTS 8 + 9 : concision + multi-turn
+# =====================================================
+def build_llm_payload(query, search_results, themes, doc_type_hint, chat_history=None):
     context_parts = []
     for i, result in enumerate(search_results):
-        chunk_id, copro, source, filename, doc_type, chunk_themes, text, vec_sim, theme_boost, bm25_score, rrf_score = result
+        chunk_id, copro, source, filename, doc_type, chunk_themes, text, *_ = result
         source_type = "PRIMAIRE" if doc_type in PRIMARY_DOC_TYPES else "CONTEXTUEL"
         context_parts.append(
             f"[Source {i+1}] [{source_type}] Copropriété: {copro} | Fichier: {filename} | "
@@ -493,31 +544,39 @@ Tu réponds aux questions en te basant UNIQUEMENT sur les extraits de documents 
 
 Règles STRICTES :
 1. Cite toujours les sources (numéro de source, nom du fichier, article ou résolution si applicable)
-2. Si l'information n'est PAS dans les extraits, dis-le clairement : "Cette information n'apparaît pas dans les documents disponibles."
-   Ne fabrique JAMAIS une réponse sans source.
+2. Si l'information n'est PAS dans les extraits, dis-le clairement. Ne fabrique JAMAIS une réponse sans source.
 3. Croise les informations entre les différents documents quand c'est pertinent
 4. Utilise un langage professionnel adapté au métier de syndic
 5. Si la question porte sur plusieurs thèmes, structure ta réponse par thème
-6. Si un extrait contient des données OCR de mauvaise qualité (caractères cassés,
-   tableaux mal formés), signale-le et extrais ce qui est lisible
-7. Quand tu cites des montants, tantièmes ou numéros de lot, vérifie qu'ils sont
-   cohérents entre les sources avant de les affirmer
+6. Si un extrait contient des données OCR de mauvaise qualité, signale-le et extrais ce qui est lisible
+7. Quand tu cites des montants, tantièmes ou numéros de lot, vérifie la cohérence entre sources
 8. Chaque source est marquée [PRIMAIRE] ou [CONTEXTUEL].
-   Les sources PRIMAIRES (SINISTRE, ENTRETIEN, COMPTABILITE, DEVIS, FACTURE) correspondent
-   chacune potentiellement à un événement, un sinistre, une intervention ou une dépense DISTINCTE.
-   Les sources CONTEXTUELLES (PV_AG, RCP, CONTRAT, COURRIER...) enrichissent la réponse mais
-   ne constituent pas un événement en soi.
-9. Pour une question d'inventaire ou de liste exhaustive, scanne CHAQUE source PRIMAIRE
-   et extrais-en l'information clé (date, lieu, nature, personnes concernées),
-   même si l'extrait est court ou de mauvaise qualité OCR. Ne saute aucune source PRIMAIRE.
-10. Si tu identifies des références à des éléments non présents dans les extraits fournis
-    (ex: un document mentionne 'sinistre n°5' mais tu n'en as pas les détails), signale-le."""
+   Les sources PRIMAIRES correspondent chacune à un événement DISTINCT.
+   Les sources CONTEXTUELLES (PV_AG, RCP, CONTRAT…) enrichissent la réponse.
+9. Pour un inventaire, scanne CHAQUE source PRIMAIRE sans exception.
+10. Signale les références à des éléments absents des extraits fournis.
+
+CONCISION (très important) :
+- Va droit au fait. Pas de reformulation de la question, pas de phrases d'introduction inutiles.
+- Réponds de manière dense et structurée : faits, dates, montants, références.
+- Limite ta réponse à ~400 mots sauf pour les inventaires exhaustifs.
+- Pas de formules de politesse ni de conclusions génériques."""
+
+    has_history = bool(chat_history)
+    if has_history:
+        system_prompt += """
+
+CONTEXTE CONVERSATIONNEL :
+- Un historique de conversation est fourni. Utilise-le pour comprendre les questions de suivi.
+- Ne répète PAS les informations déjà données sauf demande explicite.
+- Appuie-toi sur le contexte des échanges précédents."""
 
     context_hints = []
     if themes:
         context_hints.append(f"Thèmes détectés : {', '.join(themes)}")
     if doc_type_hint:
-        context_hints.append(f"Type de document principal détecté : {doc_type_hint} (mais l'information peut aussi apparaître dans d'autres types de documents)")
+        context_hints.append(f"Type de document principal : {doc_type_hint} (mais l'info peut apparaître dans d'autres types)")
+    hints_text = "\n".join(context_hints) if context_hints else "Aucun filtre spécifique"
 
     primary_sources = set()
     primary_types_found = set()
@@ -525,8 +584,6 @@ Règles STRICTES :
         if r[4] in PRIMARY_DOC_TYPES:
             primary_sources.add(r[2])
             primary_types_found.add(r[4])
-
-    hints_text = "\n".join(context_hints) if context_hints else "Aucun filtre spécifique"
 
     user_prompt = f"""Question : {query}
 
@@ -537,33 +594,54 @@ Voici les {len(search_results)} extraits de documents les plus pertinents :
 {context}
 
 Réponds de manière structurée et précise en citant les sources.
-Si la question demande une liste exhaustive ou un historique, cite TOUTES les occurrences trouvées dans les extraits, pas seulement les premières."""
+Si la question demande une liste exhaustive, cite TOUTES les occurrences trouvées."""
 
     if primary_sources:
-        user_prompt += f"\n\n⚠️ {len(primary_sources)} sources PRIMAIRES de type {', '.join(sorted(primary_types_found))} sont dans les extraits ci-dessus. Assure-toi de toutes les couvrir dans ta réponse."
+        user_prompt += f"\n\n⚠️ {len(primary_sources)} sources PRIMAIRES ({', '.join(sorted(primary_types_found))}). Couvre-les toutes."
 
-    max_tokens_response = 4096 if len(search_results) > 30 else 3000
+    max_tokens_response = 4096 if len(search_results) > 30 else 2500
 
-    return system_prompt, user_prompt, max_tokens_response
+    messages = build_history_messages(chat_history) if has_history else []
+    messages.append({"role": "user", "content": user_prompt})
+
+    return system_prompt, messages, max_tokens_response
 
 
-def generate_answer_stream(query, search_results, themes, doc_type_hint, model_id, placeholder):
-    """Streaming : écrit progressivement dans un placeholder Streamlit."""
+def generate_answer(query, search_results, themes, doc_type_hint,
+                    model_id=LLM_MODEL, chat_history=None):
     bedrock = get_bedrock_client()
-    system_prompt, user_prompt, max_tokens_response = build_llm_payload(query, search_results, themes, doc_type_hint)
-
+    system_prompt, messages, max_tokens = build_llm_payload(
+        query, search_results, themes, doc_type_hint, chat_history
+    )
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": max_tokens_response,
+        "max_tokens": max_tokens,
         "system": system_prompt,
-        "messages": [{"role": "user", "content": user_prompt}]
+        "messages": messages,
     })
+    response = bedrock.invoke_model(
+        modelId=model_id, body=body,
+        contentType="application/json", accept="application/json"
+    )
+    return json.loads(response["body"].read())["content"][0]["text"]
 
+
+def generate_answer_stream(query, search_results, themes, doc_type_hint,
+                           model_id, placeholder, chat_history=None):
+    bedrock = get_bedrock_client()
+    system_prompt, messages, max_tokens = build_llm_payload(
+        query, search_results, themes, doc_type_hint, chat_history
+    )
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": max_tokens,
+        "system": system_prompt,
+        "messages": messages,
+    })
     response = bedrock.invoke_model_with_response_stream(
         modelId=model_id, body=body,
         contentType="application/json", accept="application/json"
     )
-
     full_text = ""
     for event in response["body"]:
         chunk = json.loads(event["chunk"]["bytes"])
@@ -571,13 +649,11 @@ def generate_answer_stream(query, search_results, themes, doc_type_hint, model_i
             delta = chunk.get("delta", {}).get("text", "")
             full_text += delta
             placeholder.markdown(full_text + "▌")
-
     placeholder.markdown(full_text)
     return full_text
 
 
 def linkify_sources(text, max_source_num):
-    """Transforme les 'Source N' en liens cliquables vers les ancres #source-N."""
     def replace_source(match):
         num = int(match.group(1))
         if 1 <= num <= max_source_num:
@@ -589,52 +665,91 @@ def linkify_sources(text, max_source_num):
 
 
 # =====================================================
+# POINT 2 : boutons copier / sauvegarder
+# =====================================================
+def render_action_buttons(answer_text, key_suffix=""):
+    col_copy, col_save, _ = st.columns([1, 1, 4])
+    with col_copy:
+        escaped = html_lib.escape(answer_text)
+        cid = f"cp-{key_suffix}"
+        bid = f"btn-{key_suffix}"
+        _ = st.markdown(f"""
+        <textarea id="{cid}" style="position:fixed;left:-9999px;top:-9999px">{escaped}</textarea>
+        <button id="{bid}" class="action-btn" onclick="
+            var ta=document.getElementById('{cid}');
+            ta.style.position='static'; ta.select(); document.execCommand('copy');
+            ta.style.position='fixed';
+            this.textContent='✅ Copié !';
+            setTimeout(function(){{document.getElementById('{bid}').textContent='📋 Copier';}},2000);
+        ">📋 Copier</button>
+        """, unsafe_allow_html=True)
+    with col_save:
+        st.download_button(
+            "💾 Sauvegarder", data=answer_text,
+            file_name="reponse_buildingcopilot.txt", mime="text/plain",
+            key=f"dl-{key_suffix}",
+        )
+
+
+def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix=""):
+    st.markdown("##### 📎 Sources utilisées")
+    for i, result in enumerate(results[:display_k]):
+        chunk_id, copro, source, filename, doc_type, chunk_themes, text, vec_sim, theme_boost, bm25_score, rrf_score = result
+        theme_boost = float(theme_boost)
+        sim_color = "#48bb78" if i < 5 else "#ecc94b" if i < 15 else "#fc8181"
+        boost_ind = (" +🏷️" if theme_boost > 0 else "") + (" +📝" if bm25_score > 0.1 else "")
+
+        with st.expander(f"Source {i+1} — {filename}  ({doc_type}){boost_ind}"):
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.caption(f"📁 **Copropriété :** {copro}")
+                st.caption(f"📄 **Fichier :** {source}")
+                if chunk_themes:
+                    st.caption(f"🏷️ **Thèmes :** {', '.join(chunk_themes)}")
+                st.caption(f"📊 **Scores :** vec={vec_sim:.2f}  bm25={bm25_score:.3f}  rrf={rrf_score:.4f}")
+            with c2:
+                st.markdown(f"""
+                <div style="text-align:center">
+                    <div style="font-size:1.4rem;font-weight:700;color:{sim_color}">#{i+1}</div>
+                    <div style="font-size:0.7rem;color:#a0aec0">rang RRF</div>
+                </div>
+                """, unsafe_allow_html=True)
+            _ = st.markdown(f'<div id="source-{i+1}"></div>', unsafe_allow_html=True)
+            st.markdown("---")
+            st.text(text[:2000] + ("..." if len(text) > 2000 else ""))
+
+
+# =====================================================
 # SIDEBAR
 # =====================================================
 with st.sidebar:
     st.markdown("## 🏢 BuildingCopilot")
     st.markdown("---")
 
-    # Stats
     copros = get_copros()
     total = get_total_chunks()
-
     _ = st.markdown(f"""
-    <div class="stat-card">
-        <div class="number">{total:,}</div>
-        <div class="label">chunks indexés</div>
-    </div>
-    <div class="stat-card">
-        <div class="number">{len(copros)}</div>
-        <div class="label">copropriété(s)</div>
-    </div>
+    <div class="stat-card"><div class="number">{total:,}</div><div class="label">chunks indexés</div></div>
+    <div class="stat-card"><div class="number">{len(copros)}</div><div class="label">copropriété(s)</div></div>
     """, unsafe_allow_html=True)
 
     st.markdown("---")
-
-    # Filtre copropriété
     copro_names = ["Toutes les copropriétés"] + [c[0] for c in copros]
-    selected_copro = st.selectbox("📁 Filtrer par copropriété", copro_names)
-
+    default_idx = 1 if len(copros) == 1 else 0
+    selected_copro = st.selectbox("📁 Filtrer par copropriété", copro_names, index=default_idx)
     if selected_copro != "Toutes les copropriétés":
         copro_count = next((c[1] for c in copros if c[0] == selected_copro), 0)
         st.caption(f"{copro_count} chunks disponibles")
 
     st.markdown("---")
-
-    # Mode démo
     demo_mode = st.toggle("⚡ Mode Démo", value=False,
-                           help="Haiku 4.5 + streaming + chunks réduits. "
-                                "~15-20s au lieu de ~90s. Qualité légèrement réduite.")
+                           help="Haiku 4.5 + streaming + chunks réduits. ~15-20s au lieu de ~90s.")
     if demo_mode:
         st.caption("⚡ Haiku 4.5 + streaming")
 
-    # Paramètres avancés
     with st.expander("⚙️ Paramètres avancés"):
         auto_strategy = st.checkbox("Stratégie de retrieval automatique", value=True,
-                                     help="Détecte automatiquement si la requête est large (inventaire) "
-                                          "ou ciblée (document précis) et ajuste chunks/source, "
-                                          "doc_type boost et max chunks envoyés à Claude.")
+                                     help="Détecte auto inventaire/ciblé, ajuste chunks et boost.")
         if not auto_strategy:
             chunks_per_source = st.slider("Max chunks par document source", 1, 10, MAX_CHUNKS_PER_SOURCE)
             max_chunks = st.slider("Chunks analysés par l'IA", 15, 100, MAX_CHUNKS_LLM_DEFAULT)
@@ -645,17 +760,23 @@ with st.sidebar:
         sim_threshold = st.slider("Seuil de similarité", 0.0, 1.0, SIMILARITY_THRESHOLD, 0.05)
 
     st.markdown("---")
+
+    if st.button("🗑️ Nouvelle conversation", use_container_width=True):
+        st.session_state.chat_history = []
+        st.rerun()
+
+    st.markdown("---")
     st.markdown("""
     **Exemples de questions :**
     - Quel est le règlement de copropriété ?
     - Quels travaux ont été votés ?
-    - Quel est le budget prévisionnel ?
+    - Analyse des charges de 2022 à 2025
     - Que disent les diagnostics techniques ?
     """)
 
 
 # =====================================================
-# ZONE PRINCIPALE
+# ZONE PRINCIPALE — POINT 3 : Multi-turn conversationnel
 # =====================================================
 _ = st.markdown("""
 <div class="main-header">
@@ -664,145 +785,145 @@ _ = st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Barre de recherche
-query = st.text_input(
-    "🔍 Posez votre question",
-    placeholder="Ex : Quels travaux ont été votés en AG ?",
-    label_visibility="collapsed"
-)
+# ── Afficher l'historique ──
+for msg_idx, msg in enumerate(st.session_state.chat_history):
+    is_last_assistant = (
+        msg["role"] == "assistant"
+        and msg_idx == len(st.session_state.chat_history) - 1
+    )
 
-# Recherche
-if query:
+    with st.chat_message(msg["role"]):
+        if msg["role"] == "user":
+            st.markdown(msg["content"])
+        else:
+            n_disp = msg.get("n_displayed", 0)
+            _ = st.markdown(linkify_sources(msg["content"], n_disp), unsafe_allow_html=True)
+
+            if is_last_assistant:
+                render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}")
+                if msg.get("sources"):
+                    render_sources(msg["sources"], n_disp, key_prefix=f"h-{msg_idx}")
+            else:
+                sc = msg.get("source_count", 0)
+                if sc:
+                    st.caption(f"📎 {sc} sources analysées")
+
+
+# ── Saisie utilisateur ──
+user_input = st.chat_input("Posez votre question sur les archives de copropriété…")
+
+if user_input:
+    st.session_state.chat_history.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
     copro_filter = selected_copro if selected_copro != "Toutes les copropriétés" else None
     DISPLAY_K_ACTUAL = display_k if 'display_k' in dir() else TOP_K_DISPLAY
     SIM_ACTUAL = sim_threshold if 'sim_threshold' in dir() else SIMILARITY_THRESHOLD
-
-    # Stratégie de retrieval : auto (4 paramètres) ou manuelle
     _auto = auto_strategy if 'auto_strategy' in dir() else True
     _demo = demo_mode if 'demo_mode' in dir() else False
+
+    query_for_retrieval, was_expanded = expand_followup_query(
+        user_input, st.session_state.chat_history[:-1]
+    )
+
     if _auto:
-        CPS_ACTUAL, DTB_ACTUAL, MCL_ACTUAL, strategy_label = detect_retrieval_strategy(query, demo_mode=_demo)
+        CPS_ACTUAL, DTB_ACTUAL, MCL_ACTUAL, strategy_label = detect_retrieval_strategy(
+            query_for_retrieval, demo_mode=_demo
+        )
     else:
-        CPS_ACTUAL = chunks_per_source if 'chunks_per_source' in dir() else MAX_CHUNKS_PER_SOURCE
-        MCL_ACTUAL = max_chunks if 'max_chunks' in dir() else MAX_CHUNKS_LLM_DEFAULT
+        CPS_ACTUAL = chunks_per_source if chunks_per_source else MAX_CHUNKS_PER_SOURCE
+        MCL_ACTUAL = max_chunks if max_chunks else MAX_CHUNKS_LLM_DEFAULT
         DTB_ACTUAL = 0.01
         strategy_label = f"Manuel ({CPS_ACTUAL}/source, {MCL_ACTUAL} chunks)"
 
-    # Choix du modèle LLM
     active_model = LLM_MODEL_FAST if _demo else LLM_MODEL
     model_label = "Haiku 4.5 ⚡" if _demo else "Sonnet 4.6"
 
     with st.spinner("⏳ Recherche dans les archives..."):
         results, themes, doc_type_hint = search_chunks(
-            query, copro_filter,
-            max_chunks=MCL_ACTUAL,
-            sim_threshold=SIM_ACTUAL,
-            chunks_per_source=CPS_ACTUAL,
-            doc_type_boost=DTB_ACTUAL
+            query_for_retrieval, copro_filter,
+            max_chunks=MCL_ACTUAL, sim_threshold=SIM_ACTUAL,
+            chunks_per_source=CPS_ACTUAL, doc_type_boost=DTB_ACTUAL,
         )
 
-    if not results:
-        st.warning("❌ Aucun résultat trouvé. Essayez de reformuler votre question.")
-    else:
-        if _demo:
-            # Mode démo : affichage léger
-            unique_sources = len(set(r[2] for r in results))
-            st.caption(f"⚡ {len(results)} extraits analysés issus de {unique_sources} documents — {model_label}")
+    with st.chat_message("assistant"):
+        if not results:
+            answer = "Aucun résultat trouvé. Essayez de reformuler votre question."
+            st.warning(f"❌ {answer}")
+            st.session_state.chat_history.append({
+                "role": "assistant", "content": answer,
+                "source_count": 0, "n_displayed": 0,
+            })
         else:
-            # Mode normal : affichage technique complet
-            if themes:
-                theme_html = " ".join(
-                    f'<span class="theme-tag">{THEME_LABELS.get(t, t)}</span>'
-                    for t in themes
+            unique_sources = len(set(r[2] for r in results))
+
+            if was_expanded:
+                _ = st.markdown(
+                    '<span class="followup-badge">🔗 Suite de la conversation</span>',
+                    unsafe_allow_html=True,
                 )
-                st.markdown(f"**Thèmes détectés :** {theme_html}", unsafe_allow_html=True)
-            if doc_type_hint:
-                st.markdown(f"**Type de document priorisé :** {doc_type_hint} *(boost, pas filtre)*")
 
-            st.markdown(f"**Stratégie :** {strategy_label} ({CPS_ACTUAL}/source, boost={DTB_ACTUAL}, max={MCL_ACTUAL} chunks) — **{model_label}**")
+            if _demo:
+                st.caption(f"⚡ {len(results)} extraits · {unique_sources} docs · {model_label}")
+            else:
+                st.caption(f"{strategy_label} · {len(results)} chunks · {unique_sources} docs · {model_label}")
 
-            unique_sources = len(set(r[2] for r in results))
-            st.markdown(
-                f"**{len(results)}** chunks analysés par l'IA issus de **{unique_sources}** documents distincts"
-                + (f" (top {DISPLAY_K_ACTUAL} affichés ci-dessous)" if len(results) > DISPLAY_K_ACTUAL else "")
-            )
+            if _demo and DEMO_3D_LINKS:
+                search_pool = user_input.lower() + " " + " ".join(
+                    (r[2] + " " + r[6][:200]).lower() for r in results
+                )
+                for kw, url in DEMO_3D_LINKS.items():
+                    if kw.lower() in search_pool:
+                        _ = st.markdown(
+                            f'<div style="background:linear-gradient(135deg,#1a365d,#2a4a7f);'
+                            f'padding:0.7rem 1.2rem;border-radius:10px;margin-bottom:0.5rem">'
+                            f'<span style="color:#e2e8f0"><strong>{kw}</strong> — </span>'
+                            f'<a href="{url}" target="_blank" '
+                            f'style="color:#63b3ed;text-decoration:underline;font-weight:600">'
+                            f'visite 3D ↗</a></div>',
+                            unsafe_allow_html=True,
+                        )
 
-        # Section Visite 3D (démo uniquement, avant la réponse)
-        if _demo and DEMO_3D_LINKS:
-            # Chercher dans la requête, les noms de copro, les noms de fichiers ET le texte des chunks
-            search_pool = query.lower() + " " + " ".join(
-                (r[1] + " " + r[2] + " " + r[6][:200]).lower() for r in results
-            )
-            matched_3d = {kw: url for kw, url in DEMO_3D_LINKS.items()
-                         if kw.lower() in search_pool}
-            if matched_3d:
-                st.markdown("### 🏠 Visite 3D")
-                for keyword, url in matched_3d.items():
-                    st.markdown(
-                        f'<div style="background:linear-gradient(135deg,#1a365d,#2a4a7f);'
-                        f'padding:1rem 1.5rem;border-radius:10px;margin-bottom:1rem">'
-                        f'<span style="color:#e2e8f0">Le dossier <strong>{keyword}</strong> '
-                        f'est associé à une visite 3D — </span>'
-                        f'<a href="{url}" target="_blank" '
-                        f'style="color:#63b3ed;text-decoration:underline;font-weight:600">'
-                        f'ouvrir la visite 3D ↗</a></div>',
-                        unsafe_allow_html=True
-                    )
+            history_for_llm = st.session_state.chat_history[:-1]
+            n_displayed = min(len(results), DISPLAY_K_ACTUAL)
 
-        # Générer la réponse
-        st.markdown("### 💬 Réponse")
-
-        # Nombre max de sources affichées (pour limiter les liens aux sources visibles)
-        n_displayed = min(len(results), DISPLAY_K_ACTUAL)
-
-        if _demo:
-            # Streaming : premiers mots en ~2-3s, linkify à la fin
-            with st.container(border=True):
+            if _demo:
                 answer_placeholder = st.empty()
-                answer = generate_answer_stream(query, results, themes, doc_type_hint, active_model, answer_placeholder)
-                answer_placeholder.markdown(linkify_sources(answer, n_displayed), unsafe_allow_html=True)
-        else:
-            # Sync : attente complète
-            with st.spinner("🤖 Génération de la réponse par Claude Sonnet..."):
-                answer = generate_answer(query, results, themes, doc_type_hint, model_id=active_model)
-            with st.container(border=True):
-                st.markdown(linkify_sources(answer, n_displayed), unsafe_allow_html=True)
+                answer = generate_answer_stream(
+                    user_input, results, themes, doc_type_hint,
+                    active_model, answer_placeholder, chat_history=history_for_llm,
+                )
+                answer_placeholder.markdown(
+                    linkify_sources(answer, n_displayed), unsafe_allow_html=True
+                )
+            else:
+                with st.spinner("🤖 Génération de la réponse…"):
+                    answer = generate_answer(
+                        user_input, results, themes, doc_type_hint,
+                        model_id=active_model, chat_history=history_for_llm,
+                    )
+                _ = st.markdown(
+                    linkify_sources(answer, n_displayed), unsafe_allow_html=True
+                )
 
-        # Afficher les sources — seulement les DISPLAY_K_ACTUAL premiers
-        st.markdown("### 📎 Sources utilisées")
+            render_action_buttons(answer, key_suffix="current")
+            render_sources(results, DISPLAY_K_ACTUAL, key_prefix="current")
 
-        for i, result in enumerate(results[:DISPLAY_K_ACTUAL]):
-            chunk_id, copro, source, filename, doc_type, chunk_themes, text, vec_sim, theme_boost, bm25_score, rrf_score = result
-            theme_boost = float(theme_boost)
-            # Score affiché = position dans le classement reranké (plus intuitif que le rrf brut)
-            rank_pct = max(0, int(100 * (1 - i / max(len(results), 1))))
-            
-            sim_color = "#48bb78" if i < 5 else "#ecc94b" if i < 15 else "#fc8181"
+            for old_msg in st.session_state.chat_history:
+                if old_msg["role"] == "assistant" and "sources" in old_msg:
+                    old_msg["source_count"] = len(old_msg["sources"])
+                    del old_msg["sources"]
 
-            boost_indicator = ""
-            if theme_boost > 0:
-                boost_indicator += " +🏷️"
-            if bm25_score > 0.1:
-                boost_indicator += " +📝"
-
-            with st.expander(f"Source {i+1} — {filename}  ({doc_type}) {boost_indicator}"):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.caption(f"📁 **Copropriété :** {copro}")
-                    st.caption(f"📄 **Fichier :** {source}")
-                    if chunk_themes:
-                        st.caption(f"🏷️ **Thèmes :** {', '.join(chunk_themes)}")
-                    st.caption(f"📊 **Scores :** vec={vec_sim:.2f}  bm25={bm25_score:.3f}  rrf={rrf_score:.4f}")
-                with col2:
-                    st.markdown(f"""
-                    <div style="text-align:center">
-                        <div style="font-size:1.4rem;font-weight:700;color:{sim_color}">#{i+1}</div>
-                        <div style="font-size:0.7rem;color:#a0aec0">rang RRF</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                # Ancre pour le lien depuis la réponse (à l'intérieur de l'expander pour éviter les None)
-                _ = st.markdown(f'<div id="source-{i+1}"></div>', unsafe_allow_html=True)
-                st.markdown("---")
-                st.text(text[:2000] + ("..." if len(text) > 2000 else ""))
-
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": answer,
+                "sources": results[:DISPLAY_K_ACTUAL],
+                "n_displayed": n_displayed,
+                "source_count": len(results),
+                "meta": {
+                    "strategy": strategy_label, "model": model_label,
+                    "themes": themes, "doc_type_hint": doc_type_hint,
+                    "expanded": was_expanded,
+                },
+            })
