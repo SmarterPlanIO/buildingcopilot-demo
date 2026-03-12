@@ -18,7 +18,6 @@ Changelog v2 :
 import json
 import re
 import os
-import html as html_lib
 import boto3
 import psycopg2
 import streamlit as st
@@ -662,27 +661,16 @@ def linkify_sources(text, max_source_num):
 # POINT 2 : boutons copier / sauvegarder
 # =====================================================
 def render_action_buttons(answer_text, key_suffix=""):
-    col_copy, col_save, _ = st.columns([1, 1, 4])
-    with col_copy:
-        escaped = html_lib.escape(answer_text)
-        cid = f"cp-{key_suffix}"
-        bid = f"btn-{key_suffix}"
-        _ = st.markdown(f"""
-        <textarea id="{cid}" style="position:fixed;left:-9999px;top:-9999px">{escaped}</textarea>
-        <button id="{bid}" class="action-btn" onclick="
-            var ta=document.getElementById('{cid}');
-            ta.style.position='static'; ta.select(); document.execCommand('copy');
-            ta.style.position='fixed';
-            this.textContent='✅ Copié !';
+    escaped = answer_text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+    bid = f"btn-{key_suffix}"
+    _ = st.markdown(f"""
+    <button id="{bid}" class="action-btn" onclick="
+        navigator.clipboard.writeText(`{escaped}`).then(function(){{
+            document.getElementById('{bid}').textContent='✅ Copié !';
             setTimeout(function(){{document.getElementById('{bid}').textContent='📋 Copier';}},2000);
-        ">📋 Copier</button>
-        """, unsafe_allow_html=True)
-    with col_save:
-        st.download_button(
-            "💾 Sauvegarder", data=answer_text,
-            file_name="reponse_buildingcopilot.txt", mime="text/plain",
-            key=f"dl-{key_suffix}",
-        )
+        }});
+    ">📋 Copier</button>
+    """, unsafe_allow_html=True)
 
 
 def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0, title="##### 📎 Sources utilisées"):
