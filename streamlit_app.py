@@ -17,7 +17,6 @@ Changelog v2 :
 import json
 import re
 import os
-import html as html_lib
 import boto3
 import psycopg2
 import streamlit as st
@@ -40,7 +39,8 @@ LLM_MODEL_FAST = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 MAX_CHUNKS_LLM_DEFAULT = 50
 MAX_CHUNKS_LLM_BROAD = 80
-TOP_K_DISPLAY = 15
+TOP_K_DISPLAY = 20            # Sources principales affichées
+TOP_K_EXTRA = 50              # Hard limit sources supplémentaires (chunks 21 à 50)
 MAX_CHUNKS_PER_SOURCE = 3
 SIMILARITY_THRESHOLD = 0.15
 THEME_BOOST = 0.05
@@ -668,38 +668,30 @@ def linkify_sources(text, max_source_num):
 # POINT 2 : boutons copier / sauvegarder
 # =====================================================
 def render_action_buttons(answer_text, key_suffix=""):
-    col_copy, col_save, _ = st.columns([1, 1, 4])
-    with col_copy:
-        escaped = html_lib.escape(answer_text)
-        cid = f"cp-{key_suffix}"
-        bid = f"btn-{key_suffix}"
-        _ = st.markdown(f"""
-        <textarea id="{cid}" style="position:fixed;left:-9999px;top:-9999px">{escaped}</textarea>
-        <button id="{bid}" class="action-btn" onclick="
-            var ta=document.getElementById('{cid}');
-            ta.style.position='static'; ta.select(); document.execCommand('copy');
-            ta.style.position='fixed';
-            this.textContent='✅ Copié !';
+    escaped = answer_text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+    bid = f"btn-{key_suffix}"
+    _ = st.markdown(f"""
+    <button id="{bid}" class="action-btn" onclick="
+        navigator.clipboard.writeText(`{escaped}`).then(function(){{
+            document.getElementById('{bid}').textContent='✅ Copié !';
             setTimeout(function(){{document.getElementById('{bid}').textContent='📋 Copier';}},2000);
-        ">📋 Copier</button>
-        """, unsafe_allow_html=True)
-    with col_save:
-        st.download_button(
-            "💾 Sauvegarder", data=answer_text,
-            file_name="reponse_buildingcopilot.txt", mime="text/plain",
-            key=f"dl-{key_suffix}",
-        )
+        }});
+    ">📋 Copier</button>
+    """, unsafe_allow_html=True)
 
 
-def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix=""):
-    st.markdown("##### 📎 Sources utilisées")
+def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0, title="##### 📎 Sources utilisées"):
+    """Affiche les sources en expanders. offset décale la numérotation."""
+    st.markdown(title)
     for i, result in enumerate(results[:display_k]):
+        rank = offset + i
+        num = rank + 1
         chunk_id, copro, source, filename, doc_type, chunk_themes, text, vec_sim, theme_boost, bm25_score, rrf_score = result
         theme_boost = float(theme_boost)
-        sim_color = "#48bb78" if i < 5 else "#ecc94b" if i < 15 else "#fc8181"
+        sim_color = "#48bb78" if rank < 5 else "#ecc94b" if rank < 15 else "#fc8181"
         boost_ind = (" +🏷️" if theme_boost > 0 else "") + (" +📝" if bm25_score > 0.1 else "")
 
-        with st.expander(f"Source {i+1} — {filename}  ({doc_type}){boost_ind}"):
+        with st.expander(f"Source {num} — {filename}  ({doc_type}){boost_ind}"):
             c1, c2 = st.columns([3, 1])
             with c1:
                 st.caption(f"📁 **Copropriété :** {copro}")
@@ -710,11 +702,11 @@ def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix=""):
             with c2:
                 st.markdown(f"""
                 <div style="text-align:center">
-                    <div style="font-size:1.4rem;font-weight:700;color:{sim_color}">#{i+1}</div>
+                    <div style="font-size:1.4rem;font-weight:700;color:{sim_color}">#{num}</div>
                     <div style="font-size:0.7rem;color:#a0aec0">rang RRF</div>
                 </div>
                 """, unsafe_allow_html=True)
-            _ = st.markdown(f'<div id="source-{i+1}"></div>', unsafe_allow_html=True)
+            _ = st.markdown(f'<div id="source-{num}"></div>', unsafe_allow_html=True)
             st.markdown("---")
             st.text(text[:2000] + ("..." if len(text) > 2000 else ""))
 
@@ -802,7 +794,16 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
             if is_last_assistant:
                 render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}")
                 if msg.get("sources"):
-                    render_sources(msg["sources"], n_disp, key_prefix=f"h-{msg_idx}")
+                    main_sources = msg["sources"][:TOP_K_DISPLAY]
+                    render_sources(main_sources, TOP_K_DISPLAY, key_prefix=f"h-{msg_idx}")
+                    extra_sources = msg["sources"][TOP_K_DISPLAY:TOP_K_EXTRA]
+                    if extra_sources:
+                        with st.expander(f"📂 Sources supplémentaires ({len(extra_sources)} sources)"):
+                            render_sources(
+                                extra_sources, display_k=len(extra_sources),
+                                key_prefix=f"hx-{msg_idx}", offset=TOP_K_DISPLAY,
+                                title="##### 📂 Sources supplémentaires",
+                            )
             else:
                 sc = msg.get("source_count", 0)
                 if sc:
@@ -886,7 +887,7 @@ if user_input:
                         )
 
             history_for_llm = st.session_state.chat_history[:-1]
-            n_displayed = min(len(results), DISPLAY_K_ACTUAL)
+            n_displayed = min(len(results), TOP_K_EXTRA)
 
             if _demo:
                 answer_placeholder = st.empty()
@@ -908,7 +909,19 @@ if user_input:
                 )
 
             render_action_buttons(answer, key_suffix="current")
+
+            # Sources principales (top 20)
             render_sources(results, DISPLAY_K_ACTUAL, key_prefix="current")
+
+            # Sources supplémentaires (chunks 21 à 50) — repliées par défaut
+            extra_results = results[DISPLAY_K_ACTUAL:TOP_K_EXTRA]
+            if extra_results:
+                with st.expander(f"📂 Sources supplémentaires ({len(extra_results)} sources de rang {DISPLAY_K_ACTUAL+1} à {DISPLAY_K_ACTUAL+len(extra_results)})"):
+                    render_sources(
+                        extra_results, display_k=len(extra_results),
+                        key_prefix="extra-current", offset=DISPLAY_K_ACTUAL,
+                        title="##### 📂 Sources supplémentaires",
+                    )
 
             for old_msg in st.session_state.chat_history:
                 if old_msg["role"] == "assistant" and "sources" in old_msg:
@@ -918,7 +931,7 @@ if user_input:
             st.session_state.chat_history.append({
                 "role": "assistant",
                 "content": answer,
-                "sources": results[:DISPLAY_K_ACTUAL],
+                "sources": results[:TOP_K_EXTRA],
                 "n_displayed": n_displayed,
                 "source_count": len(results),
                 "meta": {
