@@ -1,6 +1,6 @@
 """
 ÉTAPE 7 — Interface de requête RAG (Streamlit Cloud) — v2 Multi-turn
-Pipeline : Vector + BM25 → RRF fusion → Source diversity → Claude
+Pipeline : Vector + BM25 → RRF fusion → Source diversity → FlashRank rerank → Claude
 Lance : streamlit run streamlit_app.py
 
 Changelog v2 :
@@ -20,6 +20,7 @@ import os
 import boto3
 import psycopg2
 import streamlit as st
+from flashrank import Ranker, RerankRequest
 
 # =====================================================
 # CONFIGURATION — credentials via st.secrets (Streamlit Cloud)
@@ -48,7 +49,7 @@ MAX_CHUNKS_PER_SOURCE = 3
 SIMILARITY_THRESHOLD = 0.15
 THEME_BOOST = 0.05
 RRF_K = 60
-RERANK_CANDIDATES = 80        # Candidats SQL (pas de reranker en mode cloud)
+RERANK_CANDIDATES = 120       # Candidats SQL envoyés au reranker FlashRank
 RCP_MIN_SLOTS = 3             # POINT 6 : quota minimum RCP
 
 # Multi-turn
@@ -275,6 +276,13 @@ def get_bedrock_client():
         config=Config(read_timeout=300, retries={"max_attempts": 3})
     )
 
+@st.cache_resource
+def get_reranker():
+    """FlashRank multilingue — modèle léger, pas de PyTorch, supporte le français."""
+    import tempfile
+    cache = os.path.join(tempfile.gettempdir(), "flashrank")
+    return Ranker(model_name="ms-marco-MultiBERT-L-12", cache_dir=cache)
+
 @st.cache_data(ttl=300)
 def get_copros():
     conn = get_db_connection()
@@ -410,7 +418,7 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                   sim_threshold=SIMILARITY_THRESHOLD, chunks_per_source=MAX_CHUNKS_PER_SOURCE,
                   doc_type_boost=0.01):
     """
-    Pipeline hybride 4 étapes (sans FlashRank en cloud) + POINT 6 : quota minimum RCP.
+    Pipeline hybride 4 étapes + FlashRank rerank + POINT 6 : quota minimum RCP.
     """
     conn = get_db_connection()
     query_embedding = get_embedding(query)
@@ -483,6 +491,14 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
         if sig not in seen_texts:
             seen_texts.add(sig)
             deduped.append(r)
+
+    # FlashRank rerank (cross-encoder multilingue)
+    if len(deduped) > 1:
+        reranker = get_reranker()
+        passages = [{"id": i, "text": r[6][:2000]} for i, r in enumerate(deduped)]
+        reranked = reranker.rerank(RerankRequest(query=query, passages=passages))
+        rerank_order = [item["id"] for item in reranked]
+        deduped = [deduped[idx] for idx in rerank_order if idx < len(deduped)]
 
     # ── POINT 6 : quota minimum RCP ──
     top = deduped[:max_chunks]
@@ -710,7 +726,7 @@ def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0,
                 st.markdown(f"""
                 <div style="text-align:center">
                     <div style="font-size:1.4rem;font-weight:700;color:{sim_color}">#{num}</div>
-                    <div style="font-size:0.7rem;color:#a0aec0">rang RRF</div>
+                    <div style="font-size:0.7rem;color:#a0aec0">rang reranké</div>
                 </div>
                 """, unsafe_allow_html=True)
             _ = st.markdown(f'<div id="source-{pfx}{num}"></div>', unsafe_allow_html=True)
