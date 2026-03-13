@@ -33,6 +33,9 @@ AWS_REGION = st.secrets["aws"].get("region", "eu-west-1")
 AWS_ACCESS_KEY = st.secrets["aws"]["access_key_id"]
 AWS_SECRET_KEY = st.secrets["aws"]["secret_access_key"]
 
+# Branding client — logo affiché dans le header (PNG/JPG, fond transparent recommandé)
+CLIENT_LOGO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Logo_NCG.png")
+
 EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 LLM_MODEL = "eu.anthropic.claude-sonnet-4-6"
 LLM_MODEL_FAST = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -149,7 +152,7 @@ DOC_TYPE_KEYWORDS = {
 # Page config
 # =====================================================
 st.set_page_config(
-    page_title="BuildingCopilot RAG",
+    page_title="Building Copilot",
     page_icon="🏢",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -653,11 +656,12 @@ def generate_answer_stream(query, search_results, themes, doc_type_hint,
     return full_text
 
 
-def linkify_sources(text, max_source_num):
+def linkify_sources(text, max_source_num, anchor_prefix=""):
+    pfx = f"{anchor_prefix}-" if anchor_prefix else ""
     def replace_source(match):
         num = int(match.group(1))
         if 1 <= num <= max_source_num:
-            return (f'<a href="#source-{num}" '
+            return (f'<a href="#source-{pfx}{num}" '
                     f'style="color:#3182ce;text-decoration:underline;font-weight:500">'
                     f'Source {num}</a>')
         return match.group(0)
@@ -682,8 +686,9 @@ def render_action_buttons(answer_text, key_suffix=""):
     """, unsafe_allow_html=True)
 
 
-def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0, title="##### 📎 Sources utilisées"):
-    """Affiche les sources en expanders. offset décale la numérotation."""
+def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0,
+                   title="##### 📎 Sources utilisées", anchor_prefix=""):
+    pfx = f"{anchor_prefix}-" if anchor_prefix else ""
     st.markdown(title)
     for i, result in enumerate(results[:display_k]):
         rank = offset + i
@@ -708,7 +713,7 @@ def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0, ti
                     <div style="font-size:0.7rem;color:#a0aec0">rang RRF</div>
                 </div>
                 """, unsafe_allow_html=True)
-            _ = st.markdown(f'<div id="source-{num}"></div>', unsafe_allow_html=True)
+            _ = st.markdown(f'<div id="source-{pfx}{num}"></div>', unsafe_allow_html=True)
             st.markdown("---")
             st.text(text[:2000] + ("..." if len(text) > 2000 else ""))
 
@@ -717,7 +722,7 @@ def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0, ti
 # SIDEBAR
 # =====================================================
 with st.sidebar:
-    st.markdown("## 🏢 BuildingCopilot")
+    st.markdown("## 🏢 Building Copilot")
     st.markdown("---")
 
     copros = get_copros()
@@ -770,12 +775,28 @@ with st.sidebar:
 
 
 # =====================================================
-# ZONE PRINCIPALE — POINT 3 : Multi-turn conversationnel
+# ZONE PRINCIPALE — Multi-turn conversationnel
 # =====================================================
-_ = st.markdown("""
-<div class="main-header">
-    <h1>🏢 BuildingCopilot RAG</h1>
-    <p>Posez vos questions sur les archives de copropriété — réponses sourcées par IA</p>
+
+_logo_html = ""
+if CLIENT_LOGO_FILE and os.path.exists(CLIENT_LOGO_FILE):
+    import base64 as _b64
+    with open(CLIENT_LOGO_FILE, "rb") as _lf:
+        _logo_b64 = _b64.b64encode(_lf.read()).decode("ascii")
+    _ext = CLIENT_LOGO_FILE.rsplit(".", 1)[-1].lower()
+    _mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "svg": "image/svg+xml"}.get(_ext, "image/png")
+    _logo_html = (
+        f'<img src="data:{_mime};base64,{_logo_b64}" '
+        f'style="height:60px;max-width:180px;object-fit:contain;" />'
+    )
+
+_ = st.markdown(f"""
+<div class="main-header" style="display:flex;align-items:center;justify-content:space-between;">
+    <div>
+        <h1 style="color:white;margin:0 0 0.3rem 0;font-size:1.8rem;font-weight:700;">🏢 Building Copilot</h1>
+        <p style="color:#a0aec0;margin:0;font-size:0.95rem;">Posez vos questions sur les archives de copropriété — réponses sourcées par IA</p>
+    </div>
+    {_logo_html}
 </div>
 """, unsafe_allow_html=True)
 
@@ -791,13 +812,14 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
             st.markdown(msg["content"])
         else:
             n_disp = msg.get("n_displayed", 0)
-            _ = st.markdown(linkify_sources(msg["content"], n_disp), unsafe_allow_html=True)
+            apfx = f"m{msg_idx}"
+            _ = st.markdown(linkify_sources(msg["content"], n_disp, anchor_prefix=apfx), unsafe_allow_html=True)
 
             if is_last_assistant:
                 render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}")
                 if msg.get("sources"):
                     main_sources = msg["sources"][:TOP_K_DISPLAY]
-                    render_sources(main_sources, TOP_K_DISPLAY, key_prefix=f"h-{msg_idx}")
+                    render_sources(main_sources, TOP_K_DISPLAY, key_prefix=f"h-{msg_idx}", anchor_prefix=apfx)
                     extra_sources = msg["sources"][TOP_K_DISPLAY:TOP_K_EXTRA]
                     if extra_sources:
                         with st.expander(f"📂 Sources supplémentaires ({len(extra_sources)} sources)"):
@@ -805,6 +827,7 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
                                 extra_sources, display_k=len(extra_sources),
                                 key_prefix=f"hx-{msg_idx}", offset=TOP_K_DISPLAY,
                                 title="##### 📂 Sources supplémentaires",
+                                anchor_prefix=apfx,
                             )
             else:
                 sc = msg.get("source_count", 0)
@@ -890,6 +913,7 @@ if user_input:
 
             history_for_llm = st.session_state.chat_history[:-1]
             n_displayed = min(len(results), TOP_K_EXTRA)
+            cur_apfx = f"m{len(st.session_state.chat_history)}"
 
             if _demo:
                 answer_placeholder = st.empty()
@@ -898,7 +922,7 @@ if user_input:
                     active_model, answer_placeholder, chat_history=history_for_llm,
                 )
                 answer_placeholder.markdown(
-                    linkify_sources(answer, n_displayed), unsafe_allow_html=True
+                    linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx), unsafe_allow_html=True
                 )
             else:
                 with st.spinner("🤖 Génération de la réponse…"):
@@ -907,13 +931,13 @@ if user_input:
                         model_id=active_model, chat_history=history_for_llm,
                     )
                 _ = st.markdown(
-                    linkify_sources(answer, n_displayed), unsafe_allow_html=True
+                    linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx), unsafe_allow_html=True
                 )
 
             render_action_buttons(answer, key_suffix="current")
 
             # Sources principales (top 20)
-            render_sources(results, DISPLAY_K_ACTUAL, key_prefix="current")
+            render_sources(results, DISPLAY_K_ACTUAL, key_prefix="current", anchor_prefix=cur_apfx)
 
             # Sources supplémentaires (chunks 21 à 50) — repliées par défaut
             extra_results = results[DISPLAY_K_ACTUAL:TOP_K_EXTRA]
@@ -923,6 +947,7 @@ if user_input:
                         extra_results, display_k=len(extra_results),
                         key_prefix="extra-current", offset=DISPLAY_K_ACTUAL,
                         title="##### 📂 Sources supplémentaires",
+                        anchor_prefix=cur_apfx,
                     )
 
             for old_msg in st.session_state.chat_history:
