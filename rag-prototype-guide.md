@@ -2113,7 +2113,9 @@ C'est le script final qui permet de poser des questions et obtenir des réponses
 
 > **Prérequis :** `pip install flashrank` pour le reranker FlashRank (modèle léger, pas de PyTorch).
 
-Le script `07_query_rag_ui.py` (version locale) et `streamlit_app.py` (version Streamlit Cloud, credentials via `st.secrets`) partagent le même pipeline complet (RRF + FlashRank rerank + Claude). Copie la dernière version dans ton dossier de scripts.
+Le script `07_query_rag_ui.py` (version locale, pipeline complet avec FlashRank) et `streamlit_app.py` (version Streamlit Cloud, sans FlashRank pour raisons de ressources serveur, compensé par `RERANK_CANDIDATES=200` au lieu de 120, credentials via `st.secrets`) sont maintenus séparément. Copie la dernière version dans ton dossier de scripts.
+
+> **Note :** L'absence de FlashRank en version cloud dégrade légèrement l'exhaustivité des requêtes inventaire (ex: sinistres). La version desktop avec FlashRank reste la référence pour les démonstrations nécessitant une couverture maximale.
 
 **Scripts de diagnostic du retrieval (v2) :**
 - **`diag_db_inventory.py`** : inventaire rapide de la base sans appel Bedrock. Vérifie : répartition doc_type, fichiers SINISTRE, chunks sans embedding, chunks sans text_search, doublons, total_chunks incohérent, fichiers sinistre mal classés. Usage : `python diag_db_inventory.py "NOM_COPRO"`
