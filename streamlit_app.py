@@ -898,11 +898,8 @@ if user_input:
                 st.caption(f"{strategy_label} · {len(results)} chunks · {unique_sources} docs · {model_label}")
 
             if _demo and DEMO_3D_LINKS:
-                search_pool = user_input.lower() + " " + " ".join(
-                    (r[2] + " " + r[6][:200]).lower() for r in results
-                )
                 for kw, url in DEMO_3D_LINKS.items():
-                    if kw.lower() in search_pool:
+                    if kw.lower() in user_input.lower():
                         _ = st.markdown(
                             f'<div style="background:linear-gradient(135deg,#1a365d,#2a4a7f);'
                             f'padding:0.7rem 1.2rem;border-radius:10px;margin-bottom:0.5rem">'
