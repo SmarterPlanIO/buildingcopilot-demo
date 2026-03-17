@@ -61,15 +61,26 @@ FOLLOWUP_QUERY_THRESHOLD = 60
 PRIMARY_DOC_TYPES = {"SINISTRE", "ENTRETIEN", "COMPTABILITE", "DEVIS", "FACTURE"}
 
 # Liens 3D démo
-DEMO_3D_LINKS_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Scripts\URL SP - démo.txt"
+DEMO_3D_LINKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "URL_SP_demo.txt")
 DEMO_3D_LINKS = {}
 try:
     with open(DEMO_3D_LINKS_FILE, "r", encoding="utf-8-sig") as _f:
-        _url = _f.read().strip()
-        if _url:
-            DEMO_3D_LINKS["LEMEAU"] = _url
-except Exception:
-    pass
+        for _line in _f:
+            _line = _line.strip()
+            if not _line or _line.startswith("#"):
+                continue
+            if " : " in _line:
+                _kw, _url = _line.split(" : ", 1)
+                _kw = _kw.strip().upper()
+                _url = _url.strip()
+                if _url:
+                    DEMO_3D_LINKS[_kw] = _url
+            elif _line.startswith("http"):
+                DEMO_3D_LINKS["Visualisez votre copropriété en 3D"] = _line
+except FileNotFoundError:
+    print(f"⚠️ Fichier 3D non trouvé : {DEMO_3D_LINKS_FILE}")
+except Exception as _e:
+    print(f"⚠️ Erreur lecture fichier 3D : {_e}")
 
 # =====================================================
 # Thèmes métier
@@ -743,6 +754,10 @@ with st.sidebar:
                            help="Haiku 4.5 + streaming + chunks réduits. ~15-20s au lieu de ~90s.")
     if demo_mode:
         st.caption("⚡ Haiku 4.5 + streaming")
+        if DEMO_3D_LINKS:
+            st.caption(f"🏠 {len(DEMO_3D_LINKS)} lien(s) 3D actif(s)")
+        else:
+            st.caption("⚠️ Aucun lien 3D (fichier absent ou vide)")
 
     with st.expander("⚙️ Paramètres avancés"):
         auto_strategy = st.checkbox("Stratégie de retrieval automatique", value=True,
