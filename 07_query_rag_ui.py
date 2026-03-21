@@ -1,8 +1,18 @@
 """
-ÉTAPE 7 — Interface de requête RAG (Streamlit) — v2 Multi-turn
-Pipeline : Vector + BM25 → RRF fusion → Source diversity → FlashRank rerank → Claude
+ÉTAPE 7 — Interface de requête RAG (Streamlit) — v4 Haiku Strategy Router
+Pipeline : Haiku strategy detection → Pré-filtrage document → Vector + BM25 → RRF fusion → Source diversity → FlashRank rerank → Claude
 Lance : streamlit run 07_query_rag_ui.py
 Prérequis : pip install flashrank --break-system-packages
+
+Changelog v4 :
+  1. detect_strategy_haiku() : Haiku classifie la requête (inventaire/ciblé/équilibré) + extrait les filtres structurels en un seul appel (~300ms)
+  2. Suppression des listes de mots-clés pour détection stratégie et pré-filtrage (remplacées par LLM)
+  3. Fallback automatique sur mode équilibré si Haiku échoue
+
+Changelog v3 :
+  1. Pré-filtrage document via table documents (année, sous-type, statut)
+  2. search_chunks() accepte prefilter, CTE conditionnel, fallback si 0 ou >50 docs
+  3. Badge visuel "📋 Pré-filtré" dans les métadonnées de réponse
 
 Changelog v2 :
   1. Sidebar lisible en mobile (labels blancs)
@@ -45,18 +55,18 @@ LLM_MODEL_FAST = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 MAX_CHUNKS_LLM_DEFAULT = 50
 MAX_CHUNKS_LLM_BROAD = 80
 TOP_K_DISPLAY = 20            # Sources principales affichées
-TOP_K_EXTRA = 50              # Hard limit sources supplémentaires (chunks 21 à 50)
+TOP_K_EXTRA = 80              # Hard limit sources supplémentaires (chunks 21 à 80)
 MAX_CHUNKS_PER_SOURCE = 3
 SIMILARITY_THRESHOLD = 0.15
-THEME_BOOST = 0.05
 RRF_K = 60
 RERANK_CANDIDATES = 120
 RCP_MIN_SLOTS = 3             # POINT 6 : quota minimum RCP
+MIN_CHUNK_CHARS = 500         # Ignorer les chunks trop courts (signatures, fragments OCR)
+RERANK_RRF_WEIGHT = 0.4      # Poids du score RRF dans le mix hybride RRF×FlashRank (0=FlashRank pur, 1=RRF pur)
 
 # Multi-turn
 MAX_HISTORY_TURNS = 3
 MAX_HISTORY_CHARS = 16000     # ~4K tokens budget
-FOLLOWUP_QUERY_THRESHOLD = 60
 
 PRIMARY_DOC_TYPES = {"SINISTRE", "ENTRETIEN", "COMPTABILITE", "DEVIS", "FACTURE"}
 
@@ -81,57 +91,6 @@ except FileNotFoundError:
     print(f"⚠️ Fichier 3D non trouvé : {DEMO_3D_LINKS_FILE}")
 except Exception as _e:
     print(f"⚠️ Erreur lecture fichier 3D : {_e}")
-
-# =====================================================
-# Thèmes métier
-# =====================================================
-THEMES_KEYWORDS = {
-    "syndic_obligations": ["syndic", "obligation", "mission", "mandat", "gestionnaire"],
-    "parties_communes": ["parties communes", "commun", "hall", "toiture", "façade", "escalier", "ascenseur", "jardin"],
-    "parties_privatives": ["privatif", "privative", "lot", "appartement", "cave", "box", "tantième"],
-    "charges_generales": ["charges générales", "entretien", "conservation", "administration", "budget"],
-    "charges_speciales": ["charges spéciales", "ascenseur", "chauffage", "utilité", "répartition"],
-    "assemblee_generale": ["assemblée générale", "ag", "vote", "majorité", "résolution", "convocation"],
-    "conseil_syndical": ["conseil syndical", "président du conseil"],
-    "travaux": ["travaux", "ravalement", "rénovation", "devis", "chantier"],
-    "mutations_ventes": ["vente", "mutation", "état daté", "notaire", "acquéreur"],
-    "assurance_sinistres": ["assurance", "sinistre", "dégât des eaux", "incendie"],
-    "contentieux": ["contentieux", "impayé", "mise en demeure", "recouvrement", "huissier"],
-    "diagnostics_techniques": ["diagnostic", "dpe", "amiante", "plomb", "termite"],
-    "comptabilite": ["budget", "comptabilité", "appel de fonds", "trésorerie", "bilan"],
-    "reglement_interieur": ["règlement intérieur", "nuisance", "bruit", "usage", "destination"],
-    "personnel_immeuble": ["gardien", "concierge", "employé", "loge"],
-}
-
-THEME_LABELS = {
-    "syndic_obligations": "🏢 Obligations du syndic",
-    "parties_communes": "🏗️ Parties communes",
-    "parties_privatives": "🏠 Parties privatives",
-    "charges_generales": "💰 Charges générales",
-    "charges_speciales": "📊 Charges spéciales",
-    "assemblee_generale": "🗳️ Assemblée générale",
-    "conseil_syndical": "👥 Conseil syndical",
-    "travaux": "🔧 Travaux",
-    "mutations_ventes": "📝 Mutations / ventes",
-    "assurance_sinistres": "🛡️ Assurance & sinistres",
-    "contentieux": "⚖️ Contentieux",
-    "diagnostics_techniques": "🔍 Diagnostics techniques",
-    "comptabilite": "📒 Comptabilité",
-    "reglement_interieur": "📜 Règlement intérieur",
-    "personnel_immeuble": "👷 Personnel d'immeuble",
-}
-
-DOC_TYPE_KEYWORDS = {
-    "RCP": ["règlement de copropriété", "reglement de copropriete", "rcp", "règlement", "reglement"],
-    "PV_AG": ["pv", "procès-verbal", "proces-verbal", "assemblée générale", "ag"],
-    "CONTRAT": ["contrat", "mandat"],
-    "BUDGET": ["budget", "appel de fonds"],
-    "DIAGNOSTIC": ["diagnostic", "dpe", "amiante"],
-    "ENTRETIEN": ["entretien", "maintenance", "carnet", "équipement", "extincteur", "désenfumage"],
-    "SINISTRE": ["sinistre", "anomalie", "constat", "expertise", "dégât", "désordre"],
-    "COMPTABILITE": ["annexe comptable", "grand livre", "journal comptable", "comptabilité"],
-}
-
 
 # =====================================================
 # Page config
@@ -169,10 +128,6 @@ _ = st.markdown("""
     }
     .sim-bar { height: 6px; border-radius: 3px; background: #e2e8f0; margin-top: 4px; }
     .sim-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #667eea, #48bb78); }
-    .theme-tag {
-        display: inline-block; background: #edf2f7; color: #4a5568;
-        padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; margin: 2px;
-    }
 
     /* ── Sidebar — fond bleu marine ── */
     [data-testid="stSidebar"] {
@@ -292,94 +247,124 @@ if "chat_history" not in st.session_state:
 # =====================================================
 # Fonctions RAG
 # =====================================================
-def detect_query_themes(query):
-    query_lower = query.lower()
-    return [t for t, kws in THEMES_KEYWORDS.items() if any(kw in query_lower for kw in kws)]
 
-def detect_doc_type_hint(query):
-    query_lower = query.lower()
-    for doc_type, keywords in DOC_TYPE_KEYWORDS.items():
-        if any(kw in query_lower for kw in keywords):
-            return doc_type
-    return None
+STRATEGY_PROMPT = """Tu es un routeur de requêtes pour un système RAG sur des archives de copropriété.
+Analyse cette question d'un gestionnaire de syndic et détermine la stratégie de recherche optimale.
+
+Question actuelle : {query}
+{prev_context}
+
+Réponds UNIQUEMENT par un objet JSON valide, sans commentaire :
+{{
+  "strategie": "inventaire|cible|equilibre",
+  "doc_type": "RCP|PV_AG|CONTRAT|DEVIS|FACTURE|BUDGET|DIAGNOSTIC|COURRIER|SINISTRE|COMPTABILITE|ENTRETIEN|ASSURANCE|MUTATION|PLAN|null",
+  "annee": 2024 ou null,
+  "annee_min": 2020 ou null,
+  "annee_max": 2024 ou null,
+  "sous_type": "MRI|DDE|RAVALEMENT|ASCENSEUR|CHAUFFAGE|TOITURE|SYNDIC|etc ou null",
+  "statut": "actif|expire|resilie|cloture|en_cours|null",
+  "is_followup": true ou false,
+  "expanded_query": "version complète et autonome de la question si is_followup=true, sinon null"
+}}
+
+Règles pour la stratégie :
+- "inventaire" : la question demande une LISTE exhaustive, un historique, une comparaison sur plusieurs années, un récapitulatif, ou utilise des mots comme "tous", "quels sont", "combien", "depuis", "évolution"
+- "cible" : la question porte sur UN document précis, un article, une résolution, un détail spécifique, ou demande d'expliquer/détailler quelque chose
+- "equilibre" : entre les deux, question ouverte sans besoin d'exhaustivité ni de document précis
+
+Règles pour les filtres :
+- Ne remplis que les champs que tu peux déduire avec CERTITUDE de la question
+- annee : année exacte mentionnée. Si "depuis 2020" → annee_min=2020, annee=null
+- Si deux années mentionnées → annee_min et annee_max, annee=null
+- sous_type : catégorie précise du document (MRI=multirisque immeuble, DDE=dégât des eaux, SYNDIC=contrat syndic, etc.)
+- statut : seulement si la question implique un état (en cours, actif, résilié, clos)
+- Tout champ incertain → null
+
+Règles pour le suivi de conversation :
+- is_followup=true si la question actuelle est une continuation de la question précédente (trop courte ou ambiguë pour être comprise seule, fait référence implicite au contexte précédent)
+- Si is_followup=true, expanded_query DOIT être une reformulation complète et autonome combinant le contexte précédent et la question actuelle. Exemple : question précédente "liste des sinistres en 2023", question actuelle "et en 2024 ?" → expanded_query "liste des sinistres en 2024"
+- Si is_followup=false → expanded_query=null"""
 
 
-def detect_retrieval_strategy(query, demo_mode=False):
+def detect_strategy_haiku(query, prev_query=None):
     """
-    POINT 5 : détection temporelle >2 ans → force inventaire (80 chunks).
-    Retourne (chunks_per_source, doc_type_boost, max_chunks_llm, label).
+    v4 : détection unifiée stratégie + pré-filtrage + suivi conversationnel via Haiku.
+    Retourne (strategie, prefilter, doc_type_hint, is_followup, expanded_query) ou None.
     """
-    q = query.lower()
+    prev_context = f"Question précédente de l'utilisateur : {prev_query}" if prev_query else "Pas de question précédente (premier tour)."
+    prompt = STRATEGY_PROMPT.format(query=query, prev_context=prev_context)
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 200,
+        "messages": [{"role": "user", "content": prompt}]
+    })
 
-    # ── Détection temporelle : plage > 2 ans ──
-    year_matches = re.findall(r'20[0-2]\d', q)
-    if len(year_matches) >= 2:
-        years = sorted(set(int(y) for y in year_matches))
-        if years[-1] - years[0] > 2:
+    try:
+        bedrock = get_bedrock_client()
+        response = bedrock.invoke_model(
+            modelId=LLM_MODEL_FAST, body=body,
+            contentType="application/json", accept="application/json"
+        )
+        result_text = json.loads(response["body"].read())["content"][0]["text"].strip()
+        result_text = re.sub(r"^```json?\s*", "", result_text)
+        result_text = re.sub(r"\s*```$", "", result_text)
+        parsed = json.loads(result_text)
+
+        strategie = parsed.get("strategie", "equilibre")
+        if strategie not in ("inventaire", "cible", "equilibre"):
+            strategie = "equilibre"
+
+        # doc_type pour le boost RRF
+        doc_type_hint = parsed.get("doc_type")
+        if doc_type_hint == "null":
+            doc_type_hint = None
+
+        # Construire prefilter à partir des champs non-null
+        prefilter = {}
+        for key in ("doc_type", "annee", "annee_min", "annee_max", "sous_type", "statut"):
+            val = parsed.get(key)
+            if val is not None and val != "null":
+                prefilter[key] = val
+
+        # Activer prefilter seulement si au moins un signal structurel
+        if not any(prefilter.get(k) for k in ("annee", "annee_min", "sous_type", "statut")):
+            prefilter = None
+
+        # Suivi conversationnel
+        is_followup = bool(parsed.get("is_followup", False))
+        expanded_query = parsed.get("expanded_query")
+        if expanded_query == "null" or not expanded_query:
+            expanded_query = None
+
+        return strategie, prefilter, doc_type_hint, is_followup, expanded_query
+
+    except Exception:
+        return None
+
+
+def detect_retrieval_strategy(query, demo_mode=False, prev_query=None):
+    """
+    v4 : détection via Haiku avec fallback.
+    Retourne (chunks_per_source, doc_type_boost, max_chunks_llm, label, prefilter, doc_type_hint, is_followup, expanded_query).
+    """
+    haiku_result = detect_strategy_haiku(query, prev_query=prev_query)
+
+    if haiku_result:
+        strategie, prefilter, doc_type_hint, is_followup, expanded_query = haiku_result
+
+        if strategie == "inventaire":
             mcl = 40 if demo_mode else 80
-            return 2, 0.03, mcl, "🔎 Inventaire (plage temporelle)"
+            return 2, 0.03, mcl, "🔎 Inventaire", prefilter, doc_type_hint, is_followup, expanded_query
+        elif strategie == "cible":
+            mcl = 30 if demo_mode else 50
+            return 8, 0.005, mcl, "🔬 Ciblé", prefilter, doc_type_hint, is_followup, expanded_query
+        else:
+            mcl = 30 if demo_mode else 50
+            return 3, 0.01, mcl, "⚖️ Équilibré", prefilter, doc_type_hint, is_followup, expanded_query
 
-    since_match = re.search(r'depuis\s+20([0-2]\d)', q)
-    if since_match:
-        since_year = 2000 + int(since_match.group(1))
-        if 2026 - since_year > 2:
-            mcl = 40 if demo_mode else 80
-            return 2, 0.03, mcl, "🔎 Inventaire (historique)"
-
-    # ── Mots-clés larges → inventaire ──
-    broad_keywords = [
-        "tous les", "toutes les", "liste", "lister", "inventaire",
-        "historique", "depuis", "au fil des", "combien de",
-        "comparer", "comparaison", "entre les",
-        "chaque", "ensemble des", "récapitulatif", "synthèse globale",
-        "quels sont", "quelles sont", "y a-t-il eu",
-        "évolution", "tendance", "progression",
-    ]
-    if any(kw in q for kw in broad_keywords):
-        mcl = 40 if demo_mode else 80
-        return 2, 0.03, mcl, "🔎 Inventaire"
-
-    # ── Ciblé ──
-    deep_keywords = [
-        "article ", "lot n°", "lot ", "résolution n°",
-        "que dit", "que prévoit", "détaille", "explique",
-        "dans le règlement", "dans le pv", "dans le contrat",
-        "ce document", "ce rapport",
-    ]
-    if any(kw in q for kw in deep_keywords):
-        mcl = 30 if demo_mode else 50
-        return 8, 0.005, mcl, "🔬 Ciblé"
-
+    # Fallback : mode équilibré sans pré-filtrage
     mcl = 30 if demo_mode else 50
-    return 3, 0.01, mcl, "⚖️ Équilibré"
-
-
-def expand_followup_query(current_query, chat_history):
-    """
-    POINT 7 : enrichit les questions de suivi courtes avec le contexte du tour précédent.
-    Retourne (query_for_retrieval, was_expanded).
-    """
-    if not chat_history:
-        return current_query, False
-
-    q = current_query.strip()
-    followup_markers = [
-        "et ", "aussi", "même", "pareil", "idem",
-        "ça", "ce ", "ces ", "le même", "la même", "les mêmes",
-        "celui", "celle", "précise", "détaille", "développe",
-        "pour quelle", "quel montant", "à quelle date",
-        "combien", "pourquoi", "comment",
-    ]
-    is_short = len(q) < FOLLOWUP_QUERY_THRESHOLD
-    has_marker = any(q.lower().startswith(m) or f" {m}" in q.lower() for m in followup_markers)
-    year_only = bool(re.match(r'^(et\s+)?(en\s+|pour\s+)?20\d{2}\s*\??$', q, re.IGNORECASE))
-
-    if is_short and (has_marker or year_only):
-        prev_queries = [h["content"] for h in chat_history if h["role"] == "user"]
-        if prev_queries:
-            return f"{prev_queries[-1]} — {q}", True
-
-    return current_query, False
+    return 3, 0.01, mcl, "⚖️ Équilibré (fallback)", None, None, False, None
 
 
 def get_embedding(text):
@@ -396,30 +381,105 @@ def get_embedding(text):
 
 def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                   sim_threshold=SIMILARITY_THRESHOLD, chunks_per_source=MAX_CHUNKS_PER_SOURCE,
-                  doc_type_boost=0.01):
+                  doc_type_boost=0.01, prefilter=None, doc_type_hint=None):
     """
-    Pipeline hybride 4 étapes + POINT 6 : quota minimum RCP.
+    Pipeline hybride 5 étapes : pré-filtrage document (conditionnel) + RRF + diversité + rerank + quota RCP.
+    doc_type_hint vient de Haiku (detect_strategy_haiku), plus de détection par mots-clés.
     """
     conn = get_db_connection()
     query_embedding = get_embedding(query)
-    themes = detect_query_themes(query)
-    doc_type_hint = detect_doc_type_hint(query)
+
+    # ── Étape 0 : pré-filtrage document via table documents ──
+    prefilter_files = None
+    prefilter_active = False
+    prefilter_unique_groups = 0
+
+    if prefilter:
+        try:
+            with conn.cursor() as cur:
+                pf_clauses, pf_params = [], []
+
+                if copropriete:
+                    pf_clauses.append("copropriete = %s")
+                    pf_params.append(copropriete)
+
+                if prefilter.get("doc_type"):
+                    pf_clauses.append("(COALESCE(doc_type_corrige, doc_type) = %s OR dossier_lie = %s)")
+                    pf_params.append(prefilter["doc_type"])
+                    pf_params.append(prefilter["doc_type"])
+
+                if prefilter.get("annee"):
+                    pf_clauses.append("annee = %s")
+                    pf_params.append(prefilter["annee"])
+
+                if prefilter.get("annee_min") and prefilter.get("annee_max"):
+                    pf_clauses.append("annee BETWEEN %s AND %s")
+                    pf_params.extend([prefilter["annee_min"], prefilter["annee_max"]])
+                elif prefilter.get("annee_min"):
+                    pf_clauses.append("annee >= %s")
+                    pf_params.append(prefilter["annee_min"])
+
+                if prefilter.get("sous_type"):
+                    pf_clauses.append("sous_type = %s")
+                    pf_params.append(prefilter["sous_type"])
+
+                if prefilter.get("statut"):
+                    pf_clauses.append("statut = %s")
+                    pf_params.append(prefilter["statut"])
+
+                if pf_clauses:
+                    pf_sql = "SELECT source_file, COALESCE(groupe_doc, source_file) FROM documents WHERE " + " AND ".join(pf_clauses)
+                    cur.execute(pf_sql, pf_params)
+                    pf_rows = cur.fetchall()
+                    prefilter_files = [r[0] for r in pf_rows]
+                    prefilter_unique_groups = len(set(r[1] for r in pf_rows))
+
+                    # Fallback : 0 résultats ou >50 → désactiver le pré-filtrage
+                    if 0 < len(prefilter_files) <= 50:
+                        prefilter_active = True
+                    # 0 ou >50 : silencieusement ignoré, pipeline complet
+        except Exception:
+            # Table documents absente ou erreur SQL → fallback silencieux au pipeline complet
+            prefilter_active = False
+
+    # ── Cap dynamique chunks_per_source basé sur le nombre de groupes UNIQUES pré-filtrés ──
+    if prefilter_active and prefilter_files:
+        n_unique = prefilter_unique_groups if prefilter_unique_groups > 0 else len(prefilter_files)
+        dynamic_cap = max(2, min(15, max_chunks // max(n_unique, 1)))
+        chunks_per_source = dynamic_cap
+        # Pré-filtrage actif → les bons docs sont déjà sélectionnés, pas besoin du seuil vectoriel
+        sim_threshold = 0.0
 
     with conn.cursor() as cur:
         where_clauses, params_before = [], []
+        # Exclure les chunks trop courts (signatures, pieds de page, fragments OCR)
+        where_clauses.append(f"nb_caracteres >= {MIN_CHUNK_CHARS}")
+
         if copropriete:
             where_clauses.append("copropriete = %s")
             params_before.append(copropriete)
 
+        if prefilter_active and prefilter_files:
+            placeholders = ",".join(["%s"] * len(prefilter_files))
+            where_clauses.append(f"source_file IN ({placeholders})")
+            params_before.extend(prefilter_files)
+
         where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
         doc_type_for_boost = doc_type_hint if doc_type_hint else "__NONE__"
+
+        # Quand le pré-filtrage est actif, ouvrir large la diversité SQL
+        # pour que FlashRank ait des candidats de tout le document
+        sql_cap = chunks_per_source
+        sql_limit = RERANK_CANDIDATES
+        if prefilter_active:
+            sql_cap = 30  # Laisser passer beaucoup de chunks par source
+            sql_limit = max(RERANK_CANDIDATES, max_chunks * 4)
 
         sql = f"""
             WITH base AS (
                 SELECT chunk_id, copropriete, source_file, nom_fichier, doc_type,
-                       themes, text,
+                       text, chunk_index,
                        1 - (embedding <=> %s::vector) as vec_similarity,
-                       CASE WHEN themes && %s::text[] THEN {THEME_BOOST} ELSE 0 END as theme_boost,
                        ts_rank(text_search, plainto_tsquery('french', %s), 32) as bm25_score,
                        CASE WHEN doc_type = %s THEN %s ELSE 0 END as doc_type_boost
                 FROM chunks
@@ -435,7 +495,6 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                 SELECT *,
                        (1.0 / ({RRF_K} + vec_rank)
                         + 1.0 / ({RRF_K} + bm25_rank)
-                        + theme_boost
                         + doc_type_boost) as rrf_score
                 FROM with_ranks
             ),
@@ -447,7 +506,7 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                 FROM with_rrf
             )
             SELECT chunk_id, copropriete, source_file, nom_fichier, doc_type,
-                   themes, text, vec_similarity, theme_boost, bm25_score, rrf_score
+                   text, vec_similarity, bm25_score, rrf_score, chunk_index
             FROM diversified
             WHERE rank_in_source <= %s
               AND vec_similarity >= %s
@@ -456,10 +515,10 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
         """
 
         params = [
-            str(query_embedding), themes if themes else [], query,
+            str(query_embedding), query,
             doc_type_for_boost, doc_type_boost,
             *params_before,
-            chunks_per_source, sim_threshold, RERANK_CANDIDATES,
+            sql_cap, sim_threshold, sql_limit,
         ]
         cur.execute(sql, params)
         raw_results = cur.fetchall()
@@ -467,18 +526,68 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
     # Déduplication
     seen_texts, deduped = set(), []
     for r in raw_results:
-        sig = r[6][:300].strip()
+        sig = r[5][:300].strip()
         if sig not in seen_texts:
             seen_texts.add(sig)
             deduped.append(r)
 
-    # FlashRank rerank
-    if len(deduped) > 1:
+    # ── D : Bypass FlashRank quand le pré-filtrage est actif ──
+    # Le pré-filtrage a déjà sélectionné les bons documents ; le RRF suffit.
+    # FlashRank pénalise les chunks OCR bruités (constats manuscrits, scans dégradés).
+    if prefilter_active:
+        # Cap dynamique par source sur l'ordre RRF (pas de rerank)
+        from collections import defaultdict
+        by_source = defaultdict(list)
+        for r in deduped:
+            by_source[r[2]].append(r)
+        capped = []
+        for sf, chunks_list in by_source.items():
+            capped.extend(chunks_list[:chunks_per_source])
+        capped.sort(key=lambda r: float(r[8]), reverse=True)  # r[8] = rrf_score
+        deduped = capped
+
+    elif len(deduped) > 1:
+        # ── A : Injection de métadonnées propres dans le texte FlashRank ──
+        # Le cross-encoder voit un en-tête structuré avant le texte OCR bruité,
+        # ce qui donne un signal fort même quand le contenu est illisible.
+        def _flashrank_text(r):
+            # r = (chunk_id, copro, source_file, nom_fichier, doc_type, text, vec_sim, bm25, rrf, chunk_idx)
+            doc_type = r[4] or ""
+            nom = r[3] or ""
+            # Nettoyer le nom : retirer l'extension et le chemin, garder le nom lisible
+            nom_clean = os.path.splitext(os.path.basename(nom))[0].replace("_", " ").replace("-", " ")
+            header = f"[{doc_type}] {nom_clean}"
+            return f"{header}\n{r[5][:1900]}"
+
         reranker = get_reranker()
-        passages = [{"id": i, "text": r[6][:2000]} for i, r in enumerate(deduped)]
+        passages = [{"id": i, "text": _flashrank_text(r)} for i, r in enumerate(deduped)]
         reranked = reranker.rerank(RerankRequest(query=query, passages=passages))
-        rerank_order = [item["id"] for item in reranked]
-        deduped = [deduped[idx] for idx in rerank_order if idx < len(deduped)]
+
+        # ── B : Score hybride RRF × FlashRank ──
+        # Normaliser les deux scores et les combiner pour éviter les chutes brutales
+        # des chunks à bon score RRF mais texte OCR bruité.
+        rrf_scores = [float(r[8]) for r in deduped]  # r[8] = rrf_score (Decimal → float)
+        rrf_max = max(rrf_scores) if rrf_scores else 1.0
+        rrf_min = min(rrf_scores) if rrf_scores else 0.0
+        rrf_range = rrf_max - rrf_min if rrf_max > rrf_min else 1.0
+
+        # FlashRank retourne les items triés par score décroissant
+        # → le rang dans reranked donne le score normalisé
+        n = len(reranked)
+        flashrank_norm = {}  # id → score normalisé [0, 1]
+        for rank, item in enumerate(reranked):
+            flashrank_norm[item["id"]] = 1.0 - (rank / max(n - 1, 1))
+
+        alpha = RERANK_RRF_WEIGHT
+        scored = []
+        for i, r in enumerate(deduped):
+            rrf_norm = (float(r[8]) - rrf_min) / rrf_range
+            fr_norm = flashrank_norm.get(i, 0.0)
+            hybrid = alpha * rrf_norm + (1.0 - alpha) * fr_norm
+            scored.append((hybrid, r))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        deduped = [r for _, r in scored]
 
     # ── POINT 6 : quota minimum RCP ──
     top = deduped[:max_chunks]
@@ -495,7 +604,7 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                         break
             top.extend(extra_rcp)
 
-    return top, themes, doc_type_hint
+    return top, doc_type_hint, prefilter_active
 
 
 # =====================================================
@@ -528,16 +637,16 @@ def build_history_messages(chat_history):
 # =====================================================
 # LLM — POINTS 8 + 9 : concision + multi-turn
 # =====================================================
-def build_llm_payload(query, search_results, themes, doc_type_hint, chat_history=None):
+def build_llm_payload(query, search_results, doc_type_hint, chat_history=None):
     """Construit system prompt, liste de messages, max_tokens."""
     # Contexte RAG
     context_parts = []
     for i, result in enumerate(search_results):
-        chunk_id, copro, source, filename, doc_type, chunk_themes, text, *_ = result
+        chunk_id, copro, source, filename, doc_type, text, *_ = result
         source_type = "PRIMAIRE" if doc_type in PRIMARY_DOC_TYPES else "CONTEXTUEL"
         context_parts.append(
             f"[Source {i+1}] [{source_type}] Copropriété: {copro} | Fichier: {filename} | "
-            f"Type: {doc_type} | Thèmes: {', '.join(chunk_themes) if chunk_themes else 'N/A'}\n{text}"
+            f"Type: {doc_type}\n{text}"
         )
     context = "\n\n---\n\n".join(context_parts)
 
@@ -577,8 +686,6 @@ CONTEXTE CONVERSATIONNEL :
 
     # Hints
     context_hints = []
-    if themes:
-        context_hints.append(f"Thèmes détectés : {', '.join(themes)}")
     if doc_type_hint:
         context_hints.append(f"Type de document principal : {doc_type_hint} (mais l'info peut apparaître dans d'autres types)")
     hints_text = "\n".join(context_hints) if context_hints else "Aucun filtre spécifique"
@@ -614,12 +721,12 @@ Si la question demande une liste exhaustive, cite TOUTES les occurrences trouvé
     return system_prompt, messages, max_tokens_response
 
 
-def generate_answer(query, search_results, themes, doc_type_hint,
+def generate_answer(query, search_results, doc_type_hint,
                     model_id=LLM_MODEL, chat_history=None):
     """Synchrone (non-streaming)."""
     bedrock = get_bedrock_client()
     system_prompt, messages, max_tokens = build_llm_payload(
-        query, search_results, themes, doc_type_hint, chat_history
+        query, search_results, doc_type_hint, chat_history
     )
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
@@ -634,12 +741,12 @@ def generate_answer(query, search_results, themes, doc_type_hint,
     return json.loads(response["body"].read())["content"][0]["text"]
 
 
-def generate_answer_stream(query, search_results, themes, doc_type_hint,
+def generate_answer_stream(query, search_results, doc_type_hint,
                            model_id, placeholder, chat_history=None):
     """Streaming : écrit progressivement dans un placeholder Streamlit."""
     bedrock = get_bedrock_client()
     system_prompt, messages, max_tokens = build_llm_payload(
-        query, search_results, themes, doc_type_hint, chat_history
+        query, search_results, doc_type_hint, chat_history
     )
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
@@ -663,16 +770,48 @@ def generate_answer_stream(query, search_results, themes, doc_type_hint,
 
 
 def linkify_sources(text, max_source_num, anchor_prefix=""):
-    """Transforme les 'Source N' en liens cliquables vers les ancres #source-{prefix}-N."""
+    """Transforme les 'Source N' en liens cliquables et enveloppe dans un div HTML
+    pour forcer Streamlit à rendre le HTML (compatibilité versions récentes)."""
     pfx = f"{anchor_prefix}-" if anchor_prefix else ""
-    def replace_source(match):
-        num = int(match.group(1))
+
+    def make_link(num):
         if 1 <= num <= max_source_num:
             return (f'<a href="#source-{pfx}{num}" '
                     f'style="color:#3182ce;text-decoration:underline;font-weight:500">'
                     f'Source {num}</a>')
-        return match.group(0)
-    return re.sub(r'(?<!\w)Source\s+(\d+)(?!\w)', replace_source, text)
+        return f'Source {num}'
+
+    # D'abord, expandre "Source 4, 8, 10, 20" → "Source 4, Source 8, Source 10, Source 20"
+    def expand_source_list(match):
+        nums = re.findall(r'\d+', match.group(0))
+        return ", ".join(f"Source {n}" for n in nums)
+
+    linkified = re.sub(
+        r'(?<!\w)Sources?\s+(\d+(?:\s*,\s*\d+)+)(?!\w)',
+        expand_source_list, text
+    )
+
+    # Ensuite, linkifier chaque "Source N" individuel
+    def replace_source(match):
+        num = int(match.group(1))
+        return make_link(num)
+
+    linkified = re.sub(r'(?<!\w)Source\s+(\d+)(?!\w)', replace_source, linkified)
+
+    # Convertir le markdown basique en HTML pour le rendu dans le div
+    # Gras **text** ou __text__
+    linkified = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', linkified)
+    linkified = re.sub(r'__(.+?)__', r'<strong>\1</strong>', linkified)
+    # Italique *text* ou _text_ (pas après un mot pour éviter les faux positifs)
+    linkified = re.sub(r'(?<!\w)\*([^*]+?)\*(?!\w)', r'<em>\1</em>', linkified)
+    # Headers markdown → bold
+    linkified = re.sub(r'^#{1,4}\s+(.+)$', r'<strong>\1</strong>', linkified, flags=re.MULTILINE)
+    # Listes à puces
+    linkified = re.sub(r'^[-•]\s+', '• ', linkified, flags=re.MULTILINE)
+    # Retours à la ligne
+    linkified = linkified.replace('\n\n', '<br><br>').replace('\n', '<br>')
+
+    return f'<div class="answer-card">{linkified}</div>'
 
 
 # =====================================================
@@ -702,18 +841,15 @@ def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0,
     for i, result in enumerate(results[:display_k]):
         rank = offset + i
         num = rank + 1
-        chunk_id, copro, source, filename, doc_type, chunk_themes, text, vec_sim, theme_boost, bm25_score, rrf_score = result
-        theme_boost = float(theme_boost)
+        chunk_id, copro, source, filename, doc_type, text, vec_sim, bm25_score, rrf_score, *_ = result
         sim_color = "#48bb78" if rank < 5 else "#ecc94b" if rank < 15 else "#fc8181"
-        boost_ind = (" +🏷️" if theme_boost > 0 else "") + (" +📝" if bm25_score > 0.1 else "")
+        boost_ind = " +📝" if bm25_score > 0.1 else ""
 
         with st.expander(f"Source {num} — {filename}  ({doc_type}){boost_ind}"):
             c1, c2 = st.columns([3, 1])
             with c1:
                 st.caption(f"📁 **Copropriété :** {copro}")
                 st.caption(f"📄 **Fichier :** {source}")
-                if chunk_themes:
-                    st.caption(f"🏷️ **Thèmes :** {', '.join(chunk_themes)}")
                 st.caption(f"📊 **Scores :** vec={vec_sim:.2f}  bm25={bm25_score:.3f}  rrf={rrf_score:.4f}")
             with c2:
                 st.markdown(f"""
@@ -815,7 +951,13 @@ _ = st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# ── Saisie utilisateur (barre fixe en bas) ──
+user_input = st.chat_input("Posez votre question sur les archives de copropriété…")
+
 # ── Afficher l'historique ──
+# Si une nouvelle requête arrive, on allège l'affichage du dernier assistant
+_processing_new = bool(user_input)
+
 for msg_idx, msg in enumerate(st.session_state.chat_history):
     is_last_assistant = (
         msg["role"] == "assistant"
@@ -825,10 +967,14 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
     with st.chat_message(msg["role"]):
         if msg["role"] == "user":
             st.markdown(msg["content"])
+        elif is_last_assistant and _processing_new:
+            # Nouvelle requête en cours → affichage compact du dernier assistant
+            sc = msg.get("source_count", 0)
+            st.caption(f"📎 Réponse précédente ({sc} sources analysées)")
         else:
             n_disp = msg.get("n_displayed", 0)
             apfx = f"m{msg_idx}"
-            _ = st.markdown(linkify_sources(msg["content"], n_disp, anchor_prefix=apfx), unsafe_allow_html=True)
+            st.html(linkify_sources(msg["content"], n_disp, anchor_prefix=apfx))
 
             if is_last_assistant:
                 render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}")
@@ -849,10 +995,6 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
                 if sc:
                     st.caption(f"📎 {sc} sources analysées")
 
-
-# ── Saisie utilisateur (barre fixe en bas) ──
-user_input = st.chat_input("Posez votre question sur les archives de copropriété…")
-
 if user_input:
     # Ajouter à l'historique et afficher
     st.session_state.chat_history.append({"role": "user", "content": user_input})
@@ -866,30 +1008,35 @@ if user_input:
     _auto = auto_strategy if 'auto_strategy' in dir() else True
     _demo = demo_mode if 'demo_mode' in dir() else False
 
-    # POINT 7 : query expansion
-    query_for_retrieval, was_expanded = expand_followup_query(
-        user_input, st.session_state.chat_history[:-1]
-    )
+    # ── Stratégie via Haiku (v4) ──
+    prev_queries = [h["content"] for h in st.session_state.chat_history[:-1] if h["role"] == "user"]
+    prev_query = prev_queries[-1] if prev_queries else None
 
     if _auto:
-        CPS_ACTUAL, DTB_ACTUAL, MCL_ACTUAL, strategy_label = detect_retrieval_strategy(
-            query_for_retrieval, demo_mode=_demo
+        CPS_ACTUAL, DTB_ACTUAL, MCL_ACTUAL, strategy_label, prefilter, doc_type_hint, was_expanded, expanded_query = detect_retrieval_strategy(
+            user_input, demo_mode=_demo, prev_query=prev_query
         )
+        query_for_retrieval = expanded_query if was_expanded and expanded_query else user_input
     else:
         CPS_ACTUAL = chunks_per_source if chunks_per_source else MAX_CHUNKS_PER_SOURCE
         MCL_ACTUAL = max_chunks if max_chunks else MAX_CHUNKS_LLM_DEFAULT
         DTB_ACTUAL = 0.01
         strategy_label = f"Manuel ({CPS_ACTUAL}/source, {MCL_ACTUAL} chunks)"
+        prefilter = None
+        doc_type_hint = None
+        was_expanded = False
+        query_for_retrieval = user_input
 
     active_model = LLM_MODEL_FAST if _demo else LLM_MODEL
     model_label = "Haiku 4.5 ⚡" if _demo else "Sonnet 4.6"
 
     # ── Recherche ──
     with st.spinner("⏳ Recherche dans les archives..."):
-        results, themes, doc_type_hint = search_chunks(
+        results, _, prefilter_used = search_chunks(
             query_for_retrieval, copro_filter,
             max_chunks=MCL_ACTUAL, sim_threshold=SIM_ACTUAL,
             chunks_per_source=CPS_ACTUAL, doc_type_boost=DTB_ACTUAL,
+            prefilter=prefilter, doc_type_hint=doc_type_hint,
         )
 
     # ── Réponse ──
@@ -912,10 +1059,11 @@ if user_input:
                 )
 
             # Métadonnées compactes
+            pf_tag = " · 📋 Pré-filtré" if prefilter_used else ""
             if _demo:
-                st.caption(f"⚡ {len(results)} extraits · {unique_sources} docs · {model_label}")
+                st.caption(f"⚡ {len(results)} extraits · {unique_sources} docs · {model_label}{pf_tag}")
             else:
-                st.caption(f"{strategy_label} · {len(results)} chunks · {unique_sources} docs · {model_label}")
+                st.caption(f"{strategy_label} · {len(results)} chunks · {unique_sources} docs · {model_label}{pf_tag}")
 
             # Visite 3D (démo) — match uniquement sur le prompt utilisateur
             if _demo and DEMO_3D_LINKS:
@@ -941,21 +1089,18 @@ if user_input:
             if _demo:
                 answer_placeholder = st.empty()
                 answer = generate_answer_stream(
-                    user_input, results, themes, doc_type_hint,
+                    user_input, results, doc_type_hint,
                     active_model, answer_placeholder, chat_history=history_for_llm,
                 )
-                answer_placeholder.markdown(
-                    linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx), unsafe_allow_html=True
-                )
+                answer_placeholder.empty()
+                st.html(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
             else:
                 with st.spinner("🤖 Génération de la réponse…"):
                     answer = generate_answer(
-                        user_input, results, themes, doc_type_hint,
+                        user_input, results, doc_type_hint,
                         model_id=active_model, chat_history=history_for_llm,
                     )
-                _ = st.markdown(
-                    linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx), unsafe_allow_html=True
-                )
+                st.html(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
 
             # Boutons copier / sauvegarder (POINT 2)
             render_action_buttons(answer, key_suffix="current")
@@ -989,7 +1134,8 @@ if user_input:
                 "source_count": len(results),
                 "meta": {
                     "strategy": strategy_label, "model": model_label,
-                    "themes": themes, "doc_type_hint": doc_type_hint,
+                    "doc_type_hint": doc_type_hint,
                     "expanded": was_expanded,
+                    "prefilter_used": prefilter_used,
                 },
             })

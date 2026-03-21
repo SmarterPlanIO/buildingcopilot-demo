@@ -17,9 +17,12 @@ Filtre contenu binaire (v2) :
 import os
 import re
 import json
+import time
 import hashlib
 import logging
+import threading
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 import boto3
@@ -35,7 +38,7 @@ OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Missi
 
 # Taille cible des chunks (en caractères)
 CHUNK_TARGET_SIZE = 1500    # ~375 tokens français
-CHUNK_MAX_SIZE = 3000       # Maximum souple (articles/résolutions)
+CHUNK_MAX_SIZE = 5000       # Maximum souple (articles/résolutions) — aligné sur CHUNK_HARD_MAX
 CHUNK_HARD_MAX = 5000       # Maximum ABSOLU — compatible Titan V2 (8192 tokens)
 CHUNK_OVERLAP = 200         # Chevauchement entre chunks
 
@@ -206,6 +209,11 @@ def detect_doc_type(filepath, filename, text="", source_file=""):
       - PLAN en dernier (mot trop courant, source de faux positifs)
     """
     filename_lower = filename.lower()
+
+    # ── PASSE 0 : Cache pré-scan (corrections Haiku du pré-scan parallèle) ──
+    # Priorité absolue : si le pré-scan a vérifié/corrigé ce fichier, utiliser son résultat
+    if source_file and source_file in _doc_type_llm_cache:
+        return _doc_type_llm_cache[source_file]
 
     # Séparer les composants du chemin pour matcher par dossier
     path_parts = [p.lower() for p in filepath.replace("\\", "/").split("/") if p]
@@ -428,6 +436,85 @@ def chunk_by_articles(text):
     
     return enforce_max_size(chunks)
 
+_haiku_pattern_stats = {"calls": 0, "success": 0, "fail": 0}
+
+def _detect_resolution_format_haiku(text):
+    """Appelle Haiku pour identifier le format de numérotation des résolutions d'un PV d'AG.
+    Retourne une liste de chunks si réussi, [] sinon."""
+    
+    # Envoyer les premiers ~3000 chars — suffisant pour voir le format
+    sample = text[:3000]
+    
+    prompt = f"""Voici le début d'un procès-verbal d'assemblée générale de copropriété.
+Identifie le FORMAT DE NUMÉROTATION utilisé pour les résolutions ou points à l'ordre du jour.
+
+Exemples de formats possibles :
+- "5- Approbation des comptes" (chiffre + tiret)
+- "Résolution N°5 : Approbation" (mot Résolution + numéro)
+- "CINQUIEME RESOLUTION" (ordinal en toutes lettres)
+- "Point 5 - Approbation" (mot Point + numéro)
+- "Article 5 : Approbation" (mot Article + numéro)
+
+Réponds UNIQUEMENT par un objet JSON valide :
+{{"format": "description courte du format trouvé", "separator_regex": "un pattern regex Python qui matche le DÉBUT de chaque résolution, à utiliser avec re.split() en mode MULTILINE. Le pattern doit commencer par (?=(?:^|\\n)) pour découper sans perdre le texte.", "exemple": "un exemple exact trouvé dans le texte", "count": nombre_de_résolutions_détectées}}
+
+Si tu ne trouves aucun format de numérotation structuré, réponds : {{"format": null}}
+
+Texte :
+{sample}"""
+
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 300,
+        "messages": [{"role": "user", "content": prompt}]
+    })
+
+    try:
+        bedrock = _get_bedrock()
+        response = bedrock.invoke_model(
+            modelId=CLASSIFIER_MODEL, body=body,
+            contentType="application/json", accept="application/json"
+        )
+        result_text = json.loads(response["body"].read())["content"][0]["text"].strip()
+        
+        # Extraire le JSON (Haiku peut ajouter du texte autour)
+        result_text = re.sub(r"^```json?\s*", "", result_text)
+        result_text = re.sub(r"\s*```$", "", result_text)
+        start = result_text.find("{")
+        end = result_text.rfind("}") + 1
+        if start >= 0 and end > start:
+            result_text = result_text[start:end]
+        
+        result = json.loads(result_text)
+        _haiku_pattern_stats["calls"] += 1
+        
+        if not result.get("format") or not result.get("separator_regex"):
+            _haiku_pattern_stats["fail"] += 1
+            return []
+        
+        # Tester le regex retourné par Haiku
+        haiku_regex = result["separator_regex"]
+        parts = re.split(haiku_regex, text, flags=re.IGNORECASE | re.MULTILINE)
+        meaningful = [p.strip() for p in parts if p and len(p.strip()) >= 30]
+        
+        if len(meaningful) >= 3:
+            _haiku_pattern_stats["success"] += 1
+            return meaningful
+        else:
+            _haiku_pattern_stats["fail"] += 1
+            return []
+    
+    except (json.JSONDecodeError, re.error) as e:
+        _haiku_pattern_stats["calls"] += 1
+        _haiku_pattern_stats["fail"] += 1
+        return []
+    except Exception as e:
+        # Throttling, réseau — pas de retry ici (l'appelant fera le fallback)
+        _haiku_pattern_stats["calls"] += 1
+        _haiku_pattern_stats["fail"] += 1
+        return []
+
+
 def chunk_by_resolutions(text):
     """
     Découpe un PV d'AG par résolutions — version robuste OCR.
@@ -459,7 +546,10 @@ def chunk_by_resolutions(text):
         # Pattern 3 : "Point 1", "Point n°2"
         r'(?=(?:^|\n)\s*[Pp]oint\s*(?:N[°\'*oO ]?|n[°\'*oO ]?|#)?\s*\d+)',
         
-        # Pattern 4 : numérotation simple en début de ligne "1)", "2)", "3)" 
+        # Pattern 4 : "5- Approbation", "5 - Approbation" (format NCG typique des PV d'AG)
+        r'(?=(?:^|\n)\s*\d{1,2}\s*[-–—]\s*[A-ZÉÈÀÊa-zéèàê])',
+        
+        # Pattern 5 : numérotation simple "1)", "2)", "3)" 
         # (seulement si on trouve au moins 3 occurrences pour éviter les faux positifs)
         r'(?=(?:^|\n)\s*\d{1,2}\s*[)\.]\s+[A-ZÉÈÀÊ])',
     ]
@@ -480,7 +570,11 @@ def chunk_by_resolutions(text):
             best_chunks = meaningful
     
     if not best_chunks:
-        # Aucun pattern n'a matché → fallback par taille
+        # Aucun pattern regex n'a matché → demander à Haiku d'identifier le format
+        best_chunks = _detect_resolution_format_haiku(cleaned)
+    
+    if not best_chunks:
+        # Haiku n'a pas trouvé non plus → fallback par taille
         return chunk_by_size(cleaned)
     
     # Post-traitement : respecter les limites de taille
@@ -547,8 +641,8 @@ def chunk_by_size(text):
     return enforce_max_size(chunks)
 
 def chunk_whole_document(text):
-    """Garde le document entier si assez court, sinon découpe par taille."""
-    if len(text) <= CHUNK_TARGET_SIZE:
+    """Garde le document entier si < CHUNK_HARD_MAX (5000 chars), sinon découpe par taille."""
+    if len(text) <= CHUNK_HARD_MAX:
         return enforce_max_size([text])
     return chunk_by_size(text)
 
@@ -595,6 +689,187 @@ else:
     sys.exit(1)
 
 print(f"\n{len(json_files)} fichiers a chunker\n")
+
+# =====================================================
+# Pré-scan : classification Haiku en parallèle
+# =====================================================
+# Phase 1 : identifier les fichiers qui nécessitent un appel Haiku
+# - Fichiers AUTRE après passes 1+2 (classification)
+# - Fichiers PV_AG par dossier (vérification : est-ce vraiment un PV ou un OJ/convocation ?)
+print("⏳ Pré-scan : identification des fichiers nécessitant classification LLM...")
+files_needing_llm = []       # (source_file, text_excerpt, "classify")
+files_needing_verify = []    # (source_file, text_excerpt, "verify_pvag")
+
+for json_path in tqdm(json_files, desc="Pré-scan"):
+    with open(json_path, "r", encoding="utf-8") as f:
+        doc = json.load(f)
+    
+    text = doc.get("texte", "")
+    if len(text.strip()) < 30:
+        continue
+    
+    source_file = doc.get("source_file", "")
+    nom_fichier = doc.get("nom_fichier", "")
+    
+    # Passe 1+2 seulement (pas de LLM)
+    doc_type = detect_doc_type(
+        doc.get("dossier_parent", ""),
+        nom_fichier,
+        text="",  # Pas de texte → pas de passe 3
+        source_file=source_file
+    )
+    
+    if doc_type == "AUTRE" and len(text.strip()) >= LLM_MIN_TEXT_LENGTH:
+        files_needing_llm.append((source_file, text[:1500].strip()))
+    elif doc_type == "PV_AG" and len(text.strip()) >= LLM_MIN_TEXT_LENGTH:
+        # Ne vérifier que les fichiers PV_AG SUSPECTS — pas les vrais PV évidents
+        nom_lower = nom_fichier.lower()
+        is_obvious_pv = any(kw in nom_lower for kw in [
+            "pv ", "pv_", "pvag", "pv ag", "proces verbal", "procès verbal",
+            "compte rendu", "compte-rendu",
+        ])
+        if not is_obvious_pv:
+            files_needing_verify.append((source_file, text[:2000].strip()))
+
+print(f"  {len(files_needing_llm)} fichiers AUTRE → classification Haiku")
+print(f"  {len(files_needing_verify)} fichiers PV_AG → vérification Haiku")
+
+# Phase 2 : appels Haiku en parallèle (classification + vérification PV_AG)
+all_haiku_tasks = len(files_needing_llm) + len(files_needing_verify)
+_verify_stats = {"verified": 0, "reclassified": 0}
+
+if all_haiku_tasks > 0:
+    _classify_lock = threading.Lock()
+    _thread_local_classify = threading.local()
+    
+    def _get_bedrock_thread():
+        if not hasattr(_thread_local_classify, "client"):
+            _thread_local_classify.client = boto3.client("bedrock-runtime", region_name=AWS_REGION)
+        return _thread_local_classify.client
+    
+    def _classify_one(source_file, excerpt):
+        """Classifie un document AUTRE via Haiku. Thread-safe."""
+        prompt = f"""Tu es un expert en gestion de copropriété. Analyse cet extrait et détermine le type de document.
+
+Types possibles :
+- RCP : Règlement de copropriété
+- PV_AG : Procès-verbal d'assemblée générale
+- CONTRAT : Contrat ou mandat
+- DEVIS : Devis de travaux
+- FACTURE : Facture
+- BUDGET : Budget prévisionnel
+- DIAGNOSTIC : Diagnostic technique
+- COURRIER : Courrier, lettre
+- PLAN : Plan d'architecte
+- ASSURANCE : Police d'assurance
+- ENTRETIEN : Carnet d'entretien, fiche de maintenance
+- SINISTRE : Constat de sinistre, rapport d'expertise
+- COMPTABILITE : Annexe comptable, relevé de compte
+- AUTRE : Aucun des types ci-dessus
+
+Réponds UNIQUEMENT par le code du type (ex: PV_AG). Rien d'autre.
+
+Extrait :
+{excerpt}"""
+        
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 10,
+            "messages": [{"role": "user", "content": prompt}]
+        })
+        
+        for attempt in range(3):
+            try:
+                bedrock = _get_bedrock_thread()
+                response = bedrock.invoke_model(
+                    modelId=CLASSIFIER_MODEL, body=body,
+                    contentType="application/json", accept="application/json"
+                )
+                answer = json.loads(response["body"].read())["content"][0]["text"].strip().upper()
+                result = answer if answer in DOC_TYPES_VALID else "AUTRE"
+                return source_file, result, "classify"
+            except Exception as e:
+                if "ThrottlingException" in str(e) and attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                return source_file, "AUTRE", "classify"
+        return source_file, "AUTRE", "classify"
+    
+    def _verify_pvag(source_file, excerpt):
+        """Vérifie qu'un doc classé PV_AG est bien un PV et pas un OJ/convocation. Thread-safe."""
+        prompt = f"""Ce document a été trouvé dans un dossier d'assemblée générale et classé PV_AG.
+Vérifie si c'est correct en analysant le CONTENU du texte.
+
+Un vrai PV_AG contient obligatoirement :
+- Des résultats de votes : "Votent pour : X copropriétaires totalisant Y tantièmes"
+- Des mentions "résolution adoptée/rejetée"
+- Des décomptes pour/contre/abstention
+
+Mais un dossier AG contient souvent d'AUTRES types de documents :
+- Ordre du jour, convocation, feuille de présence, pouvoir, VPC → COURRIER
+- Contrat de syndic, mandat, convention → CONTRAT
+- Devis de travaux, chiffrage → DEVIS
+- Annexes comptables, comptes, charges, budget → COMPTABILITE
+- Rapport du conseil syndical, présentation, fiche info → AUTRE
+- Certificat d'envoi, accusé de réception, bordereau LRE → COURRIER
+- Diagnostic, tableau d'anomalies → DIAGNOSTIC
+- Police ou attestation d'assurance → ASSURANCE
+
+Réponds UNIQUEMENT par le code du type correct parmi : PV_AG, COURRIER, CONTRAT, DEVIS, COMPTABILITE, DIAGNOSTIC, ASSURANCE, AUTRE.
+
+Extrait :
+{excerpt}"""
+        
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 15,
+            "messages": [{"role": "user", "content": prompt}]
+        })
+        
+        for attempt in range(3):
+            try:
+                bedrock = _get_bedrock_thread()
+                response = bedrock.invoke_model(
+                    modelId=CLASSIFIER_MODEL, body=body,
+                    contentType="application/json", accept="application/json"
+                )
+                answer = json.loads(response["body"].read())["content"][0]["text"].strip().upper()
+                result = answer if answer in DOC_TYPES_VALID else "PV_AG"
+                return source_file, result, "verify"
+            except Exception as e:
+                if "ThrottlingException" in str(e) and attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                return source_file, "PV_AG", "verify"  # En cas d'erreur, garder PV_AG
+        return source_file, "PV_AG", "verify"
+    
+    MAX_CLASSIFY_WORKERS = 10
+    print(f"⏳ Haiku parallèle ({MAX_CLASSIFY_WORKERS} workers) : {len(files_needing_llm)} classifications + {len(files_needing_verify)} vérifications PV_AG...")
+    
+    with ThreadPoolExecutor(max_workers=MAX_CLASSIFY_WORKERS) as executor:
+        futures = {}
+        for sf, excerpt in files_needing_llm:
+            futures[executor.submit(_classify_one, sf, excerpt)] = sf
+        for sf, excerpt in files_needing_verify:
+            futures[executor.submit(_verify_pvag, sf, excerpt)] = sf
+        
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Haiku pré-scan"):
+            sf, doc_type, task_type = future.result()
+            with _classify_lock:
+                _doc_type_llm_cache[sf] = doc_type
+                if task_type == "classify":
+                    _llm_stats["calls"] += 1
+                else:
+                    _verify_stats["verified"] += 1
+                    if doc_type != "PV_AG":
+                        _verify_stats["reclassified"] += 1
+    
+    print(f"  ✅ {len(files_needing_llm)} classifications + {_verify_stats['verified']} vérifications terminées")
+    if _verify_stats["reclassified"] > 0:
+        reclassed = [(sf, _doc_type_llm_cache[sf]) for sf, _ in files_needing_verify if _doc_type_llm_cache.get(sf) != "PV_AG"]
+        print(f"  🔄 {_verify_stats['reclassified']} PV_AG reclassifiés :")
+        for sf, new_dt in reclassed:
+            print(f"    PV_AG → {new_dt} : {os.path.basename(sf)}")
 
 total_chunks = 0
 doc_type_stats = {}
@@ -722,5 +997,14 @@ print(f"  Skippés (texte court): {_llm_stats['skipped_short']}")
 print(f"  Erreurs              : {_llm_stats['errors']}")
 if _llm_stats['calls'] > 0:
     print(f"  Coût estimé          : ~${_llm_stats['calls'] * 1500 * 0.0000008:.4f}")
+
+print(f"\n--- Vérification PV_AG (pré-scan) ---")
+print(f"  Vérifiés             : {_verify_stats['verified']}")
+print(f"  Reclassifiés         : {_verify_stats['reclassified']}")
+
+print(f"\n--- Détection format résolutions (Haiku) ---")
+print(f"  Appels               : {_haiku_pattern_stats['calls']}")
+print(f"  Patterns trouvés     : {_haiku_pattern_stats['success']}")
+print(f"  Échecs (fallback)    : {_haiku_pattern_stats['fail']}")
 
 print(f"\n-> Chunks : {OUTPUT_FILE}")
