@@ -75,7 +75,7 @@ except Exception as _e:
 # Page config
 # =====================================================
 st.set_page_config(
-    page_title="Building Copilot",
+    page_title="PALIM",
     page_icon="🏢",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -99,6 +99,16 @@ _ = st.markdown("""
     .answer-card {
         padding: 0; margin: 0.5rem 0; line-height: 1.7;
     }
+    .answer-card h2 { font-size:1.3rem; margin:1.2rem 0 0.5rem; color:#1a202c; font-weight:600; }
+    .answer-card h3 { font-size:1.1rem; margin:1rem 0 0.4rem; color:#2d3748; font-weight:600; }
+    .answer-card h4 { font-size:1rem; margin:0.8rem 0 0.3rem; color:#4a5568; font-weight:500; }
+    .answer-card table { width:100%; border-collapse:collapse; margin:1rem 0; font-size:0.9rem; }
+    .answer-card th { background:#2d3748; color:white; padding:8px 12px; text-align:left; font-weight:600; }
+    .answer-card td { padding:8px 12px; border-bottom:1px solid #e2e8f0; }
+    .answer-card tr:nth-child(even) td { background:#f7fafc; }
+    .answer-card tr:hover td { background:#edf2f7; }
+    .answer-card ul, .answer-card ol { margin:0.5rem 0; padding-left:1.5rem; }
+    .answer-card li { margin-bottom:0.2rem; }
     .source-badge {
         display: inline-block; background: linear-gradient(135deg, #667eea, #764ba2);
         color: white; padding: 2px 10px; border-radius: 12px;
@@ -171,6 +181,7 @@ def get_db_connection():
     conn = psycopg2.connect(
         host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
         user=DB_USER, password=DB_PASSWORD,
+        connect_timeout=10,
     )
     conn.autocommit = True
     st.session_state["_db_conn"] = conn
@@ -826,6 +837,58 @@ def generate_answer_stream(query, search_results, doc_type_hint,
     return full_text
 
 
+def _md_tables_to_html(text):
+    """Convert markdown tables (lines starting with |) to proper HTML tables.
+    Handles alignment from separator row (:---, :---:, ---:)."""
+    lines = text.split('\n')
+    result_lines = []
+    i = 0
+    while i < len(lines):
+        # Detect start of a markdown table (line with | that isn't a separator)
+        if re.match(r'^\s*\|.*\|', lines[i]):
+            table_lines = []
+            while i < len(lines) and re.match(r'^\s*\|.*\|', lines[i]):
+                table_lines.append(lines[i].strip())
+                i += 1
+            # Need at least 2 lines (header + separator) for a valid table
+            if len(table_lines) >= 2 and re.match(r'^\|[\s:_-]+\|', table_lines[1].replace('|', '|')):
+                # Parse alignment from separator row
+                sep_cells = [c.strip() for c in table_lines[1].strip('|').split('|')]
+                aligns = []
+                for cell in sep_cells:
+                    cell = cell.strip()
+                    if cell.startswith(':') and cell.endswith(':'):
+                        aligns.append('center')
+                    elif cell.endswith(':'):
+                        aligns.append('right')
+                    else:
+                        aligns.append('left')
+                # Parse header
+                header_cells = [c.strip() for c in table_lines[0].strip('|').split('|')]
+                html = '<table><thead><tr>'
+                for idx, cell in enumerate(header_cells):
+                    align = aligns[idx] if idx < len(aligns) else 'left'
+                    html += f'<th style="text-align:{align}">{cell}</th>'
+                html += '</tr></thead><tbody>'
+                # Parse data rows (skip separator at index 1)
+                for row_line in table_lines[2:]:
+                    row_cells = [c.strip() for c in row_line.strip('|').split('|')]
+                    html += '<tr>'
+                    for idx, cell in enumerate(row_cells):
+                        align = aligns[idx] if idx < len(aligns) else 'left'
+                        html += f'<td style="text-align:{align}">{cell}</td>'
+                    html += '</tr>'
+                html += '</tbody></table>'
+                result_lines.append(html)
+            else:
+                # Not a valid table, keep original lines
+                result_lines.extend(table_lines)
+        else:
+            result_lines.append(lines[i])
+            i += 1
+    return '\n'.join(result_lines)
+
+
 def linkify_sources(text, max_source_num, anchor_prefix=""):
     """Transforme les 'Source N' en liens cliquables et enveloppe dans un div HTML
     pour forcer Streamlit à rendre le HTML (compatibilité versions récentes)."""
@@ -838,6 +901,9 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
                     f'Source {num}</a>')
         return f'Source {num}'
 
+    # Convert markdown tables to HTML FIRST (before other conversions)
+    linkified = _md_tables_to_html(text)
+
     # D'abord, expandre "Source 4, 8, 10, 20" → "Source 4, Source 8, Source 10, Source 20"
     def expand_source_list(match):
         nums = re.findall(r'\d+', match.group(0))
@@ -845,7 +911,7 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
 
     linkified = re.sub(
         r'(?<!\w)Sources?\s+(\d+(?:\s*,\s*\d+)+)(?!\w)',
-        expand_source_list, text
+        expand_source_list, linkified
     )
 
     # Ensuite, linkifier chaque "Source N" individuel
@@ -861,12 +927,32 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
     linkified = re.sub(r'__(.+?)__', r'<strong>\1</strong>', linkified)
     # Italique *text* ou _text_ (pas après un mot pour éviter les faux positifs)
     linkified = re.sub(r'(?<!\w)\*([^*]+?)\*(?!\w)', r'<em>\1</em>', linkified)
-    # Headers markdown → bold
-    linkified = re.sub(r'^#{1,4}\s+(.+)$', r'<strong>\1</strong>', linkified, flags=re.MULTILINE)
+    # Headers markdown → proper HTML heading tags (h2, h3, h4) with correct sizing
+    linkified = re.sub(r'^####\s+(.+)$', r'<h4>\1</h4>', linkified, flags=re.MULTILINE)
+    linkified = re.sub(r'^###\s+(.+)$', r'<h3>\1</h3>', linkified, flags=re.MULTILINE)
+    linkified = re.sub(r'^##\s+(.+)$', r'<h2>\1</h2>', linkified, flags=re.MULTILINE)
+    linkified = re.sub(r'^#\s+(.+)$', r'<h2>\1</h2>', linkified, flags=re.MULTILINE)
+    # Numbered lists
+    linkified = re.sub(r'^(\d+)\.\s+(.+)$', r'<li value="\1">\2</li>', linkified, flags=re.MULTILINE)
     # Listes à puces
-    linkified = re.sub(r'^[-•]\s+', '• ', linkified, flags=re.MULTILINE)
-    # Retours à la ligne
-    linkified = linkified.replace('\n\n', '<br><br>').replace('\n', '<br>')
+    linkified = re.sub(r'^[-•]\s+(.+)$', r'<li>\1</li>', linkified, flags=re.MULTILINE)
+    # Wrap consecutive <li> in <ul> or <ol>
+    linkified = re.sub(
+        r'((?:<li(?:\s+value="\d+")?>.+?</li>\n?)+)',
+        lambda m: '<ul>' + m.group(0) + '</ul>' if 'value=' not in m.group(0) else '<ol>' + m.group(0) + '</ol>',
+        linkified,
+    )
+    # Retours à la ligne (skip lines that are already block-level HTML)
+    lines_out = []
+    for line in linkified.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith(('<h2', '<h3', '<h4', '<table', '<ul', '<ol', '<li', '</ul', '</ol', '</table', '</thead', '</tbody', '<thead', '<tbody', '<tr', '</tr')):
+            lines_out.append(line)
+        else:
+            lines_out.append(line)
+    linkified = '\n'.join(lines_out)
+    linkified = re.sub(r'\n\n', '<br><br>', linkified)
+    linkified = re.sub(r'(?<!>)\n(?!<)', '<br>', linkified)
 
     return f'<div class="answer-card">{linkified}</div>'
 
@@ -875,57 +961,99 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
 # POINT 2 : boutons copier / sauvegarder
 # =====================================================
 def render_action_buttons(answer_text, key_suffix=""):
-    import base64
-    # Encoder en base64 pour éviter tout problème d'échappement HTML/JS
-    b64 = base64.b64encode(answer_text.encode("utf-8")).decode("ascii")
+    # Escape the text for safe embedding in a hidden <textarea>
+    escaped = answer_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     bid = f"btn-{key_suffix}"
+    tid = f"txt-{key_suffix}"
     _ = st.markdown(f"""
+    <textarea id="{tid}" style="position:absolute;left:-9999px;opacity:0">{escaped}</textarea>
     <button id="{bid}" class="action-btn" onclick="
-        var t=atob('{b64}');
-        navigator.clipboard.writeText(t).then(function(){{
-            document.getElementById('{bid}').textContent='✅ Copié !';
-            setTimeout(function(){{document.getElementById('{bid}').textContent='📋 Copier';}},2000);
-        }});
+        (function(){{
+            var ta=document.getElementById('{tid}');
+            var txt=ta.value;
+            if(navigator.clipboard && navigator.clipboard.writeText){{
+                navigator.clipboard.writeText(txt).then(function(){{
+                    document.getElementById('{bid}').textContent='\\u2705 Copié !';
+                    setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
+                }},function(){{
+                    ta.select();document.execCommand('copy');
+                    document.getElementById('{bid}').textContent='\\u2705 Copié !';
+                    setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
+                }});
+            }}else{{
+                ta.select();document.execCommand('copy');
+                document.getElementById('{bid}').textContent='\\u2705 Copié !';
+                setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
+            }}
+        }})();
     ">📋 Copier</button>
     """, unsafe_allow_html=True)
 
 
 def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0,
-                   title="##### 📎 Sources utilisées", anchor_prefix=""):
-    """Affiche les sources en expanders. anchor_prefix rend les ancres uniques par message."""
+                   title="##### 📎 Sources utilisées", anchor_prefix="",
+                   collapsed=True):
+    """Affiche les sources en expanders. anchor_prefix rend les ancres uniques par message.
+    collapsed=True wraps the entire section in an st.expander."""
     pfx = f"{anchor_prefix}-" if anchor_prefix else ""
-    st.markdown(title)
-    for i, result in enumerate(results[:display_k]):
-        rank = offset + i
-        num = rank + 1
-        chunk_id, copro, source, filename, doc_type, text, vec_sim, bm25_score, rrf_score, *_ = result
-        sim_color = "#48bb78" if rank < 5 else "#ecc94b" if rank < 15 else "#fc8181"
-        boost_ind = " +📝" if bm25_score > 0.1 else ""
 
-        with st.expander(f"Source {num} — {filename}  ({doc_type}){boost_ind}"):
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                st.caption(f"📁 **Copropriété :** {copro}")
-                st.caption(f"📄 **Fichier :** {source}")
-                st.caption(f"📊 **Scores :** vec={vec_sim:.2f}  bm25={bm25_score:.3f}  rrf={rrf_score:.4f}")
-            with c2:
-                st.markdown(f"""
-                <div style="text-align:center">
-                    <div style="font-size:1.4rem;font-weight:700;color:{sim_color}">#{num}</div>
-                    <div style="font-size:0.7rem;color:#a0aec0">rang RRF</div>
-                </div>
-                """, unsafe_allow_html=True)
-            _ = st.markdown(f'<div id="source-{pfx}{num}"></div>', unsafe_allow_html=True)
-            st.markdown("---")
-            st.text(text[:2000] + ("..." if len(text) > 2000 else ""))
+    def _render_source_list(results_slice, offset_val):
+        for i, result in enumerate(results_slice):
+            rank = offset_val + i
+            num = rank + 1
+            chunk_id, copro, source, filename, doc_type, text, vec_sim, bm25_score, rrf_score, *_ = result
+            sim_color = "#48bb78" if rank < 5 else "#ecc94b" if rank < 15 else "#fc8181"
+            boost_ind = " +📝" if bm25_score > 0.1 else ""
+
+            with st.expander(f"Source {num} — {filename}  ({doc_type}){boost_ind}"):
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.caption(f"📁 **Copropriété :** {copro}")
+                    st.caption(f"📄 **Fichier :** {source}")
+                    st.caption(f"📊 **Scores :** vec={vec_sim:.2f}  bm25={bm25_score:.3f}  rrf={rrf_score:.4f}")
+                with c2:
+                    st.markdown(f"""
+                    <div style="text-align:center">
+                        <div style="font-size:1.4rem;font-weight:700;color:{sim_color}">#{num}</div>
+                        <div style="font-size:0.7rem;color:#a0aec0">rang RRF</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                _ = st.markdown(f'<div id="source-{pfx}{num}"></div>', unsafe_allow_html=True)
+                st.markdown("---")
+                st.text(text[:2000] + ("..." if len(text) > 2000 else ""))
+
+    if collapsed:
+        n_sources = min(display_k, len(results))
+        with st.expander(f"📎 Sources utilisées ({n_sources} sources)", expanded=False):
+            _render_source_list(results[:display_k], offset)
+    else:
+        st.markdown(title)
+        _render_source_list(results[:display_k], offset)
+    # Legacy return for callers that don't use collapsed
+    return
 
 
 # =====================================================
 # SIDEBAR
 # =====================================================
 with st.sidebar:
-    st.markdown("## 🏢 Building Copilot")
+    st.markdown("## 🏢 PALIM")
     st.markdown("---")
+
+    # Clickable question titles from conversation history
+    _user_questions = [
+        msg["content"] for msg in st.session_state.chat_history if msg["role"] == "user"
+    ]
+    if _user_questions:
+        st.markdown("##### 💬 Questions posées")
+        for _qi, _q in enumerate(_user_questions):
+            _truncated = (_q[:50] + "...") if len(_q) > 50 else _q
+            st.markdown(
+                f'<div style="font-size:0.82rem;padding:3px 0;color:#a0aec0;cursor:default;">'
+                f'<span style="color:#667eea;font-weight:500;">{_qi+1}.</span> {_truncated}</div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown("---")
 
     copros = get_copros()
     total = get_total_chunks()
@@ -1001,8 +1129,8 @@ if CLIENT_LOGO_FILE and os.path.exists(CLIENT_LOGO_FILE):
 _ = st.markdown(f"""
 <div class="main-header" style="display:flex;align-items:center;justify-content:space-between;">
     <div>
-        <h1 style="color:white;margin:0 0 0.3rem 0;font-size:1.8rem;font-weight:700;">🏢 Building Copilot</h1>
-        <p style="color:#a0aec0;margin:0;font-size:0.95rem;">Posez vos questions sur les archives de copropriété — réponses sourcées par IA</p>
+        <h1 style="color:white;margin:0 0 0.3rem 0;font-size:1.8rem;font-weight:700;">🏢 PALIM</h1>
+        <p style="color:#a0aec0;margin:0;font-size:0.95rem;">Interrogez notre IA sur vos archives de copropriété &amp; prolongez votre conversation pour affiner vos études</p>
     </div>
     {_logo_html}
 </div>
@@ -1012,11 +1140,18 @@ _ = st.markdown(f"""
 user_input = st.chat_input("Posez votre question sur les archives de copropriété…")
 
 # ── Afficher l'historique — toutes les réponses restent consultables et cliquables ──
+# Fix duplicate question: if user_input is set, the last user message was just appended
+# and will be re-displayed by the user_input block below — so skip it here.
+_skip_last_user = False
+if user_input and st.session_state.chat_history:
+    _last = st.session_state.chat_history[-1]
+    if _last["role"] == "user" and _last["content"] == user_input:
+        _skip_last_user = True
+
 for msg_idx, msg in enumerate(st.session_state.chat_history):
-    is_last_assistant = (
-        msg["role"] == "assistant"
-        and msg_idx == len(st.session_state.chat_history) - 1
-    )
+    # Skip the last user message if it was just submitted (avoids duplicate display)
+    if _skip_last_user and msg_idx == len(st.session_state.chat_history) - 1 and msg["role"] == "user":
+        continue
 
     with st.chat_message(msg["role"]):
         if msg["role"] == "user":
@@ -1026,10 +1161,12 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
             apfx = f"m{msg_idx}"
             st.html(linkify_sources(msg["content"], n_disp, anchor_prefix=apfx))
 
-            if is_last_assistant and msg.get("sources"):
+            # Render sources for ALL assistant messages that have them (collapsed)
+            if msg.get("sources"):
                 render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}")
                 main_sources = msg["sources"][:TOP_K_DISPLAY]
-                render_sources(main_sources, TOP_K_DISPLAY, key_prefix=f"h-{msg_idx}", anchor_prefix=apfx)
+                render_sources(main_sources, TOP_K_DISPLAY, key_prefix=f"h-{msg_idx}",
+                               anchor_prefix=apfx, collapsed=True)
                 extra_sources = msg["sources"][TOP_K_DISPLAY:TOP_K_EXTRA]
                 if extra_sources:
                     with st.expander(f"📂 Sources supplémentaires ({len(extra_sources)} sources)"):
@@ -1038,8 +1175,9 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
                             key_prefix=f"hx-{msg_idx}", offset=TOP_K_DISPLAY,
                             title="##### 📂 Sources supplémentaires",
                             anchor_prefix=apfx,
+                            collapsed=False,
                         )
-            elif not is_last_assistant:
+            else:
                 sc = msg.get("source_count", 0)
                 if sc:
                     st.caption(f"📎 {sc} sources analysées")
@@ -1170,15 +1308,11 @@ if user_input:
                         key_prefix="extra-current", offset=DISPLAY_K_ACTUAL,
                         title="##### 📂 Sources supplémentaires",
                         anchor_prefix=cur_apfx,
+                        collapsed=False,
                     )
 
             # ── Sauvegarder dans l'historique ──
-            # Libérer les sources des anciens messages
-            for old_msg in st.session_state.chat_history:
-                if old_msg["role"] == "assistant" and "sources" in old_msg:
-                    old_msg["source_count"] = len(old_msg["sources"])
-                    del old_msg["sources"]
-
+            # Keep sources for all messages so they can be displayed in collapsed expanders
             st.session_state.chat_history.append({
                 "role": "assistant",
                 "content": answer,
