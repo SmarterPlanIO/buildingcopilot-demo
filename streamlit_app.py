@@ -910,6 +910,15 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
                     f'Source {num}</a>')
         return f'Source {num}'
 
+    # Extract mermaid blocks BEFORE any markdown conversion
+    # Replace ```mermaid ... ``` with placeholders, render them after
+    _mermaid_blocks = []
+    def _extract_mermaid(match):
+        idx = len(_mermaid_blocks)
+        _mermaid_blocks.append(match.group(1).strip())
+        return f"%%MERMAID_{idx}%%"
+    text = re.sub(r'```mermaid\s*\n(.*?)```', _extract_mermaid, text, flags=re.DOTALL)
+
     # Convert markdown tables to HTML FIRST (before other conversions)
     linkified = _md_tables_to_html(text)
 
@@ -970,7 +979,29 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
     linkified = re.sub(r'^(<br>\s*)+', '', linkified)
     linkified = re.sub(r'(<br>\s*)+$', '', linkified)
 
-    return f'<div class="answer-card">{linkified}</div>'
+    # Replace mermaid placeholders with rendered diagrams
+    for idx, mermaid_code in enumerate(_mermaid_blocks):
+        escaped_code = mermaid_code.replace('<', '&lt;').replace('>', '&gt;')
+        mermaid_html = (
+            f'<div id="mermaid-{pfx}{idx}" class="mermaid" '
+            f'style="background:#1e293b;border-radius:8px;padding:12px;margin:0.5rem 0;overflow-x:auto;">'
+            f'{escaped_code}</div>'
+        )
+        linkified = linkified.replace(f"%%MERMAID_{idx}%%", mermaid_html)
+
+    # Include mermaid.js if any diagrams were found
+    mermaid_script = ""
+    if _mermaid_blocks:
+        mermaid_script = (
+            '<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>'
+            '<script>mermaid.initialize({theme:"dark",startOnLoad:true,'
+            'themeVariables:{primaryColor:"#3b82f6",primaryTextColor:"#e2e8f0",'
+            'primaryBorderColor:"#60a5fa",lineColor:"#94a3b8",secondaryColor:"#1e40af",'
+            'tertiaryColor:"#1e293b",background:"#0f172a",mainBkg:"#1e293b",'
+            'nodeBorder:"#60a5fa",clusterBkg:"#0f172a",titleColor:"#f59e0b"}});</script>'
+        )
+
+    return f'{mermaid_script}<div class="answer-card">{linkified}</div>'
 
 
 # =====================================================
