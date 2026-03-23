@@ -965,9 +965,9 @@ def render_action_buttons(answer_text, key_suffix=""):
     escaped = answer_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     bid = f"btn-{key_suffix}"
     tid = f"txt-{key_suffix}"
-    _ = st.markdown(f"""
+    st.html(f"""
     <textarea id="{tid}" style="position:absolute;left:-9999px;opacity:0">{escaped}</textarea>
-    <button id="{bid}" class="action-btn" onclick="
+    <button id="{bid}" style="background:none;border:1px solid #cbd5e0;border-radius:6px;padding:4px 14px;cursor:pointer;font-size:0.82rem;color:#4a5568;margin-right:6px;transition:all 0.15s;font-family:Inter,sans-serif" onmouseover="this.style.background='#edf2f7'" onmouseout="this.style.background='none'" onclick="
         (function(){{
             var ta=document.getElementById('{tid}');
             var txt=ta.value;
@@ -987,7 +987,7 @@ def render_action_buttons(answer_text, key_suffix=""):
             }}
         }})();
     ">📋 Copier</button>
-    """, unsafe_allow_html=True)
+    """)
 
 
 def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0,
