@@ -921,12 +921,16 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
         expand_source_list, linkified
     )
 
-    # Ensuite, linkifier chaque "Source N" individuel
+    # Ensuite, linkifier chaque "Source N" individuel (et variantes Src N, [Src N], [Source N])
     def replace_source(match):
         num = int(match.group(1))
         return make_link(num)
 
     linkified = re.sub(r'(?<!\w)Source\s+(\d+)(?!\w)', replace_source, linkified)
+    # Variantes courtes : Src N, [Src N], [Source N]
+    linkified = re.sub(r'\[Src\s+(\d+)\]', replace_source, linkified)
+    linkified = re.sub(r'\[Source\s+(\d+)\]', replace_source, linkified)
+    linkified = re.sub(r'(?<!\w)Src\s+(\d+)(?!\w)', replace_source, linkified)
 
     # Convertir le markdown basique en HTML pour le rendu dans le div
     # Gras **text** ou __text__
@@ -1163,22 +1167,13 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
             apfx = f"m{msg_idx}"
             st.html(linkify_sources(msg["content"], n_disp, anchor_prefix=apfx))
 
-            # Render sources for ALL assistant messages that have them (collapsed)
+            # Render ALL sources in a single collapsed expander
             if msg.get("sources"):
                 render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}")
-                main_sources = msg["sources"][:TOP_K_DISPLAY]
-                render_sources(main_sources, TOP_K_DISPLAY, key_prefix=f"h-{msg_idx}",
-                               anchor_prefix=apfx, collapsed=True)
-                extra_sources = msg["sources"][TOP_K_DISPLAY:TOP_K_EXTRA]
-                if extra_sources:
-                    with st.expander(f"📂 Sources supplémentaires ({len(extra_sources)} sources)"):
-                        render_sources(
-                            extra_sources, display_k=len(extra_sources),
-                            key_prefix=f"hx-{msg_idx}", offset=TOP_K_DISPLAY,
-                            title="##### 📂 Sources supplémentaires",
-                            anchor_prefix=apfx,
-                            collapsed=False,
-                        )
+                all_msg_sources = msg["sources"][:TOP_K_EXTRA]
+                render_sources(all_msg_sources, display_k=len(all_msg_sources),
+                               key_prefix=f"h-{msg_idx}", anchor_prefix=apfx,
+                               collapsed=True)
             else:
                 sc = msg.get("source_count", 0)
                 if sc:
@@ -1298,20 +1293,12 @@ if user_input:
             # Boutons copier / sauvegarder (POINT 2)
             render_action_buttons(answer, key_suffix="current")
 
-            # Sources principales (top 20)
-            render_sources(results, DISPLAY_K_ACTUAL, key_prefix="current", anchor_prefix=cur_apfx)
-
-            # Sources supplémentaires (chunks 21 à 50) — repliées par défaut
-            extra_results = results[DISPLAY_K_ACTUAL:TOP_K_EXTRA]
-            if extra_results:
-                with st.expander(f"📂 Sources supplémentaires ({len(extra_results)} sources de rang {DISPLAY_K_ACTUAL+1} à {DISPLAY_K_ACTUAL+len(extra_results)})"):
-                    render_sources(
-                        extra_results, display_k=len(extra_results),
-                        key_prefix="extra-current", offset=DISPLAY_K_ACTUAL,
-                        title="##### 📂 Sources supplémentaires",
-                        anchor_prefix=cur_apfx,
-                        collapsed=False,
-                    )
+            # Sources unifiées (toutes les sources dans un seul expander replié)
+            all_sources = results[:TOP_K_EXTRA]
+            if all_sources:
+                render_sources(all_sources, display_k=len(all_sources),
+                               key_prefix="current", anchor_prefix=cur_apfx,
+                               collapsed=True)
 
             # ── Sauvegarder dans l'historique ──
             # Keep sources for all messages so they can be displayed in collapsed expanders
