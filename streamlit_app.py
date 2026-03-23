@@ -99,14 +99,19 @@ _ = st.markdown("""
     .answer-card {
         padding: 0; margin: 0.5rem 0; line-height: 1.7;
     }
-    .answer-card h2 { font-size:1.3rem; margin:1.2rem 0 0.5rem; color:#1a202c; font-weight:600; }
-    .answer-card h3 { font-size:1.1rem; margin:1rem 0 0.4rem; color:#2d3748; font-weight:600; }
-    .answer-card h4 { font-size:1rem; margin:0.8rem 0 0.3rem; color:#4a5568; font-weight:500; }
-    .answer-card table { width:100%; border-collapse:collapse; margin:1rem 0; font-size:0.9rem; }
-    .answer-card th { background:#2d3748; color:white; padding:8px 12px; text-align:left; font-weight:600; }
-    .answer-card td { padding:8px 12px; border-bottom:1px solid #e2e8f0; }
-    .answer-card tr:nth-child(even) td { background:#f7fafc; }
-    .answer-card tr:hover td { background:#edf2f7; }
+    .answer-card { color:#e2e8f0; }
+    .answer-card h2 { font-size:1.3rem; margin:1.2rem 0 0.5rem; color:#93c5fd; font-weight:600; }
+    .answer-card h3 { font-size:1.1rem; margin:1rem 0 0.4rem; color:#a5b4fc; font-weight:600; }
+    .answer-card h4 { font-size:1rem; margin:0.8rem 0 0.3rem; color:#c4b5fd; font-weight:500; }
+    .answer-card strong { color:#f1f5f9; }
+    .answer-card a { color:#60a5fa; text-decoration:underline; }
+    .answer-card a:hover { color:#93c5fd; }
+    .answer-card table { width:100%; border-collapse:collapse; margin:1rem 0; font-size:0.9rem; border:1px solid #4a5568; border-radius:8px; overflow:hidden; }
+    .answer-card th { background:#3b82f6; color:#ffffff; padding:10px 14px; text-align:left; font-weight:600; border-bottom:2px solid #2563eb; }
+    .answer-card td { padding:9px 14px; border-bottom:1px solid #374151; color:#e2e8f0; }
+    .answer-card tr:nth-child(odd) td { background:#1e293b; }
+    .answer-card tr:nth-child(even) td { background:#0f172a; }
+    .answer-card tr:hover td { background:#334155; }
     .answer-card ul, .answer-card ol { margin:0.5rem 0; padding-left:1.5rem; }
     .answer-card li { margin-bottom:0.2rem; }
     .source-badge {
@@ -896,8 +901,10 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
 
     def make_link(num):
         if 1 <= num <= max_source_num:
-            return (f'<a href="#source-{pfx}{num}" '
-                    f'style="color:#3182ce;text-decoration:underline;font-weight:500">'
+            target_id = f"source-{pfx}{num}"
+            return (f'<a href="javascript:void(0)" '
+                    f'onclick="window.parent.document.getElementById(\'{target_id}\')?.scrollIntoView({{behavior:\'smooth\',block:\'center\'}})" '
+                    f'style="color:#60a5fa;text-decoration:underline;font-weight:500;cursor:pointer">'
                     f'Source {num}</a>')
         return f'Source {num}'
 
