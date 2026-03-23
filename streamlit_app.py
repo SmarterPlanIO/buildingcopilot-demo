@@ -968,30 +968,25 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
 # POINT 2 : boutons copier / sauvegarder
 # =====================================================
 def render_action_buttons(answer_text, key_suffix=""):
-    # Escape the text for safe embedding in a hidden <textarea>
-    escaped = answer_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    import base64 as _b64
+    # Encode the FULL markdown text as base64 to preserve it entirely (no truncation, no escaping issues)
+    b64 = _b64.b64encode(answer_text.encode("utf-8")).decode("ascii")
     bid = f"btn-{key_suffix}"
-    tid = f"txt-{key_suffix}"
     st.html(f"""
-    <textarea id="{tid}" style="position:absolute;left:-9999px;opacity:0">{escaped}</textarea>
-    <button id="{bid}" style="background:none;border:1px solid #cbd5e0;border-radius:6px;padding:4px 14px;cursor:pointer;font-size:0.82rem;color:#4a5568;margin-right:6px;transition:all 0.15s;font-family:Inter,sans-serif" onmouseover="this.style.background='#edf2f7'" onmouseout="this.style.background='none'" onclick="
+    <script>var _palim_b64_{key_suffix.replace('-','_')}="{b64}";</script>
+    <button id="{bid}" style="background:none;border:1px solid #64748b;border-radius:6px;padding:5px 16px;cursor:pointer;font-size:0.82rem;color:#94a3b8;margin-right:6px;transition:all 0.15s;font-family:Inter,sans-serif" onmouseover="this.style.background='#334155';this.style.color='#e2e8f0'" onmouseout="this.style.background='none';this.style.color='#94a3b8'" onclick="
         (function(){{
-            var ta=document.getElementById('{tid}');
-            var txt=ta.value;
-            if(navigator.clipboard && navigator.clipboard.writeText){{
-                navigator.clipboard.writeText(txt).then(function(){{
-                    document.getElementById('{bid}').textContent='\\u2705 Copié !';
-                    setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
-                }},function(){{
-                    ta.select();document.execCommand('copy');
-                    document.getElementById('{bid}').textContent='\\u2705 Copié !';
-                    setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
-                }});
-            }}else{{
-                ta.select();document.execCommand('copy');
+            var b64=_palim_b64_{key_suffix.replace('-','_')};
+            var txt=decodeURIComponent(Array.prototype.map.call(atob(b64),function(c){{return'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}}).join(''));
+            navigator.clipboard.writeText(txt).then(function(){{
                 document.getElementById('{bid}').textContent='\\u2705 Copié !';
                 setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
-            }}
+            }},function(){{
+                var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.left='-9999px';
+                document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+                document.getElementById('{bid}').textContent='\\u2705 Copié !';
+                setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
+            }});
         }})();
     ">📋 Copier</button>
     """)
