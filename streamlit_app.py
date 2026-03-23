@@ -97,23 +97,25 @@ _ = st.markdown("""
     .main-header p { color: #a0aec0; margin: 0; font-size: 0.95rem; }
 
     .answer-card {
-        padding: 0; margin: 0.5rem 0; line-height: 1.7;
+        padding: 0; margin: 0; line-height: 1.55;
     }
     .answer-card { color:#e2e8f0; }
-    .answer-card h2 { font-size:1.3rem; margin:1.2rem 0 0.5rem; color:#93c5fd; font-weight:600; }
-    .answer-card h3 { font-size:1.1rem; margin:1rem 0 0.4rem; color:#a5b4fc; font-weight:600; }
-    .answer-card h4 { font-size:1rem; margin:0.8rem 0 0.3rem; color:#c4b5fd; font-weight:500; }
+    .answer-card h2 { font-size:1.25rem; margin:0.7rem 0 0.25rem; color:#f59e0b; font-weight:600; }
+    .answer-card h3 { font-size:1.05rem; margin:0.5rem 0 0.2rem; color:#34d399; font-weight:600; }
+    .answer-card h4 { font-size:0.95rem; margin:0.4rem 0 0.15rem; color:#a78bfa; font-weight:500; }
     .answer-card strong { color:#f1f5f9; }
+    .answer-card em { color:#cbd5e1; }
     .answer-card a { color:#60a5fa; text-decoration:underline; }
     .answer-card a:hover { color:#93c5fd; }
-    .answer-card table { width:100%; border-collapse:collapse; margin:1rem 0; font-size:0.9rem; border:1px solid #4a5568; border-radius:8px; overflow:hidden; }
-    .answer-card th { background:#3b82f6; color:#ffffff; padding:10px 14px; text-align:left; font-weight:600; border-bottom:2px solid #2563eb; }
-    .answer-card td { padding:9px 14px; border-bottom:1px solid #374151; color:#e2e8f0; }
+    .answer-card br { line-height: 1.2; }
+    .answer-card table { width:100%; border-collapse:collapse; margin:0.5rem 0; font-size:0.85rem; border:1px solid #475569; border-radius:8px; overflow:hidden; }
+    .answer-card th { background:#1e40af; color:#e0f2fe; padding:8px 12px; text-align:left; font-weight:600; border-bottom:2px solid #1d4ed8; font-size:0.82rem; }
+    .answer-card td { padding:6px 12px; border-bottom:1px solid #334155; color:#e2e8f0; font-size:0.85rem; }
     .answer-card tr:nth-child(odd) td { background:#1e293b; }
     .answer-card tr:nth-child(even) td { background:#0f172a; }
     .answer-card tr:hover td { background:#334155; }
-    .answer-card ul, .answer-card ol { margin:0.5rem 0; padding-left:1.5rem; }
-    .answer-card li { margin-bottom:0.2rem; }
+    .answer-card ul, .answer-card ol { margin:0.3rem 0; padding-left:1.3rem; }
+    .answer-card li { margin-bottom:0.1rem; }
     .source-badge {
         display: inline-block; background: linear-gradient(135deg, #667eea, #764ba2);
         color: white; padding: 2px 10px; border-radius: 12px;
@@ -962,8 +964,11 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
         else:
             lines_out.append(line)
     linkified = '\n'.join(lines_out)
-    linkified = re.sub(r'\n\n', '<br><br>', linkified)
+    linkified = re.sub(r'\n\n', '<br>', linkified)
     linkified = re.sub(r'(?<!>)\n(?!<)', '<br>', linkified)
+    # Strip leading/trailing <br> to avoid blank line at top of answer
+    linkified = re.sub(r'^(<br>\s*)+', '', linkified)
+    linkified = re.sub(r'(<br>\s*)+$', '', linkified)
 
     return f'<div class="answer-card">{linkified}</div>'
 
