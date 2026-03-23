@@ -1051,17 +1051,24 @@ with st.sidebar:
     st.markdown("## 🏢 PALIM")
     st.markdown("---")
 
-    # Clickable question titles from conversation history
+    # Clickable question titles — scroll to the corresponding message
     _user_questions = [
-        msg["content"] for msg in st.session_state.chat_history if msg["role"] == "user"
+        (idx, msg["content"])
+        for idx, msg in enumerate(st.session_state.chat_history)
+        if msg["role"] == "user"
     ]
     if _user_questions:
         st.markdown("##### 💬 Questions posées")
-        for _qi, _q in enumerate(_user_questions):
+        for _qi, (_msg_idx, _q) in enumerate(_user_questions):
             _truncated = (_q[:50] + "...") if len(_q) > 50 else _q
+            _anchor_id = f"q-anchor-{_msg_idx}"
             st.markdown(
-                f'<div style="font-size:0.82rem;padding:3px 0;color:#a0aec0;cursor:default;">'
-                f'<span style="color:#667eea;font-weight:500;">{_qi+1}.</span> {_truncated}</div>',
+                f'<a href="javascript:void(0)" onclick="'
+                f"window.parent.document.getElementById('{_anchor_id}')?.scrollIntoView({{behavior:'smooth',block:'start'}})"
+                f'" style="display:block;font-size:0.82rem;padding:4px 8px;margin:2px 0;color:#a0aec0;'
+                f'text-decoration:none;border-radius:6px;transition:background 0.15s;cursor:pointer;" '
+                f'onmouseover="this.style.background=\'#1e293b\'" onmouseout="this.style.background=\'none\'">'
+                f'<span style="color:#f59e0b;font-weight:500;">{_qi+1}.</span> {_truncated}</a>',
                 unsafe_allow_html=True,
             )
         st.markdown("---")
@@ -1166,6 +1173,8 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
 
     with st.chat_message(msg["role"]):
         if msg["role"] == "user":
+            # Anchor for sidebar navigation
+            st.markdown(f'<div id="q-anchor-{msg_idx}"></div>', unsafe_allow_html=True)
             st.markdown(msg["content"])
         else:
             n_disp = msg.get("n_displayed", 0)
@@ -1187,7 +1196,9 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
 if user_input:
     # Ajouter à l'historique et afficher
     st.session_state.chat_history.append({"role": "user", "content": user_input})
+    _new_msg_idx = len(st.session_state.chat_history) - 1
     with st.chat_message("user"):
+        st.markdown(f'<div id="q-anchor-{_new_msg_idx}"></div>', unsafe_allow_html=True)
         st.markdown(user_input)
 
     # ── Paramètres ──
