@@ -931,13 +931,44 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
         return f"%%MERMAID_{idx}%%"
     # Primary: fenced ```mermaid blocks
     text = re.sub(r'```mermaid\s*\n(.*?)```', _extract_mermaid, text, flags=re.DOTALL)
-    # Fallback: bare mermaid code (flowchart/graph/sequenceDiagram/gantt/pie/timeline at start of line)
-    # Captures from the keyword to the next blank line followed by non-mermaid content or end of text
-    _mermaid_keywords = r'(?:flowchart|graph|sequenceDiagram|gantt|pie|timeline|classDiagram|stateDiagram|erDiagram|journey)'
-    text = re.sub(
-        r'^(' + _mermaid_keywords + r'(?:\s+(?:TD|LR|RL|BT))?\s*\n(?:(?:[ \t]+\S.*|[ \t]*\n)*(?:[ \t]+\S.*)?))',
-        _extract_mermaid, text, flags=re.MULTILINE
+    # Fallback: bare mermaid code without fencing
+    # Detect lines starting with mermaid keywords, then grab all connected lines
+    # (lines containing mermaid syntax: arrows, pipes, brackets, subgraph, end, style, class)
+    _mermaid_start = re.compile(
+        r'^(flowchart|graph|sequenceDiagram|gantt|pie|timeline|classDiagram|stateDiagram|erDiagram|journey)'
+        r'(?:\s+(?:TD|LR|RL|BT))?',
+        re.MULTILINE
     )
+    _mermaid_line = re.compile(
+        r'^(?:\s+\S|.*(?:-->|---|==>|\|>|\||\[|\]|\(|\)|:::).*|'
+        r'\s*(?:subgraph|end|style|class|click|linkStyle)\s|'
+        r'\s*[A-Z]\d*[\[\(\{]|'  # node definitions like A[text] or B{text}
+        r'\s*%%|'  # mermaid comments
+        r'\s*$)'  # blank lines within diagram
+    )
+    def _extract_bare_mermaid(text_input):
+        lines = text_input.split('\n')
+        result = []
+        i = 0
+        while i < len(lines):
+            m = _mermaid_start.match(lines[i])
+            if m:
+                block_lines = [lines[i]]
+                i += 1
+                while i < len(lines) and _mermaid_line.match(lines[i]):
+                    block_lines.append(lines[i])
+                    i += 1
+                if len(block_lines) >= 3:  # at least keyword + 2 lines = real diagram
+                    idx = len(_mermaid_blocks)
+                    _mermaid_blocks.append('\n'.join(block_lines))
+                    result.append(f"%%MERMAID_{idx}%%")
+                else:
+                    result.extend(block_lines)
+            else:
+                result.append(lines[i])
+                i += 1
+        return '\n'.join(result)
+    text = _extract_bare_mermaid(text)
 
     # Convert markdown tables to HTML FIRST (before other conversions)
     linkified = _md_tables_to_html(text)
