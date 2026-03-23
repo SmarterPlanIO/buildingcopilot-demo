@@ -1093,14 +1093,15 @@ with st.sidebar:
         for _qi, (_msg_idx, _q) in enumerate(_user_questions):
             _truncated = (_q[:50] + "...") if len(_q) > 50 else _q
             _anchor_id = f"q-anchor-{_msg_idx}"
-            st.markdown(
-                f'<a href="javascript:void(0)" onclick="'
+            # Use st.html so onclick JS executes in the parent frame (not blocked by sandbox)
+            st.html(
+                f'<div onclick="'
                 f"window.parent.document.getElementById('{_anchor_id}')?.scrollIntoView({{behavior:'smooth',block:'start'}})"
                 f'" style="display:block;font-size:0.82rem;padding:4px 8px;margin:2px 0;color:#a0aec0;'
-                f'text-decoration:none;border-radius:6px;transition:background 0.15s;cursor:pointer;" '
+                f'text-decoration:none;border-radius:6px;transition:background 0.15s;cursor:pointer;'
+                f'font-family:Inter,sans-serif;" '
                 f'onmouseover="this.style.background=\'#1e293b\'" onmouseout="this.style.background=\'none\'">'
-                f'<span style="color:#f59e0b;font-weight:500;">{_qi+1}.</span> {_truncated}</a>',
-                unsafe_allow_html=True,
+                f'<span style="color:#f59e0b;font-weight:500;">{_qi+1}.</span> {_truncated}</div>'
             )
         st.markdown("---")
 
