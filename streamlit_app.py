@@ -741,12 +741,17 @@ CONCISION (très important) :
 - Limite ta réponse à ~400 mots sauf pour les inventaires exhaustifs.
 - Pas de formules de politesse ni de conclusions génériques.
 
-DIAGRAMMES MERMAID (capacité spéciale) :
-- Tu PEUX et DOIS utiliser des diagrammes Mermaid quand c'est pertinent (workflows, timelines, organigrammes, comparaisons).
-- L'interface PALIM rend automatiquement les blocs ```mermaid en diagrammes visuels interactifs.
-- Utilise la syntaxe Mermaid standard (flowchart, gantt, sequenceDiagram, pie, timeline, etc.).
-- Privilégie les diagrammes flowchart TD ou LR pour les workflows, et timeline pour les chronologies.
-- Exemple : quand on te demande un workflow, un processus, une chronologie ou un organigramme, produis un bloc ```mermaid.
+DIAGRAMMES MERMAID (capacité spéciale — SYNTAXE OBLIGATOIRE) :
+- Tu PEUX et DOIS utiliser des diagrammes Mermaid quand c'est pertinent.
+- Tu DOIS TOUJOURS envelopper le code Mermaid dans un bloc code avec triple backticks ET le mot "mermaid" :
+  ```mermaid
+  flowchart TD
+    A[Début] --> B[Fin]
+  ```
+- JAMAIS de code Mermaid nu sans les triple backticks — l'interface ne le rendra pas.
+- Utilise flowchart TD/LR pour workflows, timeline pour chronologies, sequenceDiagram pour interactions.
+- Garde les labels de nœuds COURTS (max 30 caractères). Détaille dans le texte autour du diagramme, pas dans les nœuds.
+- Ne mets PAS de références [Src N] dans les nœuds Mermaid — cite les sources dans le texte qui accompagne le diagramme.
 
 EXCLUSION DES RÉSOLUTIONS DE PROCÉDURE (PV d'AG) :
 - Lors d'un inventaire de résolutions, EXCLURE les résolutions de procédure récurrentes :
@@ -924,7 +929,15 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
         idx = len(_mermaid_blocks)
         _mermaid_blocks.append(match.group(1).strip())
         return f"%%MERMAID_{idx}%%"
+    # Primary: fenced ```mermaid blocks
     text = re.sub(r'```mermaid\s*\n(.*?)```', _extract_mermaid, text, flags=re.DOTALL)
+    # Fallback: bare mermaid code (flowchart/graph/sequenceDiagram/gantt/pie/timeline at start of line)
+    # Captures from the keyword to the next blank line followed by non-mermaid content or end of text
+    _mermaid_keywords = r'(?:flowchart|graph|sequenceDiagram|gantt|pie|timeline|classDiagram|stateDiagram|erDiagram|journey)'
+    text = re.sub(
+        r'^(' + _mermaid_keywords + r'(?:\s+(?:TD|LR|RL|BT))?\s*\n(?:(?:[ \t]+\S.*|[ \t]*\n)*(?:[ \t]+\S.*)?))',
+        _extract_mermaid, text, flags=re.MULTILINE
+    )
 
     # Convert markdown tables to HTML FIRST (before other conversions)
     linkified = _md_tables_to_html(text)
