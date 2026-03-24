@@ -1143,15 +1143,24 @@ def render_answer_segments(segments):
             clean_code = clean_code.replace('≥', '>=')
             clean_code = clean_code.replace('°', ' deg')
             # 10. Fix edge labels with < or > that conflict with HTML parsing
-            #     -->|< 1600 EUR| → -->|moins de 1600 EUR|
             clean_code = re.sub(r'\|<\s*', '|moins de ', clean_code)
             clean_code = re.sub(r'\|>\s*', '|plus de ', clean_code)
-            # 11. Remove any remaining non-ASCII chars that could break parsing
+            # 11. Remove <br> from edge labels |text<br>more| → |text - more|
+            #     Mermaid 10.2.4 doesn't support <br> inside pipe labels
+            def _clean_edge_label_br(m):
+                content = m.group(1).replace('<br>', ' - ')
+                return '|' + content + '|'
+            clean_code = re.sub(r'\|([^|]*<br>[^|]*)\|', _clean_edge_label_br, clean_code)
+            # 12. Remove @ symbol (special in mermaid for click/interaction directives)
+            clean_code = clean_code.replace('@', ' at ')
+            # 13. Remove leading dashes in node text [- item] → [item]
+            clean_code = re.sub(r'\[\s*-\s*', '[', clean_code)
+            # 14. Remove any remaining non-ASCII chars that could break parsing
             #     (keep accented French chars: àâäéèêëïîôùûüÿçœæ and common punctuation)
             clean_code = re.sub(r'[^\x00-\x7F\u00C0-\u00FF\u0152\u0153\u0178]', '', clean_code)
             # Debug expander
             n_lines = clean_code.count('\n') + 1
-            with st.expander(f"Debug Mermaid v8 — {n_lines} lignes", expanded=False):
+            with st.expander(f"Debug Mermaid v9 — {n_lines} lignes", expanded=False):
                 st.code(clean_code, language="text")
             # Inject theme via %%{init:...}%% directive at top of mermaid code
             theme_directive = (
