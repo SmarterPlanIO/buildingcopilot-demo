@@ -985,7 +985,20 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
     linkified = re.sub(r'\[(?:Source|Src)\s*(\d+)\]', r'Source \1', linkified)
     linkified = re.sub(r'(?<!\w)Src\s+(\d+)(?!\w)', r'Source \1', linkified)
 
-    # Step 2: Expand "Source N, N, N" and "Source N/N/N" lists
+    # Step 2: Expand ranges "Source 12-13" → "Source 12, Source 13"
+    def expand_source_range(match):
+        start = int(match.group(1))
+        end = int(match.group(2))
+        if end > start and (end - start) <= 20:  # safety cap
+            return ", ".join(f"Source {n}" for n in range(start, end + 1))
+        return match.group(0)
+
+    linkified = re.sub(
+        r'(?<!\w)Sources?\s+(\d+)\s*[-–]\s*(\d+)(?!\w)',
+        expand_source_range, linkified
+    )
+
+    # Step 3: Expand "Source N, N, N" and "Source N/N/N" lists
     # After normalization, bare numbers following a Source reference get expanded
     def expand_source_list(match):
         nums = re.findall(r'\d+', match.group(0))
@@ -1001,21 +1014,12 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
         expand_source_list, linkified
     )
 
-    # Ensuite, linkifier chaque "Source N" individuel (et variantes Src N, [Src N], [Source N])
+    # Step 4: Linkify each "Source N" (all variants already normalized to "Source N" in step 1)
     def replace_source(match):
         num = int(match.group(1))
         return make_link(num)
 
-    # Variantes avec underscores markdown (Claude écrit souvent __Source N__)
-    # DOIT être AVANT la conversion bold (__text__ → <strong>)
-    linkified = re.sub(r'__Source\s+(\d+)__', replace_source, linkified)
-    linkified = re.sub(r'__Src\s+(\d+)__', replace_source, linkified)
-    # Variantes entre crochets
-    linkified = re.sub(r'\[Src\s+(\d+)\]', replace_source, linkified)
-    linkified = re.sub(r'\[Source\s+(\d+)\]', replace_source, linkified)
-    # Variantes standard sans crochets
     linkified = re.sub(r'(?<!\w)Source\s+(\d+)(?!\w)', replace_source, linkified)
-    linkified = re.sub(r'(?<!\w)Src\s+(\d+)(?!\w)', replace_source, linkified)
 
     # Convertir le markdown basique en HTML pour le rendu dans le div
     # Gras **text** ou __text__
@@ -1075,60 +1079,26 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
 
 def render_answer_segments(segments):
     """Render a list of (type, content) segments produced by linkify_sources.
-    HTML segments → st.html(), Mermaid segments → st.html() with mermaid.js CDN v11."""
+    HTML segments → st.markdown(unsafe_allow_html) so anchor links work in main DOM.
+    Mermaid segments → rendered as SVG image via mermaid.ink API."""
+    import base64 as _b64
+    import urllib.parse as _urlparse
     for seg_type, seg_content in segments:
         if seg_type == "mermaid":
-            import base64 as _b64
+            # Render via mermaid.ink (official Mermaid rendering service) as SVG image
+            # No JS needed — works in st.markdown and st.image
             b64_code = _b64.b64encode(seg_content.encode("utf-8")).decode("ascii")
-            uid = f"mm{hash(seg_content) % 10**8}"
-            st.html(f"""
-            <div id="{uid}" style="background:#1e293b;border-radius:8px;padding:16px;margin:0.5rem 0;overflow-x:auto;min-height:100px;display:flex;align-items:center;justify-content:center">
-                <span style="color:#94a3b8;font-size:0.85rem">Chargement du diagramme...</span>
-            </div>
-            <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-            <script>
-            (function() {{
-                function renderDiagram() {{
-                    if (typeof mermaid === 'undefined') {{
-                        setTimeout(renderDiagram, 150);
-                        return;
-                    }}
-                    mermaid.initialize({{
-                        startOnLoad: false,
-                        theme: 'dark',
-                        securityLevel: 'loose',
-                        themeVariables: {{
-                            primaryColor: '#3b82f6',
-                            primaryTextColor: '#e2e8f0',
-                            primaryBorderColor: '#60a5fa',
-                            lineColor: '#94a3b8',
-                            secondaryColor: '#1e40af',
-                            tertiaryColor: '#1e293b',
-                            background: '#0f172a',
-                            mainBkg: '#1e293b',
-                            nodeBorder: '#60a5fa',
-                            clusterBkg: '#0f172a',
-                            titleColor: '#f59e0b'
-                        }}
-                    }});
-                    var b64 = "{b64_code}";
-                    var code = decodeURIComponent(Array.prototype.map.call(atob(b64), function(c) {{
-                        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-                    }}).join(''));
-                    mermaid.render('{uid}_svg', code).then(function(result) {{
-                        document.getElementById('{uid}').innerHTML = result.svg;
-                    }}).catch(function(e) {{
-                        document.getElementById('{uid}').innerHTML =
-                            '<pre style="color:#f87171;font-size:0.8rem;white-space:pre-wrap">Erreur diagramme: ' +
-                            e.message + '</pre>';
-                    }});
-                }}
-                renderDiagram();
-            }})();
-            </script>
-            """)
+            img_url = f"https://mermaid.ink/svg/{b64_code}?theme=dark&bgColor=1e293b"
+            st.markdown(
+                f'<div style="background:#1e293b;border-radius:8px;padding:12px;margin:0.5rem 0;overflow-x:auto">'
+                f'<img src="{img_url}" style="max-width:100%;height:auto" alt="Diagramme Mermaid" '
+                f'onerror="this.parentElement.innerHTML=\'<pre style=&quot;color:#94a3b8;font-size:0.85rem&quot;>'
+                f'Diagramme non disponible — rechargez la page</pre>\'">'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
         else:
-            st.html(seg_content)
+            st.markdown(seg_content, unsafe_allow_html=True)
 
 
 # =====================================================
