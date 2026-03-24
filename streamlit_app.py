@@ -1115,7 +1115,8 @@ def render_answer_segments(segments):
             # 4. Remove __bold__ markers that Claude sometimes puts in mermaid code
             clean_code = re.sub(r'__([^_]+)__', r'\1', clean_code)
             # 5. Remove any leaked HTML tags (from our linkification pipeline)
-            clean_code = re.sub(r'<(?!br)(?!br>)[^>]+>', '', clean_code)
+            # IMPORTANT: only match valid HTML tags (start with letter), not mathematical < like "< 1600€"
+            clean_code = re.sub(r'<(?!br)(?!br>)(?=[a-zA-Z/])[^>]+>', '', clean_code)
             # 6. Clean up leftover empty brackets from emoji removal: [ text] → [text]
             clean_code = re.sub(r'\[\s+', '[', clean_code)
             clean_code = re.sub(r'\s+\]', ']', clean_code)
