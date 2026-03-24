@@ -1006,10 +1006,15 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
         num = int(match.group(1))
         return make_link(num)
 
-    linkified = re.sub(r'(?<!\w)Source\s+(\d+)(?!\w)', replace_source, linkified)
-    # Variantes courtes : Src N, [Src N], [Source N]
+    # Variantes avec underscores markdown (Claude écrit souvent __Source N__)
+    # DOIT être AVANT la conversion bold (__text__ → <strong>)
+    linkified = re.sub(r'__Source\s+(\d+)__', replace_source, linkified)
+    linkified = re.sub(r'__Src\s+(\d+)__', replace_source, linkified)
+    # Variantes entre crochets
     linkified = re.sub(r'\[Src\s+(\d+)\]', replace_source, linkified)
     linkified = re.sub(r'\[Source\s+(\d+)\]', replace_source, linkified)
+    # Variantes standard sans crochets
+    linkified = re.sub(r'(?<!\w)Source\s+(\d+)(?!\w)', replace_source, linkified)
     linkified = re.sub(r'(?<!\w)Src\s+(\d+)(?!\w)', replace_source, linkified)
 
     # Convertir le markdown basique en HTML pour le rendu dans le div
@@ -1074,44 +1079,52 @@ def render_answer_segments(segments):
     for seg_type, seg_content in segments:
         if seg_type == "mermaid":
             import base64 as _b64
-            # Encode mermaid code as base64 to avoid HTML escaping issues
             b64_code = _b64.b64encode(seg_content.encode("utf-8")).decode("ascii")
             uid = f"mm{hash(seg_content) % 10**8}"
             st.html(f"""
             <div id="{uid}" style="background:#1e293b;border-radius:8px;padding:16px;margin:0.5rem 0;overflow-x:auto;min-height:100px;display:flex;align-items:center;justify-content:center">
                 <span style="color:#94a3b8;font-size:0.85rem">Chargement du diagramme...</span>
             </div>
-            <script type="module">
-                import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-                mermaid.initialize({{
-                    startOnLoad: false,
-                    theme: 'dark',
-                    themeVariables: {{
-                        primaryColor: '#3b82f6',
-                        primaryTextColor: '#e2e8f0',
-                        primaryBorderColor: '#60a5fa',
-                        lineColor: '#94a3b8',
-                        secondaryColor: '#1e40af',
-                        tertiaryColor: '#1e293b',
-                        background: '#0f172a',
-                        mainBkg: '#1e293b',
-                        nodeBorder: '#60a5fa',
-                        clusterBkg: '#0f172a',
-                        titleColor: '#f59e0b'
+            <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+            <script>
+            (function() {{
+                function renderDiagram() {{
+                    if (typeof mermaid === 'undefined') {{
+                        setTimeout(renderDiagram, 150);
+                        return;
                     }}
-                }});
-                const b64 = "{b64_code}";
-                const code = decodeURIComponent(Array.prototype.map.call(atob(b64), function(c) {{
-                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-                }}).join(''));
-                try {{
-                    const {{ svg }} = await mermaid.render('{uid}_svg', code);
-                    document.getElementById('{uid}').innerHTML = svg;
-                }} catch(e) {{
-                    document.getElementById('{uid}').innerHTML =
-                        '<pre style="color:#f87171;font-size:0.8rem;white-space:pre-wrap">Erreur diagramme: ' +
-                        e.message + '</pre>';
+                    mermaid.initialize({{
+                        startOnLoad: false,
+                        theme: 'dark',
+                        securityLevel: 'loose',
+                        themeVariables: {{
+                            primaryColor: '#3b82f6',
+                            primaryTextColor: '#e2e8f0',
+                            primaryBorderColor: '#60a5fa',
+                            lineColor: '#94a3b8',
+                            secondaryColor: '#1e40af',
+                            tertiaryColor: '#1e293b',
+                            background: '#0f172a',
+                            mainBkg: '#1e293b',
+                            nodeBorder: '#60a5fa',
+                            clusterBkg: '#0f172a',
+                            titleColor: '#f59e0b'
+                        }}
+                    }});
+                    var b64 = "{b64_code}";
+                    var code = decodeURIComponent(Array.prototype.map.call(atob(b64), function(c) {{
+                        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                    }}).join(''));
+                    mermaid.render('{uid}_svg', code).then(function(result) {{
+                        document.getElementById('{uid}').innerHTML = result.svg;
+                    }}).catch(function(e) {{
+                        document.getElementById('{uid}').innerHTML =
+                            '<pre style="color:#f87171;font-size:0.8rem;white-space:pre-wrap">Erreur diagramme: ' +
+                            e.message + '</pre>';
+                    }});
                 }}
+                renderDiagram();
+            }})();
             </script>
             """)
         else:
