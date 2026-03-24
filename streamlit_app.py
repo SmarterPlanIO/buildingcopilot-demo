@@ -1158,10 +1158,7 @@ def render_answer_segments(segments):
             # 14. Remove any remaining non-ASCII chars that could break parsing
             #     (keep accented French chars: àâäéèêëïîôùûüÿçœæ and common punctuation)
             clean_code = re.sub(r'[^\x00-\x7F\u00C0-\u00FF\u0152\u0153\u0178]', '', clean_code)
-            # Debug expander
-            n_lines = clean_code.count('\n') + 1
-            with st.expander(f"Debug Mermaid v10 — {n_lines} lignes", expanded=False):
-                st.code(clean_code, language="text")
+            # Mermaid code ready for rendering
             # Inject theme — use system-ui fonts (available everywhere, no CDN needed)
             theme_directive = (
                 '%%{init: {"theme": "base", "themeVariables": {'
