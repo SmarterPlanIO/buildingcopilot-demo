@@ -1084,9 +1084,23 @@ def render_answer_segments(segments):
     Mermaid segments → stmd.st_mermaid() native Streamlit component."""
     for seg_type, seg_content in segments:
         if seg_type == "mermaid":
-            # Use streamlit-mermaid native component — it bundles mermaid.js internally
-            # No CDN, no CSP issues, no external service
-            stmd.st_mermaid(seg_content, height="auto")
+            # Clean mermaid code before rendering
+            clean_code = seg_content.strip()
+            # Remove any HTML tags that might have leaked in
+            clean_code = re.sub(r'<[^>]+>', '', clean_code)
+            # Replace literal \n in node labels with <br/> (mermaid syntax for line breaks)
+            # But only inside node labels [text], {text}, (text) — not standalone \n
+            clean_code = clean_code.replace('\\n', '<br/>')
+            # Remove __bold__ markers that Claude sometimes puts in mermaid code
+            clean_code = re.sub(r'__([^_]+)__', r'\1', clean_code)
+            # Log for debugging
+            with st.expander("🔍 Debug Mermaid (cliquez pour voir le code)", expanded=False):
+                st.code(clean_code, language="text")
+            try:
+                stmd.st_mermaid(clean_code, height="auto")
+            except Exception as e:
+                st.error(f"Erreur rendu Mermaid : {e}")
+                st.code(clean_code, language="text")
         else:
             st.markdown(seg_content, unsafe_allow_html=True)
 
