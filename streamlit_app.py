@@ -1160,52 +1160,77 @@ def render_answer_segments(segments):
             clean_code = re.sub(r'[^\x00-\x7F\u00C0-\u00FF\u0152\u0153\u0178]', '', clean_code)
             # Debug expander
             n_lines = clean_code.count('\n') + 1
-            with st.expander(f"Debug Mermaid v9 — {n_lines} lignes", expanded=False):
+            with st.expander(f"Debug Mermaid v10 — {n_lines} lignes", expanded=False):
                 st.code(clean_code, language="text")
-            # Inject theme via %%{init:...}%% directive at top of mermaid code
+            # Inject theme — use system-ui fonts (available everywhere, no CDN needed)
             theme_directive = (
                 '%%{init: {"theme": "base", "themeVariables": {'
                 '"primaryColor": "#1e3a5f", "primaryTextColor": "#f1f5f9", '
-                '"primaryBorderColor": "#3b82f6", '
-                '"secondaryColor": "#4c1d95", "secondaryTextColor": "#f1f5f9", '
-                '"secondaryBorderColor": "#8b5cf6", '
-                '"tertiaryColor": "#164e3d", "tertiaryTextColor": "#f1f5f9", '
-                '"lineColor": "#64748b", "textColor": "#f1f5f9", '
+                '"primaryBorderColor": "#60a5fa", '
+                '"secondaryColor": "#312e81", "secondaryTextColor": "#f1f5f9", '
+                '"secondaryBorderColor": "#818cf8", '
+                '"tertiaryColor": "#064e3b", "tertiaryTextColor": "#f1f5f9", '
+                '"lineColor": "#94a3b8", "textColor": "#f1f5f9", '
                 '"background": "#0f172a", "mainBkg": "#1e3a5f", '
-                '"nodeBorder": "#3b82f6", '
-                '"fontFamily": "Inter, system-ui, sans-serif", '
-                '"fontSize": "13px", '
-                '"edgeLabelBackground": "#1e293b", '
+                '"nodeBorder": "#60a5fa", '
+                '"fontFamily": "Segoe UI, system-ui, -apple-system, sans-serif", '
+                '"fontSize": "14px", '
+                '"edgeLabelBackground": "#334155", '
                 '"clusterBkg": "#1e293b", "clusterBorder": "#475569"'
-                '}, "flowchart": {"curve": "basis", "padding": 12, '
-                '"nodeSpacing": 40, "rankSpacing": 50, "htmlLabels": true}}}%%'
+                '}, "flowchart": {"curve": "basis", "padding": 16, '
+                '"nodeSpacing": 50, "rankSpacing": 60, "htmlLabels": true, '
+                '"defaultRenderer": "dagre"}}}%%'
             )
-            # Auto-style nodes by type: first=green, last=green, diamonds=amber, others=blue
-            lines = clean_code.strip().split('\n')
-            # Find all node IDs and their types
-            node_ids = []
+            # Auto-style ALL nodes by scanning entire lines (not just start)
+            # Use findall to catch mid-line node definitions like "A --> B[text]"
+            _skip_ids = {'flowchart', 'graph', 'subgraph', 'style', 'class', 'end', 'TD', 'LR', 'RL', 'BT'}
+            all_node_ids = []  # ordered by first appearance
             diamond_ids = []
-            for line in lines:
-                # Node with diamond shape: X{text}
-                dm = re.match(r'\s*(\w+)\{', line)
-                if dm:
-                    diamond_ids.append(dm.group(1))
-                # Any node definition: X[text] or X(text) or X{text}
-                nm = re.match(r'\s*(\w+)[\[\(\{]', line)
-                if nm and nm.group(1) not in ('flowchart', 'graph', 'subgraph', 'style', 'class', 'end'):
-                    if nm.group(1) not in node_ids:
-                        node_ids.append(nm.group(1))
-            # Add style directives for color variety
+            round_ids = []  # rounded nodes (parentheses)
+            for line in clean_code.strip().split('\n'):
+                # Find ALL node definitions: ID[text], ID{text}, ID(text), ID([text])
+                for m in re.finditer(r'(?<!\w)(\w+)\s*(\[|\{|\()', line):
+                    nid = m.group(1)
+                    shape = m.group(2)
+                    if nid in _skip_ids:
+                        continue
+                    if nid not in all_node_ids:
+                        all_node_ids.append(nid)
+                    if shape == '{' and nid not in diamond_ids:
+                        diamond_ids.append(nid)
+                    elif shape == '(' and nid not in round_ids:
+                        round_ids.append(nid)
+            # Build style directives for visual variety
             style_lines = []
-            if node_ids:
-                # First node = teal (start)
-                style_lines.append(f'    style {node_ids[0]} fill:#0d9488,stroke:#14b8a6,color:#f0fdfa,stroke-width:2px')
-                # Last node = emerald (end)
-                if len(node_ids) > 1:
-                    style_lines.append(f'    style {node_ids[-1]} fill:#059669,stroke:#34d399,color:#ecfdf5,stroke-width:2px')
-            # Diamond nodes = amber (decision)
-            for did in diamond_ids:
-                style_lines.append(f'    style {did} fill:#d97706,stroke:#f59e0b,color:#fffbeb,stroke-width:2px')
+            if all_node_ids:
+                first_id = all_node_ids[0]
+                last_id = all_node_ids[-1]
+                styled = set()
+                # First node = teal (start point)
+                style_lines.append(f'    style {first_id} fill:#0d9488,stroke:#2dd4bf,color:#f0fdfa,stroke-width:2px')
+                styled.add(first_id)
+                # Last node = emerald (conclusion)
+                if last_id != first_id:
+                    style_lines.append(f'    style {last_id} fill:#059669,stroke:#6ee7b7,color:#ecfdf5,stroke-width:2px')
+                    styled.add(last_id)
+                # Diamond nodes = amber (decisions)
+                for did in diamond_ids:
+                    if did not in styled:
+                        style_lines.append(f'    style {did} fill:#b45309,stroke:#fbbf24,color:#fefce8,stroke-width:2px')
+                        styled.add(did)
+                # Round nodes = indigo (processes/sub-steps)
+                for rid in round_ids:
+                    if rid not in styled:
+                        style_lines.append(f'    style {rid} fill:#3730a3,stroke:#818cf8,color:#eef2ff,stroke-width:1px')
+                        styled.add(rid)
+                # Remaining regular nodes alternate between 2 blue shades
+                blues = [
+                    'fill:#1e3a5f,stroke:#60a5fa,color:#e0f2fe,stroke-width:1px',
+                    'fill:#1e293b,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px',
+                ]
+                for i, nid in enumerate(all_node_ids):
+                    if nid not in styled:
+                        style_lines.append(f'    style {nid} {blues[i % 2]}')
             themed_code = theme_directive + '\n' + clean_code
             if style_lines:
                 themed_code += '\n' + '\n'.join(style_lines)
