@@ -1123,7 +1123,8 @@ def render_answer_segments(segments):
             # Remove __bold__ markers that Claude sometimes puts in mermaid code
             clean_code = re.sub(r'__([^_]+)__', r'\1', clean_code)
             # Log for debugging
-            with st.expander("🔍 Debug Mermaid (cliquez pour voir le code)", expanded=False):
+            n_lines = clean_code.count('\n') + 1
+            with st.expander(f"🔍 Debug Mermaid v3 — {n_lines} lignes", expanded=False):
                 st.code(clean_code, language="text")
             try:
                 stmd.st_mermaid(clean_code, height="auto")
