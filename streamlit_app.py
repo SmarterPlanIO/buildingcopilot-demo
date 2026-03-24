@@ -1123,8 +1123,53 @@ def render_answer_segments(segments):
             n_lines = clean_code.count('\n') + 1
             with st.expander(f"Debug Mermaid v4 — {n_lines} lignes", expanded=False):
                 st.code(clean_code, language="text")
+            # Custom theme for dark mode readability
+            mermaid_config = {
+                "theme": "base",
+                "themeVariables": {
+                    # Nodes
+                    "primaryColor": "#1e3a5f",
+                    "primaryTextColor": "#e2e8f0",
+                    "primaryBorderColor": "#3b82f6",
+                    # Secondary (decisions/diamonds)
+                    "secondaryColor": "#4c1d95",
+                    "secondaryTextColor": "#e2e8f0",
+                    "secondaryBorderColor": "#8b5cf6",
+                    # Tertiary
+                    "tertiaryColor": "#164e3d",
+                    "tertiaryTextColor": "#e2e8f0",
+                    "tertiaryBorderColor": "#34d399",
+                    # Lines and text
+                    "lineColor": "#94a3b8",
+                    "textColor": "#e2e8f0",
+                    # Background
+                    "background": "#0f172a",
+                    "mainBkg": "#1e3a5f",
+                    "nodeBorder": "#3b82f6",
+                    # Fonts
+                    "fontFamily": "Inter, system-ui, sans-serif",
+                    "fontSize": "14px",
+                    # Labels on edges
+                    "edgeLabelBackground": "#1e293b",
+                    # Clusters
+                    "clusterBkg": "#1e293b",
+                    "clusterBorder": "#475569",
+                    # Notes
+                    "noteBkgColor": "#1e293b",
+                    "noteTextColor": "#e2e8f0",
+                    "noteBorderColor": "#f59e0b",
+                },
+                "flowchart": {
+                    "curve": "basis",
+                    "padding": 16,
+                    "nodeSpacing": 50,
+                    "rankSpacing": 60,
+                    "htmlLabels": True,
+                    "useMaxWidth": True,
+                },
+            }
             try:
-                stmd.st_mermaid(clean_code, height="auto")
+                stmd.st_mermaid(clean_code, height="auto", config=mermaid_config)
             except Exception as e:
                 st.error(f"Erreur rendu Mermaid : {e}")
                 st.code(clean_code, language="text")
