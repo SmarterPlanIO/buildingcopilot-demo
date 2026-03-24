@@ -978,13 +978,26 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
     # Convert markdown tables to HTML FIRST (before other conversions)
     linkified = _md_tables_to_html(text)
 
-    # D'abord, expandre "Source 4, 8, 10, 20" → "Source 4, Source 8, Source 10, Source 20"
+    # Step 1: Normalize all Source/Src variants to plain "Source N"
+    # Remove bold markers (__), brackets, and normalize Src→Source
+    linkified = re.sub(r'__(?:Source|Src)\s*(\d+)__', r'Source \1', linkified)
+    linkified = re.sub(r'\*\*(?:Source|Src)\s*(\d+)\*\*', r'Source \1', linkified)
+    linkified = re.sub(r'\[(?:Source|Src)\s*(\d+)\]', r'Source \1', linkified)
+    linkified = re.sub(r'(?<!\w)Src\s+(\d+)(?!\w)', r'Source \1', linkified)
+
+    # Step 2: Expand "Source N, N, N" and "Source N/N/N" lists
+    # After normalization, bare numbers following a Source reference get expanded
     def expand_source_list(match):
         nums = re.findall(r'\d+', match.group(0))
         return ", ".join(f"Source {n}" for n in nums)
 
     linkified = re.sub(
-        r'(?<!\w)Sources?\s+(\d+(?:\s*,\s*\d+)+)(?!\w)',
+        r'(?<!\w)Sources?\s+\d+(?:\s*[,/&]\s*\d+)+',
+        expand_source_list, linkified
+    )
+    # Also expand "Source N, Source N, N, N" (mixed: some have prefix, some don't)
+    linkified = re.sub(
+        r'Source\s+(\d+)(?:\s*[,/&]\s*(?:Source\s+)?(\d+))+',
         expand_source_list, linkified
     )
 
