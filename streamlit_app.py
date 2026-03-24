@@ -1035,35 +1035,35 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
     linkified = re.sub(r'^(<br>\s*)+', '', linkified)
     linkified = re.sub(r'(<br>\s*)+$', '', linkified)
 
-    # Replace mermaid placeholders with rendered diagrams
+    # Return as segments: list of (type, content) tuples
+    # "html" segments are rendered with st.html(), "mermaid" with stmd.st_mermaid()
+    if not _mermaid_blocks:
+        return [("html", f'<div class="answer-card">{linkified}</div>')]
+
+    segments = []
+    remaining = linkified
     for idx, mermaid_code in enumerate(_mermaid_blocks):
-        escaped_code = mermaid_code.replace('<', '&lt;').replace('>', '&gt;')
-        mermaid_html = (
-            f'<div id="mermaid-{pfx}{idx}" class="mermaid" '
-            f'style="background:#1e293b;border-radius:8px;padding:12px;margin:0.5rem 0;overflow-x:auto;">'
-            f'{escaped_code}</div>'
-        )
-        linkified = linkified.replace(f"%%MERMAID_{idx}%%", mermaid_html)
+        placeholder = f"%%MERMAID_{idx}%%"
+        if placeholder in remaining:
+            before, after = remaining.split(placeholder, 1)
+            if before.strip():
+                segments.append(("html", f'<div class="answer-card">{before}</div>'))
+            segments.append(("mermaid", mermaid_code))
+            remaining = after
+    if remaining.strip():
+        segments.append(("html", f'<div class="answer-card">{remaining}</div>'))
+    return segments
 
-    # Include mermaid.js if any diagrams were found
-    # st.html() runs in an iframe — mermaid must init + run explicitly after load
-    mermaid_script = ""
-    if _mermaid_blocks:
-        mermaid_script = (
-            '<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>'
-            '<script>'
-            'document.addEventListener("DOMContentLoaded",function(){'
-            'mermaid.initialize({startOnLoad:false,theme:"dark",'
-            'themeVariables:{primaryColor:"#3b82f6",primaryTextColor:"#e2e8f0",'
-            'primaryBorderColor:"#60a5fa",lineColor:"#94a3b8",secondaryColor:"#1e40af",'
-            'tertiaryColor:"#1e293b",background:"#0f172a",mainBkg:"#1e293b",'
-            'nodeBorder:"#60a5fa",clusterBkg:"#0f172a",titleColor:"#f59e0b"}});'
-            'mermaid.run({nodes:document.querySelectorAll(".mermaid")});'
-            '});'
-            '</script>'
-        )
 
-    return f'{mermaid_script}<div class="answer-card">{linkified}</div>'
+def render_answer_segments(segments):
+    """Render a list of (type, content) segments produced by linkify_sources.
+    HTML segments → st.html(), Mermaid segments → stmd.st_mermaid()."""
+    import streamlit_mermaid as stmd
+    for seg_type, seg_content in segments:
+        if seg_type == "mermaid":
+            stmd.st_mermaid(seg_content, key=f"mermaid_{hash(seg_content) % 10**8}")
+        else:
+            st.html(seg_content)
 
 
 # =====================================================
@@ -1273,7 +1273,7 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
         else:
             n_disp = msg.get("n_displayed", 0)
             apfx = f"m{msg_idx}"
-            st.html(linkify_sources(msg["content"], n_disp, anchor_prefix=apfx))
+            render_answer_segments(linkify_sources(msg["content"], n_disp, anchor_prefix=apfx))
 
             # Render ALL sources in a single collapsed expander
             if msg.get("sources"):
@@ -1391,14 +1391,14 @@ if user_input:
                     active_model, answer_placeholder, chat_history=history_for_llm,
                 )
                 answer_placeholder.empty()
-                st.html(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
+                render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
             else:
                 with st.spinner("🤖 Génération de la réponse…"):
                     answer = generate_answer(
                         user_input, results, doc_type_hint,
                         model_id=active_model, chat_history=history_for_llm,
                     )
-                st.html(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
+                render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
 
             # Boutons copier / sauvegarder (POINT 2)
             render_action_buttons(answer, key_suffix="current")
