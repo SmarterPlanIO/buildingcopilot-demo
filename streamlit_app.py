@@ -1122,7 +1122,7 @@ def render_answer_segments(segments):
             clean_code = re.sub(r'\s+\]', ']', clean_code)
             # Debug expander
             n_lines = clean_code.count('\n') + 1
-            with st.expander(f"Debug Mermaid v4 — {n_lines} lignes", expanded=False):
+            with st.expander(f"Debug Mermaid v5 — {n_lines} lignes", expanded=False):
                 st.code(clean_code, language="text")
             # Inject theme via %%{init:...}%% directive at top of mermaid code
             # (streamlit-mermaid doesn't accept a config param)
