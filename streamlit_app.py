@@ -1287,20 +1287,30 @@ def render_action_buttons(answer_text, key_suffix="", anchor_prefix=""):
             function decB64(b64){{return decodeURIComponent(Array.prototype.map.call(atob(b64),function(c){{return'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}}).join(''));}}
             var html=decB64(_palim_html_{safe_key});
             var txt=decB64(_palim_text_{safe_key});
-            try{{
-                var blob=new Blob([html],{{type:'text/html'}});
-                var blobTxt=new Blob([txt],{{type:'text/plain'}});
-                navigator.clipboard.write([new ClipboardItem({{'text/html':blob,'text/plain':blobTxt}})])
-                .then(function(){{
-                    document.getElementById('{bid}').textContent='\\u2705 Copié !';
-                    setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
-                }});
-            }}catch(e){{
-                navigator.clipboard.writeText(txt).then(function(){{
-                    document.getElementById('{bid}').textContent='\\u2705 Copié (texte) !';
-                    setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
-                }});
+            var btn=document.getElementById('{bid}');
+            function ok(label){{btn.textContent='\\u2705 '+(label||'Copié !');setTimeout(function(){{btn.textContent='\\ud83d\\udccb Copier';}},2000);}}
+            function fallbackCopy(){{
+                var ta=document.createElement('textarea');ta.value=txt;ta.style.cssText='position:fixed;left:-9999px;opacity:0';
+                document.body.appendChild(ta);ta.select();
+                try{{document.execCommand('copy');ok('Copié (texte)');}}catch(e){{btn.textContent='\\u274c Erreur';}}
+                document.body.removeChild(ta);
             }}
+            // Try rich HTML copy via parent window (st.html iframe blocks clipboard)
+            var clip=(window.parent&&window.parent.navigator&&window.parent.navigator.clipboard)||navigator.clipboard;
+            if(clip&&clip.write){{
+                try{{
+                    var blobH=new Blob([html],{{type:'text/html'}});
+                    var blobT=new Blob([txt],{{type:'text/plain'}});
+                    clip.write([new ClipboardItem({{'text/html':blobH,'text/plain':blobT}})])
+                    .then(function(){{ok('Copié !');}})
+                    .catch(function(){{
+                        if(clip.writeText){{clip.writeText(txt).then(function(){{ok('Copié (texte)');}}).catch(fallbackCopy);}}
+                        else{{fallbackCopy();}}
+                    }});
+                }}catch(e){{fallbackCopy();}}
+            }}else if(clip&&clip.writeText){{
+                clip.writeText(txt).then(function(){{ok('Copié (texte)');}}).catch(fallbackCopy);
+            }}else{{fallbackCopy();}}
         }})();
     ">📋 Copier</button>
     """)
