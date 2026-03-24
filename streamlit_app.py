@@ -932,6 +932,26 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
         return f"%%MERMAID_{idx}%%"
     # Primary: fenced ```mermaid blocks
     text = re.sub(r'```mermaid\s*\n(.*?)```', _extract_mermaid, text, flags=re.DOTALL)
+
+    # Pre-process: fix single-line mermaid (Claude sometimes sends entire diagram on one line)
+    # Detect "flowchart TD  A[...] --> B[...]  C{...}" pattern and re-inject newlines
+    _mermaid_oneline = re.compile(
+        r'^((?:flowchart|graph|sequenceDiagram|gantt|pie|timeline|classDiagram|stateDiagram|erDiagram|journey)'
+        r'(?:\s+(?:TD|LR|RL|BT))?)'
+        r'(\s{2,}\w+[\[\(\{].+)$',
+        re.MULTILINE
+    )
+    def _fix_oneline_mermaid(match):
+        header = match.group(1)
+        body = match.group(2)
+        # Re-inject newlines before each node definition or arrow chain
+        # Pattern: 2+ spaces before a node ID (uppercase letter + optional digits + bracket)
+        body = re.sub(r'\s{2,}(?=\w+[\[\(\{>])', '\n    ', body)
+        body = re.sub(r'\s{2,}(?=\w+\s*-->)', '\n    ', body)
+        body = re.sub(r'\s{2,}(?=\w+\s*&\s*\w+)', '\n    ', body)  # A & B --> C
+        body = re.sub(r'\s{2,}(?=subgraph\s|end\s|style\s|class\s|click\s|linkStyle\s)', '\n    ', body)
+        return header + '\n' + body.strip()
+    text = _mermaid_oneline.sub(_fix_oneline_mermaid, text)
     # Fallback: bare mermaid code without fencing
     # Detect lines starting with mermaid keywords, then grab all connected lines
     # (lines containing mermaid syntax: arrows, pipes, brackets, subgraph, end, style, class)
@@ -964,7 +984,7 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
                 while i < len(lines) and _mermaid_line.match(lines[i]):
                     block_lines.append(lines[i])
                     i += 1
-                if len(block_lines) >= 3:  # at least keyword + 2 lines = real diagram
+                if len(block_lines) >= 2:  # at least keyword + 1 line of code = diagram
                     idx = len(_mermaid_blocks)
                     _mermaid_blocks.append('\n'.join(block_lines))
                     result.append(f"%%MERMAID_{idx}%%")
@@ -1088,8 +1108,17 @@ def render_answer_segments(segments):
             clean_code = seg_content.strip()
             # Remove any HTML tags that might have leaked in
             clean_code = re.sub(r'<[^>]+>', '', clean_code)
-            # Replace literal \n in node labels with <br/> (mermaid syntax for line breaks)
-            # But only inside node labels [text], {text}, (text) — not standalone \n
+            # CRITICAL: If everything is on one line, re-inject newlines
+            # Mermaid requires each statement on its own line
+            if clean_code.count('\n') < 3:
+                # Split on statement boundaries: before node IDs (A-Z followed by [ or { or ()
+                # and before keywords (subgraph, end, style, class)
+                clean_code = re.sub(r'\s{2,}(?=[A-Z]\w*[\[\(\{])', '\n    ', clean_code)
+                clean_code = re.sub(r'\s{2,}(?=[A-Z]\w*\s*-->)', '\n    ', clean_code)
+                clean_code = re.sub(r'\s{2,}(?=subgraph|end\s|style\s|class\s)', '\n    ', clean_code)
+                # Also split after pipe-label-pipe patterns: "|label| NextNode"
+                clean_code = re.sub(r'(\|[^|]*\|\s*\w+[\[\(\{][^\]\)\}]*[\]\)\}])\s{2,}', r'\1\n    ', clean_code)
+            # Replace literal \n in node labels with <br/> (mermaid line break syntax)
             clean_code = clean_code.replace('\\n', '<br/>')
             # Remove __bold__ markers that Claude sometimes puts in mermaid code
             clean_code = re.sub(r'__([^_]+)__', r'\1', clean_code)
