@@ -1242,26 +1242,65 @@ def render_answer_segments(segments):
 # =====================================================
 # POINT 2 : boutons copier / sauvegarder
 # =====================================================
-def render_action_buttons(answer_text, key_suffix=""):
+def _build_copy_html(answer_text, anchor_prefix=""):
+    """Build a self-contained HTML version of the answer for rich clipboard copy.
+    Mermaid diagrams are rendered as mermaid.ink images so they paste into Word/email."""
     import base64 as _b64
-    # Encode the FULL markdown text as base64 to preserve it entirely (no truncation, no escaping issues)
-    b64 = _b64.b64encode(answer_text.encode("utf-8")).decode("ascii")
+    segments = linkify_sources(answer_text, 999, anchor_prefix=anchor_prefix)
+    parts = []
+    for seg_type, seg_content in segments:
+        if seg_type == "mermaid":
+            # Render mermaid as image via mermaid.ink for copy-paste
+            b64_diagram = _b64.b64encode(seg_content.encode("utf-8")).decode("ascii")
+            parts.append(f'<img src="https://mermaid.ink/svg/{b64_diagram}?theme=default" '
+                         f'alt="Diagramme" style="max-width:100%;border:1px solid #ccc;border-radius:8px;padding:8px">')
+        else:
+            # Strip answer-card wrapper div for cleaner paste
+            html = seg_content
+            html = re.sub(r'^<div class="answer-card">', '', html)
+            html = re.sub(r'</div>$', '', html)
+            parts.append(html)
+    # Wrap in a styled container for Word/email compatibility
+    body = '\n'.join(parts)
+    return (
+        f'<div style="font-family:Segoe UI,system-ui,sans-serif;font-size:14px;'
+        f'line-height:1.6;color:#1e293b">{body}</div>'
+    )
+
+
+def render_action_buttons(answer_text, key_suffix="", anchor_prefix=""):
+    import base64 as _b64
+    # Build rich HTML for clipboard (tables, bold, links, diagrams as images)
+    copy_html = _build_copy_html(answer_text, anchor_prefix)
+    b64_html = _b64.b64encode(copy_html.encode("utf-8")).decode("ascii")
+    # Also keep plain text (markdown) as fallback
+    b64_text = _b64.b64encode(answer_text.encode("utf-8")).decode("ascii")
     bid = f"btn-{key_suffix}"
+    safe_key = key_suffix.replace('-', '_')
     st.html(f"""
-    <script>var _palim_b64_{key_suffix.replace('-','_')}="{b64}";</script>
-    <button id="{bid}" style="background:none;border:1px solid #64748b;border-radius:6px;padding:5px 16px;cursor:pointer;font-size:0.82rem;color:#94a3b8;margin-right:6px;transition:all 0.15s;font-family:Inter,sans-serif" onmouseover="this.style.background='#334155';this.style.color='#e2e8f0'" onmouseout="this.style.background='none';this.style.color='#94a3b8'" onclick="
+    <script>
+    var _palim_html_{safe_key}="{b64_html}";
+    var _palim_text_{safe_key}="{b64_text}";
+    </script>
+    <button id="{bid}" style="background:none;border:1px solid #64748b;border-radius:6px;padding:5px 16px;cursor:pointer;font-size:0.82rem;color:#94a3b8;margin-right:6px;transition:all 0.15s;font-family:Segoe UI,system-ui,sans-serif" onmouseover="this.style.background='#334155';this.style.color='#e2e8f0'" onmouseout="this.style.background='none';this.style.color='#94a3b8'" onclick="
         (function(){{
-            var b64=_palim_b64_{key_suffix.replace('-','_')};
-            var txt=decodeURIComponent(Array.prototype.map.call(atob(b64),function(c){{return'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}}).join(''));
-            navigator.clipboard.writeText(txt).then(function(){{
-                document.getElementById('{bid}').textContent='\\u2705 Copié !';
-                setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
-            }},function(){{
-                var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.left='-9999px';
-                document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
-                document.getElementById('{bid}').textContent='\\u2705 Copié !';
-                setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
-            }});
+            function decB64(b64){{return decodeURIComponent(Array.prototype.map.call(atob(b64),function(c){{return'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}}).join(''));}}
+            var html=decB64(_palim_html_{safe_key});
+            var txt=decB64(_palim_text_{safe_key});
+            try{{
+                var blob=new Blob([html],{{type:'text/html'}});
+                var blobTxt=new Blob([txt],{{type:'text/plain'}});
+                navigator.clipboard.write([new ClipboardItem({{'text/html':blob,'text/plain':blobTxt}})])
+                .then(function(){{
+                    document.getElementById('{bid}').textContent='\\u2705 Copié !';
+                    setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
+                }});
+            }}catch(e){{
+                navigator.clipboard.writeText(txt).then(function(){{
+                    document.getElementById('{bid}').textContent='\\u2705 Copié (texte) !';
+                    setTimeout(function(){{document.getElementById('{bid}').textContent='\\ud83d\\udccb Copier';}},2000);
+                }});
+            }}
         }})();
     ">📋 Copier</button>
     """)
