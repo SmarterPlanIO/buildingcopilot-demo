@@ -917,8 +917,7 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
     def make_link(num):
         if 1 <= num <= max_source_num:
             target_id = f"source-{pfx}{num}"
-            return (f'<a href="javascript:void(0)" '
-                    f'onclick="window.parent.document.getElementById(\'{target_id}\')?.scrollIntoView({{behavior:\'smooth\',block:\'center\'}})" '
+            return (f'<a href="#{target_id}" '
                     f'style="color:#60a5fa;text-decoration:underline;font-weight:500;cursor:pointer">'
                     f'Source {num}</a>')
         return f'Source {num}'
@@ -1152,31 +1151,55 @@ def render_answer_segments(segments):
             clean_code = re.sub(r'[^\x00-\x7F\u00C0-\u00FF\u0152\u0153\u0178]', '', clean_code)
             # Debug expander
             n_lines = clean_code.count('\n') + 1
-            with st.expander(f"Debug Mermaid v7 — {n_lines} lignes", expanded=False):
+            with st.expander(f"Debug Mermaid v8 — {n_lines} lignes", expanded=False):
                 st.code(clean_code, language="text")
             # Inject theme via %%{init:...}%% directive at top of mermaid code
-            # (streamlit-mermaid doesn't accept a config param)
             theme_directive = (
                 '%%{init: {"theme": "base", "themeVariables": {'
-                '"primaryColor": "#1e3a5f", "primaryTextColor": "#e2e8f0", '
+                '"primaryColor": "#1e3a5f", "primaryTextColor": "#f1f5f9", '
                 '"primaryBorderColor": "#3b82f6", '
-                '"secondaryColor": "#4c1d95", "secondaryTextColor": "#e2e8f0", '
+                '"secondaryColor": "#4c1d95", "secondaryTextColor": "#f1f5f9", '
                 '"secondaryBorderColor": "#8b5cf6", '
-                '"tertiaryColor": "#164e3d", "tertiaryTextColor": "#e2e8f0", '
-                '"tertiaryBorderColor": "#34d399", '
-                '"lineColor": "#94a3b8", "textColor": "#e2e8f0", '
+                '"tertiaryColor": "#164e3d", "tertiaryTextColor": "#f1f5f9", '
+                '"lineColor": "#64748b", "textColor": "#f1f5f9", '
                 '"background": "#0f172a", "mainBkg": "#1e3a5f", '
                 '"nodeBorder": "#3b82f6", '
                 '"fontFamily": "Inter, system-ui, sans-serif", '
-                '"fontSize": "14px", '
+                '"fontSize": "13px", '
                 '"edgeLabelBackground": "#1e293b", '
-                '"clusterBkg": "#1e293b", "clusterBorder": "#475569", '
-                '"noteBkgColor": "#1e293b", "noteTextColor": "#e2e8f0", '
-                '"noteBorderColor": "#f59e0b"'
-                '}, "flowchart": {"curve": "basis", "padding": 16, '
-                '"nodeSpacing": 50, "rankSpacing": 60, "htmlLabels": true}}}%%'
+                '"clusterBkg": "#1e293b", "clusterBorder": "#475569"'
+                '}, "flowchart": {"curve": "basis", "padding": 12, '
+                '"nodeSpacing": 40, "rankSpacing": 50, "htmlLabels": true}}}%%'
             )
+            # Auto-style nodes by type: first=green, last=green, diamonds=amber, others=blue
+            lines = clean_code.strip().split('\n')
+            # Find all node IDs and their types
+            node_ids = []
+            diamond_ids = []
+            for line in lines:
+                # Node with diamond shape: X{text}
+                dm = re.match(r'\s*(\w+)\{', line)
+                if dm:
+                    diamond_ids.append(dm.group(1))
+                # Any node definition: X[text] or X(text) or X{text}
+                nm = re.match(r'\s*(\w+)[\[\(\{]', line)
+                if nm and nm.group(1) not in ('flowchart', 'graph', 'subgraph', 'style', 'class', 'end'):
+                    if nm.group(1) not in node_ids:
+                        node_ids.append(nm.group(1))
+            # Add style directives for color variety
+            style_lines = []
+            if node_ids:
+                # First node = teal (start)
+                style_lines.append(f'    style {node_ids[0]} fill:#0d9488,stroke:#14b8a6,color:#f0fdfa,stroke-width:2px')
+                # Last node = emerald (end)
+                if len(node_ids) > 1:
+                    style_lines.append(f'    style {node_ids[-1]} fill:#059669,stroke:#34d399,color:#ecfdf5,stroke-width:2px')
+            # Diamond nodes = amber (decision)
+            for did in diamond_ids:
+                style_lines.append(f'    style {did} fill:#d97706,stroke:#f59e0b,color:#fffbeb,stroke-width:2px')
             themed_code = theme_directive + '\n' + clean_code
+            if style_lines:
+                themed_code += '\n' + '\n'.join(style_lines)
             try:
                 stmd.st_mermaid(themed_code, height="auto")
             except Exception as e:
