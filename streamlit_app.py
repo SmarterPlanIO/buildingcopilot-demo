@@ -1242,78 +1242,198 @@ def render_answer_segments(segments):
 # =====================================================
 # POINT 2 : boutons copier / sauvegarder
 # =====================================================
-def _build_copy_html(answer_text, anchor_prefix=""):
-    """Build a self-contained HTML version of the answer for rich clipboard copy.
-    Mermaid diagrams are rendered as mermaid.ink images so they paste into Word/email."""
+def _build_docx(answer_text, question=""):
+    """Build a Word .docx from the answer markdown text.
+    Returns bytes ready for st.download_button."""
+    from docx import Document
+    from docx.shared import Pt, Inches, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    import io
     import base64 as _b64
-    segments = linkify_sources(answer_text, 999, anchor_prefix=anchor_prefix)
-    parts = []
-    for seg_type, seg_content in segments:
-        if seg_type == "mermaid":
-            # Render mermaid as image via mermaid.ink for copy-paste
-            b64_diagram = _b64.b64encode(seg_content.encode("utf-8")).decode("ascii")
-            parts.append(f'<img src="https://mermaid.ink/svg/{b64_diagram}?theme=default" '
-                         f'alt="Diagramme" style="max-width:100%;border:1px solid #ccc;border-radius:8px;padding:8px">')
-        else:
-            # Strip answer-card wrapper div for cleaner paste
-            html = seg_content
-            html = re.sub(r'^<div class="answer-card">', '', html)
-            html = re.sub(r'</div>$', '', html)
-            parts.append(html)
-    # Wrap in a styled container for Word/email compatibility
-    body = '\n'.join(parts)
-    return (
-        f'<div style="font-family:Segoe UI,system-ui,sans-serif;font-size:14px;'
-        f'line-height:1.6;color:#1e293b">{body}</div>'
+
+    doc = Document()
+    # Set default font
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Calibri'
+    font.size = Pt(11)
+    font.color.rgb = RGBColor(0x1e, 0x29, 0x3b)
+
+    # Title
+    if question:
+        p = doc.add_heading(level=2)
+        run = p.add_run(question)
+        run.font.color.rgb = RGBColor(0x1e, 0x3a, 0x5f)
+
+    # Parse markdown text into document elements
+    lines = answer_text.split('\n')
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Skip empty lines
+        if not stripped:
+            i += 1
+            continue
+
+        # Mermaid block — render as image from mermaid.ink
+        if stripped.startswith('```mermaid'):
+            mermaid_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith('```'):
+                mermaid_lines.append(lines[i])
+                i += 1
+            i += 1  # skip closing ```
+            mermaid_code = '\n'.join(mermaid_lines)
+            # Try to fetch diagram as PNG from mermaid.ink
+            try:
+                import requests
+                b64_code = _b64.urlsafe_b64encode(mermaid_code.encode()).decode()
+                resp = requests.get(f"https://mermaid.ink/img/{b64_code}?type=png&theme=default", timeout=15)
+                if resp.status_code == 200:
+                    img_stream = io.BytesIO(resp.content)
+                    doc.add_picture(img_stream, width=Inches(6))
+                    last_p = doc.paragraphs[-1]
+                    last_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                else:
+                    doc.add_paragraph("[Diagramme non disponible]")
+            except Exception:
+                doc.add_paragraph("[Diagramme non disponible]")
+            continue
+
+        # Bare mermaid (no fencing) — detect and skip
+        _mermaid_kw = re.match(r'^(flowchart|graph|sequenceDiagram|gantt|pie|timeline)\b', stripped)
+        if _mermaid_kw:
+            mermaid_lines = [line]
+            i += 1
+            while i < len(lines) and (re.search(r'-->|---|==>|subgraph|end\s*$|style\s', lines[i]) or
+                                       re.match(r'^\s*\w+[\[\(\{]', lines[i]) or
+                                       not lines[i].strip()):
+                mermaid_lines.append(lines[i])
+                i += 1
+            mermaid_code = '\n'.join(mermaid_lines)
+            try:
+                import requests
+                b64_code = _b64.urlsafe_b64encode(mermaid_code.encode()).decode()
+                resp = requests.get(f"https://mermaid.ink/img/{b64_code}?type=png&theme=default", timeout=15)
+                if resp.status_code == 200:
+                    img_stream = io.BytesIO(resp.content)
+                    doc.add_picture(img_stream, width=Inches(6))
+                    last_p = doc.paragraphs[-1]
+                    last_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                else:
+                    doc.add_paragraph("[Diagramme non disponible]")
+            except Exception:
+                doc.add_paragraph("[Diagramme non disponible]")
+            continue
+
+        # Markdown table
+        if stripped.startswith('|') and '|' in stripped[1:]:
+            table_lines = []
+            while i < len(lines) and lines[i].strip().startswith('|'):
+                table_lines.append(lines[i].strip())
+                i += 1
+            # Parse table
+            rows = []
+            for tl in table_lines:
+                cells = [c.strip() for c in tl.split('|')[1:-1]]
+                # Skip separator rows (---|----|---)
+                if cells and all(re.match(r'^[-:]+$', c) for c in cells):
+                    continue
+                if cells:
+                    rows.append(cells)
+            if rows:
+                n_cols = max(len(r) for r in rows)
+                table = doc.add_table(rows=len(rows), cols=n_cols)
+                table.style = 'Light Grid Accent 1'
+                table.alignment = WD_TABLE_ALIGNMENT.CENTER
+                for ri, row_data in enumerate(rows):
+                    for ci, cell_text in enumerate(row_data):
+                        if ci < n_cols:
+                            cell = table.cell(ri, ci)
+                            cell.text = re.sub(r'\*\*(.+?)\*\*', r'\1', cell_text)
+                            # Bold header row
+                            if ri == 0:
+                                for paragraph in cell.paragraphs:
+                                    for run in paragraph.runs:
+                                        run.bold = True
+                doc.add_paragraph()  # spacing after table
+            continue
+
+        # Headers
+        if stripped.startswith('#'):
+            level = min(len(stripped) - len(stripped.lstrip('#')), 4)
+            text = stripped.lstrip('#').strip()
+            text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)  # strip bold markers
+            doc.add_heading(text, level=level)
+            i += 1
+            continue
+
+        # Horizontal rule
+        if stripped in ('---', '***', '___'):
+            p = doc.add_paragraph()
+            p.add_run('─' * 50).font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
+            i += 1
+            continue
+
+        # Bullet list
+        if stripped.startswith('* ') or stripped.startswith('- ') or stripped.startswith('• '):
+            text = stripped[2:].strip()
+            text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+            text = re.sub(r'__([^_]+)__', r'\1', text)
+            # Clean source references
+            text = re.sub(r'\[?(?:Source|Src)\s+(\d+)\]?', r'[Src \1]', text)
+            p = doc.add_paragraph(text, style='List Bullet')
+            i += 1
+            continue
+
+        # Numbered list
+        m_num = re.match(r'^(\d+)\.\s+(.+)', stripped)
+        if m_num:
+            text = m_num.group(2)
+            text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+            p = doc.add_paragraph(text, style='List Number')
+            i += 1
+            continue
+
+        # Regular paragraph
+        text = stripped
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = re.sub(r'__([^_]+)__', r'\1', text)
+        text = re.sub(r'\[?(?:Source|Src)\s+(\d+)\]?', r'[Src \1]', text)
+        if text:
+            doc.add_paragraph(text)
+        i += 1
+
+    # Footer
+    p = doc.add_paragraph()
+    p.add_run('\n─' * 1)
+    run = p.add_run('\nGénéré par PALIM — palim-demo.streamlit.app')
+    run.font.size = Pt(8)
+    run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
+    run.italic = True
+
+    # Save to bytes
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def render_action_buttons(answer_text, key_suffix="", question=""):
+    """Render a download button for the answer as Word .docx."""
+    docx_bytes = _build_docx(answer_text, question=question)
+    # Generate filename from question (first 40 chars, sanitized)
+    fname = re.sub(r'[^\w\s-]', '', question[:40]).strip().replace(' ', '_') if question else "reponse"
+    st.download_button(
+        label="📄 Télécharger (Word)",
+        data=docx_bytes,
+        file_name=f"PALIM_{fname}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        key=f"dl-{key_suffix}",
     )
-
-
-def render_action_buttons(answer_text, key_suffix="", anchor_prefix=""):
-    import base64 as _b64
-    # Build rich HTML for clipboard (tables, bold, links, diagrams as images)
-    copy_html = _build_copy_html(answer_text, anchor_prefix)
-    b64_html = _b64.b64encode(copy_html.encode("utf-8")).decode("ascii")
-    # Also keep plain text (markdown) as fallback
-    b64_text = _b64.b64encode(answer_text.encode("utf-8")).decode("ascii")
-    bid = f"btn-{key_suffix}"
-    safe_key = key_suffix.replace('-', '_')
-    st.html(f"""
-    <script>
-    var _palim_html_{safe_key}="{b64_html}";
-    var _palim_text_{safe_key}="{b64_text}";
-    </script>
-    <button id="{bid}" style="background:none;border:1px solid #64748b;border-radius:6px;padding:5px 16px;cursor:pointer;font-size:0.82rem;color:#94a3b8;margin-right:6px;transition:all 0.15s;font-family:Segoe UI,system-ui,sans-serif" onmouseover="this.style.background='#334155';this.style.color='#e2e8f0'" onmouseout="this.style.background='none';this.style.color='#94a3b8'" onclick="
-        (function(){{
-            function decB64(b64){{return decodeURIComponent(Array.prototype.map.call(atob(b64),function(c){{return'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}}).join(''));}}
-            var html=decB64(_palim_html_{safe_key});
-            var txt=decB64(_palim_text_{safe_key});
-            var btn=document.getElementById('{bid}');
-            function ok(label){{btn.textContent='\\u2705 '+(label||'Copié !');setTimeout(function(){{btn.textContent='\\ud83d\\udccb Copier';}},2000);}}
-            function fallbackCopy(){{
-                var ta=document.createElement('textarea');ta.value=txt;ta.style.cssText='position:fixed;left:-9999px;opacity:0';
-                document.body.appendChild(ta);ta.select();
-                try{{document.execCommand('copy');ok('Copié (texte)');}}catch(e){{btn.textContent='\\u274c Erreur';}}
-                document.body.removeChild(ta);
-            }}
-            // Try rich HTML copy via parent window (st.html iframe blocks clipboard)
-            var clip=(window.parent&&window.parent.navigator&&window.parent.navigator.clipboard)||navigator.clipboard;
-            if(clip&&clip.write){{
-                try{{
-                    var blobH=new Blob([html],{{type:'text/html'}});
-                    var blobT=new Blob([txt],{{type:'text/plain'}});
-                    clip.write([new ClipboardItem({{'text/html':blobH,'text/plain':blobT}})])
-                    .then(function(){{ok('Copié !');}})
-                    .catch(function(){{
-                        if(clip.writeText){{clip.writeText(txt).then(function(){{ok('Copié (texte)');}}).catch(fallbackCopy);}}
-                        else{{fallbackCopy();}}
-                    }});
-                }}catch(e){{fallbackCopy();}}
-            }}else if(clip&&clip.writeText){{
-                clip.writeText(txt).then(function(){{ok('Copié (texte)');}}).catch(fallbackCopy);
-            }}else{{fallbackCopy();}}
-        }})();
-    ">📋 Copier</button>
-    """)
 
 
 def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0,
@@ -1499,7 +1619,13 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
 
             # Render ALL sources in a single collapsed expander
             if msg.get("sources"):
-                render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}")
+                # Find the user question for this answer (previous message)
+                _prev_q = ""
+                for _pi in range(msg_idx - 1, -1, -1):
+                    if st.session_state.chat_history[_pi]["role"] == "user":
+                        _prev_q = st.session_state.chat_history[_pi]["content"]
+                        break
+                render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}", question=_prev_q)
                 all_msg_sources = msg["sources"][:TOP_K_EXTRA]
                 render_sources(all_msg_sources, display_k=len(all_msg_sources),
                                key_prefix=f"h-{msg_idx}", anchor_prefix=apfx,
@@ -1623,7 +1749,7 @@ if user_input:
                 render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
 
             # Boutons copier / sauvegarder (POINT 2)
-            render_action_buttons(answer, key_suffix="current")
+            render_action_buttons(answer, key_suffix="current", question=user_input)
 
             # Sources unifiées (toutes les sources dans un seul expander replié)
             all_sources = results[:TOP_K_EXTRA]
