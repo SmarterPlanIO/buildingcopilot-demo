@@ -1104,27 +1104,24 @@ def render_answer_segments(segments):
     Mermaid segments → stmd.st_mermaid() native Streamlit component."""
     for seg_type, seg_content in segments:
         if seg_type == "mermaid":
-            # Clean mermaid code before rendering
+            # Clean mermaid code for streamlit-mermaid (v10.2.4)
             clean_code = seg_content.strip()
-            # Remove any HTML tags that might have leaked in
-            clean_code = re.sub(r'<[^>]+>', '', clean_code)
-            # CRITICAL: If everything is on one line, re-inject newlines
-            # Mermaid requires each statement on its own line
-            if clean_code.count('\n') < 3:
-                # Split on statement boundaries: before node IDs (A-Z followed by [ or { or ()
-                # and before keywords (subgraph, end, style, class)
-                clean_code = re.sub(r'\s{2,}(?=[A-Z]\w*[\[\(\{])', '\n    ', clean_code)
-                clean_code = re.sub(r'\s{2,}(?=[A-Z]\w*\s*-->)', '\n    ', clean_code)
-                clean_code = re.sub(r'\s{2,}(?=subgraph|end\s|style\s|class\s)', '\n    ', clean_code)
-                # Also split after pipe-label-pipe patterns: "|label| NextNode"
-                clean_code = re.sub(r'(\|[^|]*\|\s*\w+[\[\(\{][^\]\)\}]*[\]\)\}])\s{2,}', r'\1\n    ', clean_code)
-            # Replace literal \n in node labels with <br/> (mermaid line break syntax)
-            clean_code = clean_code.replace('\\n', '<br/>')
-            # Remove __bold__ markers that Claude sometimes puts in mermaid code
+            # 1. Remove emoji characters (mermaid 10.2.4 can't parse Unicode emoji in labels)
+            clean_code = re.sub(r'[\U0001F300-\U0001FAFF\U00002702-\U000027B0\U0000FE0F]', '', clean_code)
+            # 2. Normalize <br/> to <br> (strict XML self-closing can fail in some mermaid versions)
+            clean_code = clean_code.replace('<br/>', '<br>')
+            # 3. Replace literal \n in node labels with <br>
+            clean_code = clean_code.replace('\\n', '<br>')
+            # 4. Remove __bold__ markers that Claude sometimes puts in mermaid code
             clean_code = re.sub(r'__([^_]+)__', r'\1', clean_code)
-            # Log for debugging
+            # 5. Remove any leaked HTML tags (from our linkification pipeline)
+            clean_code = re.sub(r'<(?!br)(?!br>)[^>]+>', '', clean_code)
+            # 6. Clean up leftover empty brackets from emoji removal: [ text] → [text]
+            clean_code = re.sub(r'\[\s+', '[', clean_code)
+            clean_code = re.sub(r'\s+\]', ']', clean_code)
+            # Debug expander
             n_lines = clean_code.count('\n') + 1
-            with st.expander(f"🔍 Debug Mermaid v3 — {n_lines} lignes", expanded=False):
+            with st.expander(f"Debug Mermaid v4 — {n_lines} lignes", expanded=False):
                 st.code(clean_code, language="text")
             try:
                 stmd.st_mermaid(clean_code, height="auto")
