@@ -264,7 +264,7 @@ Réponds UNIQUEMENT par un objet JSON valide, sans commentaire :
 Règles pour la stratégie :
 - "inventaire" : la question demande une LISTE exhaustive, un historique, une comparaison sur plusieurs années, un récapitulatif, ou utilise des mots comme "tous", "quels sont", "combien", "depuis", "évolution"
 - "cible" : la question porte sur UN document précis, un article, une résolution, un détail spécifique, ou demande d'expliquer/détailler quelque chose
-- "equilibre" : entre les deux, question ouverte sans besoin d'exhaustivité ni de document précis
+- "equilibre" : entre les deux, question ouverte sans besoin d'exhaustivité ni de document précis. Inclut les demandes de diagramme, workflow, schéma, synthèse transversale, ou processus
 
 Règles pour les filtres :
 - Ne remplis que les champs que tu peux déduire avec CERTITUDE de la question
@@ -1103,61 +1103,8 @@ def render_answer_segments(segments):
     Mermaid segments → stmd.st_mermaid() native Streamlit component."""
     for seg_type, seg_content in segments:
         if seg_type == "mermaid":
-            # Clean mermaid code for streamlit-mermaid (v10.2.4)
-            clean_code = seg_content.strip()
-            # 1. Remove emoji characters (mermaid 10.2.4 can't parse Unicode emoji in labels)
-            clean_code = re.sub(r'[\U0001F300-\U0001FAFF\U00002702-\U000027B0\U0000FE0F]', '', clean_code)
-            # 2. Normalize <br/> to <br> (strict XML self-closing can fail in some mermaid versions)
-            clean_code = clean_code.replace('<br/>', '<br>')
-            # 3. Replace literal \n in node labels with <br>
-            clean_code = clean_code.replace('\\n', '<br>')
-            # 4. Remove __bold__ markers that Claude sometimes puts in mermaid code
-            clean_code = re.sub(r'__([^_]+)__', r'\1', clean_code)
-            # 5. Remove any leaked HTML tags (from our linkification pipeline)
-            # IMPORTANT: only match valid HTML tags (start with letter), not mathematical < like "< 1600€"
-            clean_code = re.sub(r'<(?!br)(?!br>)(?=[a-zA-Z/])[^>]+>', '', clean_code)
-            # 6. Clean up leftover empty brackets from emoji removal: [ text] → [text]
-            clean_code = re.sub(r'\[\s+', '[', clean_code)
-            clean_code = re.sub(r'\s+\]', ']', clean_code)
-            # 7. Expand & operator (not supported in mermaid 10.2.4)
-            #    "A & B & C --> D[text]" → "A --> D[text]\n    B --> D[text]\n    C --> D[text]"
-            def _expand_ampersand(m):
-                sources = [s.strip() for s in m.group(1).split('&')]
-                arrow = m.group(2)  # --> or --- or -.-> etc.
-                target = m.group(3)
-                indent = '    '
-                return '\n'.join(f"{indent}{src} {arrow} {target}" for src in sources)
-            clean_code = re.sub(
-                r'^\s*(\w+(?:\s*&\s*\w+)+)\s*(-->|---|-.->|==>)\s*(.+)$',
-                _expand_ampersand, clean_code, flags=re.MULTILINE
-            )
-            # 8. Remove <br> from diamond nodes {text<br>more} → {text more}
-            #    Mermaid 10.2.4 chokes on <br> inside {} labels
-            def _clean_diamond_br(m):
-                content = m.group(1).replace('<br>', ' ')
-                return '{' + content + '}'
-            clean_code = re.sub(r'\{([^}]*<br>[^}]*)\}', _clean_diamond_br, clean_code)
-            # 9. Replace special currency/math chars that mermaid 10.2.4 can't parse
-            clean_code = clean_code.replace('€', ' EUR')
-            clean_code = clean_code.replace('≤', '<=')
-            clean_code = clean_code.replace('≥', '>=')
-            clean_code = clean_code.replace('°', ' deg')
-            # 10. Fix edge labels with < or > that conflict with HTML parsing
-            clean_code = re.sub(r'\|<\s*', '|moins de ', clean_code)
-            clean_code = re.sub(r'\|>\s*', '|plus de ', clean_code)
-            # 11. Remove <br> from edge labels |text<br>more| → |text - more|
-            #     Mermaid 10.2.4 doesn't support <br> inside pipe labels
-            def _clean_edge_label_br(m):
-                content = m.group(1).replace('<br>', ' - ')
-                return '|' + content + '|'
-            clean_code = re.sub(r'\|([^|]*<br>[^|]*)\|', _clean_edge_label_br, clean_code)
-            # 12. Remove @ symbol (special in mermaid for click/interaction directives)
-            clean_code = clean_code.replace('@', ' at ')
-            # 13. Remove leading dashes in node text [- item] → [item]
-            clean_code = re.sub(r'\[\s*-\s*', '[', clean_code)
-            # 14. Remove any remaining non-ASCII chars that could break parsing
-            #     (keep accented French chars: àâäéèêëïîôùûüÿçœæ and common punctuation)
-            clean_code = re.sub(r'[^\x00-\x7F\u00C0-\u00FF\u0152\u0153\u0178]', '', clean_code)
+            # Clean mermaid code using shared sanitizer
+            clean_code = _sanitize_mermaid_code(seg_content)
             # Inject theme — use system-ui fonts (available everywhere, no CDN needed)
             theme_directive = (
                 '%%{init: {"theme": "base", "themeVariables": {'
@@ -1242,6 +1189,67 @@ def render_answer_segments(segments):
 # =====================================================
 # POINT 2 : boutons copier / sauvegarder
 # =====================================================
+def _sanitize_mermaid_code(code):
+    """Clean mermaid code for compatibility with mermaid 10.x and mermaid.ink.
+    Shared by both st_mermaid rendering and docx export."""
+    clean = code.strip()
+    # Remove emoji
+    clean = re.sub(r'[\U0001F300-\U0001FAFF\U00002702-\U000027B0\U0000FE0F]', '', clean)
+    # Normalize <br/> to <br>
+    clean = clean.replace('<br/>', '<br>')
+    clean = clean.replace('\\n', '<br>')
+    # Remove __bold__ markers
+    clean = re.sub(r'__([^_]+)__', r'\1', clean)
+    # Remove leaked HTML tags (but keep <br>)
+    clean = re.sub(r'<(?!br)(?!br>)(?=[a-zA-Z/])[^>]+>', '', clean)
+    # Clean empty brackets from emoji removal
+    clean = re.sub(r'\[\s+', '[', clean)
+    clean = re.sub(r'\s+\]', ']', clean)
+    # Expand & operator (not in mermaid 10.2.4)
+    def _expand_amp(m):
+        sources = [s.strip() for s in m.group(1).split('&')]
+        arrow = m.group(2)
+        target = m.group(3)
+        return '\n'.join(f"    {src} {arrow} {target}" for src in sources)
+    clean = re.sub(r'^\s*(\w+(?:\s*&\s*\w+)+)\s*(-->|---|-.->|==>)\s*(.+)$',
+                   _expand_amp, clean, flags=re.MULTILINE)
+    # Remove <br> from diamond nodes
+    def _clean_diamond(m):
+        return '{' + m.group(1).replace('<br>', ' ') + '}'
+    clean = re.sub(r'\{([^}]*<br>[^}]*)\}', _clean_diamond, clean)
+    # Currency/math chars
+    clean = clean.replace('€', ' EUR').replace('≤', '<=').replace('≥', '>=').replace('°', ' deg')
+    # Fix < > in edge labels
+    clean = re.sub(r'\|<\s*', '|moins de ', clean)
+    clean = re.sub(r'\|>\s*', '|plus de ', clean)
+    # Remove <br> from edge labels
+    def _clean_edge_br(m):
+        return '|' + m.group(1).replace('<br>', ' - ') + '|'
+    clean = re.sub(r'\|([^|]*<br>[^|]*)\|', _clean_edge_br, clean)
+    # Replace @
+    clean = clean.replace('@', ' at ')
+    # Remove leading dashes in node text
+    clean = re.sub(r'\[\s*-\s*', '[', clean)
+    # Strip non-ASCII except French accents
+    clean = re.sub(r'[^\x00-\x7F\u00C0-\u00FF\u0152\u0153\u0178]', '', clean)
+    return clean
+
+
+def _fetch_mermaid_png(mermaid_code, timeout=20):
+    """Fetch a PNG image of a mermaid diagram from mermaid.ink. Returns bytes or None."""
+    import base64 as _b64
+    import requests
+    clean = _sanitize_mermaid_code(mermaid_code)
+    b64_code = _b64.urlsafe_b64encode(clean.encode()).decode()
+    try:
+        resp = requests.get(f"https://mermaid.ink/img/{b64_code}?type=png&theme=default", timeout=timeout)
+        if resp.status_code == 200 and len(resp.content) > 100:
+            return resp.content
+    except Exception:
+        pass
+    return None
+
+
 def _build_docx(answer_text, question=""):
     """Build a Word .docx from the answer markdown text.
     Returns bytes ready for st.download_button."""
@@ -1250,7 +1258,6 @@ def _build_docx(answer_text, question=""):
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.table import WD_TABLE_ALIGNMENT
     import io
-    import base64 as _b64
 
     doc = Document()
     # Set default font
@@ -1287,23 +1294,15 @@ def _build_docx(answer_text, question=""):
                 i += 1
             i += 1  # skip closing ```
             mermaid_code = '\n'.join(mermaid_lines)
-            # Try to fetch diagram as PNG from mermaid.ink
-            try:
-                import requests
-                b64_code = _b64.urlsafe_b64encode(mermaid_code.encode()).decode()
-                resp = requests.get(f"https://mermaid.ink/img/{b64_code}?type=png&theme=default", timeout=15)
-                if resp.status_code == 200:
-                    img_stream = io.BytesIO(resp.content)
-                    doc.add_picture(img_stream, width=Inches(6))
-                    last_p = doc.paragraphs[-1]
-                    last_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                else:
-                    doc.add_paragraph("[Diagramme non disponible]")
-            except Exception:
-                doc.add_paragraph("[Diagramme non disponible]")
+            png_data = _fetch_mermaid_png(mermaid_code)
+            if png_data:
+                doc.add_picture(io.BytesIO(png_data), width=Inches(6))
+                doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            else:
+                doc.add_paragraph("[Diagramme non disponible — voir la version en ligne]")
             continue
 
-        # Bare mermaid (no fencing) — detect and skip
+        # Bare mermaid (no fencing) — detect and render
         _mermaid_kw = re.match(r'^(flowchart|graph|sequenceDiagram|gantt|pie|timeline)\b', stripped)
         if _mermaid_kw:
             mermaid_lines = [line]
@@ -1314,19 +1313,12 @@ def _build_docx(answer_text, question=""):
                 mermaid_lines.append(lines[i])
                 i += 1
             mermaid_code = '\n'.join(mermaid_lines)
-            try:
-                import requests
-                b64_code = _b64.urlsafe_b64encode(mermaid_code.encode()).decode()
-                resp = requests.get(f"https://mermaid.ink/img/{b64_code}?type=png&theme=default", timeout=15)
-                if resp.status_code == 200:
-                    img_stream = io.BytesIO(resp.content)
-                    doc.add_picture(img_stream, width=Inches(6))
-                    last_p = doc.paragraphs[-1]
-                    last_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                else:
-                    doc.add_paragraph("[Diagramme non disponible]")
-            except Exception:
-                doc.add_paragraph("[Diagramme non disponible]")
+            png_data = _fetch_mermaid_png(mermaid_code)
+            if png_data:
+                doc.add_picture(io.BytesIO(png_data), width=Inches(6))
+                doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            else:
+                doc.add_paragraph("[Diagramme non disponible — voir la version en ligne]")
             continue
 
         # Markdown table
@@ -1424,6 +1416,7 @@ def _build_docx(answer_text, question=""):
 
 def render_action_buttons(answer_text, key_suffix="", question=""):
     """Render a download button for the answer as Word .docx."""
+    st.markdown('<div style="margin-top:1rem"></div>', unsafe_allow_html=True)
     docx_bytes = _build_docx(answer_text, question=question)
     # Generate filename from question (first 40 chars, sanitized)
     fname = re.sub(r'[^\w\s-]', '', question[:40]).strip().replace(' ', '_') if question else "reponse"
