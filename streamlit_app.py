@@ -1120,9 +1120,27 @@ def render_answer_segments(segments):
             # 6. Clean up leftover empty brackets from emoji removal: [ text] → [text]
             clean_code = re.sub(r'\[\s+', '[', clean_code)
             clean_code = re.sub(r'\s+\]', ']', clean_code)
+            # 7. Expand & operator (not supported in mermaid 10.2.4)
+            #    "A & B & C --> D[text]" → "A --> D[text]\n    B --> D[text]\n    C --> D[text]"
+            def _expand_ampersand(m):
+                sources = [s.strip() for s in m.group(1).split('&')]
+                arrow = m.group(2)  # --> or --- or -.-> etc.
+                target = m.group(3)
+                indent = '    '
+                return '\n'.join(f"{indent}{src} {arrow} {target}" for src in sources)
+            clean_code = re.sub(
+                r'^\s*(\w+(?:\s*&\s*\w+)+)\s*(-->|---|-.->|==>)\s*(.+)$',
+                _expand_ampersand, clean_code, flags=re.MULTILINE
+            )
+            # 8. Remove <br> from diamond nodes {text<br>more} → {text more}
+            #    Mermaid 10.2.4 chokes on <br> inside {} labels
+            def _clean_diamond_br(m):
+                content = m.group(1).replace('<br>', ' ')
+                return '{' + content + '}'
+            clean_code = re.sub(r'\{([^}]*<br>[^}]*)\}', _clean_diamond_br, clean_code)
             # Debug expander
             n_lines = clean_code.count('\n') + 1
-            with st.expander(f"Debug Mermaid v5 — {n_lines} lignes", expanded=False):
+            with st.expander(f"Debug Mermaid v6 — {n_lines} lignes", expanded=False):
                 st.code(clean_code, language="text")
             # Inject theme via %%{init:...}%% directive at top of mermaid code
             # (streamlit-mermaid doesn't accept a config param)
