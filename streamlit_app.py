@@ -940,11 +940,16 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
         re.MULTILINE
     )
     _mermaid_line = re.compile(
-        r'^(?:\s+\S|.*(?:-->|---|==>|\|>|\||\[|\]|\(|\)|:::).*|'
-        r'\s*(?:subgraph|end|style|class|click|linkStyle)\s|'
-        r'\s*[A-Z]\d*[\[\(\{]|'  # node definitions like A[text] or B{text}
-        r'\s*%%|'  # mermaid comments
-        r'\s*$)'  # blank lines within diagram
+        r'^(?:'
+        r'.*(?:-->|---|==>|-.->|\|>).*|'  # arrows (NOT bare pipes — those appear in markdown tables)
+        r'.*:::.*|'  # mermaid class syntax
+        r'\s+\w+[\[\(\{].*[\]\)\}]|'  # indented node definitions like "  A[text]"
+        r'\w+[\[\(\{].*[\]\)\}]\s*-->|'  # node def followed by arrow "A[text] -->"
+        r'\s*(?:subgraph|end)\s*.*|'  # subgraph / end
+        r'\s*(?:style|class|click|linkStyle)\s.*|'  # styling commands
+        r'\s*%%.*|'  # mermaid comments
+        r'\s*$'  # blank lines within diagram
+        r')'
     )
     def _extract_bare_mermaid(text_input):
         lines = text_input.split('\n')
@@ -1041,15 +1046,21 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
         linkified = linkified.replace(f"%%MERMAID_{idx}%%", mermaid_html)
 
     # Include mermaid.js if any diagrams were found
+    # st.html() runs in an iframe — mermaid must init + run explicitly after load
     mermaid_script = ""
     if _mermaid_blocks:
         mermaid_script = (
             '<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>'
-            '<script>mermaid.initialize({theme:"dark",startOnLoad:true,'
+            '<script>'
+            'document.addEventListener("DOMContentLoaded",function(){'
+            'mermaid.initialize({startOnLoad:false,theme:"dark",'
             'themeVariables:{primaryColor:"#3b82f6",primaryTextColor:"#e2e8f0",'
             'primaryBorderColor:"#60a5fa",lineColor:"#94a3b8",secondaryColor:"#1e40af",'
             'tertiaryColor:"#1e293b",background:"#0f172a",mainBkg:"#1e293b",'
-            'nodeBorder:"#60a5fa",clusterBkg:"#0f172a",titleColor:"#f59e0b"}});</script>'
+            'nodeBorder:"#60a5fa",clusterBkg:"#0f172a",titleColor:"#f59e0b"}});'
+            'mermaid.run({nodes:document.querySelectorAll(".mermaid")});'
+            '});'
+            '</script>'
         )
 
     return f'{mermaid_script}<div class="answer-card">{linkified}</div>'
