@@ -10,6 +10,7 @@ import os
 import boto3
 import psycopg2
 import streamlit as st
+import streamlit_mermaid as stmd
 
 # =====================================================
 # CONFIGURATION — credentials via st.secrets (Streamlit Cloud)
@@ -1080,23 +1081,12 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
 def render_answer_segments(segments):
     """Render a list of (type, content) segments produced by linkify_sources.
     HTML segments → st.markdown(unsafe_allow_html) so anchor links work in main DOM.
-    Mermaid segments → rendered as SVG image via mermaid.ink API."""
-    import base64 as _b64
-    import urllib.parse as _urlparse
+    Mermaid segments → stmd.st_mermaid() native Streamlit component."""
     for seg_type, seg_content in segments:
         if seg_type == "mermaid":
-            # Render via mermaid.ink (official Mermaid rendering service) as SVG image
-            # No JS needed — works in st.markdown and st.image
-            b64_code = _b64.b64encode(seg_content.encode("utf-8")).decode("ascii")
-            img_url = f"https://mermaid.ink/svg/{b64_code}?theme=dark&bgColor=1e293b"
-            st.markdown(
-                f'<div style="background:#1e293b;border-radius:8px;padding:12px;margin:0.5rem 0;overflow-x:auto">'
-                f'<img src="{img_url}" style="max-width:100%;height:auto" alt="Diagramme Mermaid" '
-                f'onerror="this.parentElement.innerHTML=\'<pre style=&quot;color:#94a3b8;font-size:0.85rem&quot;>'
-                f'Diagramme non disponible — rechargez la page</pre>\'">'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            # Use streamlit-mermaid native component — it bundles mermaid.js internally
+            # No CDN, no CSP issues, no external service
+            stmd.st_mermaid(seg_content, height="auto")
         else:
             st.markdown(seg_content, unsafe_allow_html=True)
 
