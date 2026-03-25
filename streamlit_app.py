@@ -1235,18 +1235,28 @@ def _sanitize_mermaid_code(code):
     return clean
 
 
-def _fetch_mermaid_png(mermaid_code, timeout=20):
+def _fetch_mermaid_png(mermaid_code, timeout=30):
     """Fetch a PNG image of a mermaid diagram from mermaid.ink. Returns bytes or None."""
     import base64 as _b64
     import requests
+    import time
     clean = _sanitize_mermaid_code(mermaid_code)
     b64_code = _b64.urlsafe_b64encode(clean.encode()).decode()
-    try:
-        resp = requests.get(f"https://mermaid.ink/img/{b64_code}?type=png&theme=default", timeout=timeout)
-        if resp.status_code == 200 and len(resp.content) > 100:
-            return resp.content
-    except Exception:
-        pass
+    url = f"https://mermaid.ink/img/{b64_code}?type=png&theme=default"
+    # Retry up to 2 times (mermaid.ink can be slow on first render)
+    for attempt in range(2):
+        try:
+            resp = requests.get(url, timeout=timeout)
+            if resp.status_code == 200 and len(resp.content) > 100:
+                return resp.content
+            # If mermaid.ink returns an error page, log and retry
+            if attempt == 0:
+                time.sleep(1)
+        except requests.exceptions.Timeout:
+            if attempt == 0:
+                time.sleep(1)
+        except Exception:
+            break
     return None
 
 
@@ -1299,7 +1309,10 @@ def _build_docx(answer_text, question=""):
                 doc.add_picture(io.BytesIO(png_data), width=Inches(6))
                 doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
             else:
-                doc.add_paragraph("[Diagramme non disponible — voir la version en ligne]")
+                p = doc.add_paragraph()
+                run = p.add_run("[Diagramme Mermaid — voir la version en ligne pour le rendu interactif]")
+                run.italic = True
+                run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
             continue
 
         # Bare mermaid (no fencing) — detect and render
@@ -1307,9 +1320,14 @@ def _build_docx(answer_text, question=""):
         if _mermaid_kw:
             mermaid_lines = [line]
             i += 1
-            while i < len(lines) and (re.search(r'-->|---|==>|subgraph|end\s*$|style\s', lines[i]) or
-                                       re.match(r'^\s*\w+[\[\(\{]', lines[i]) or
-                                       not lines[i].strip()):
+            _mermaid_line_re = re.compile(
+                r'-->|---|==>|-.->|\|>|:::|\{|\}|subgraph|end\s*$|style\s|class\s'
+            )
+            while i < len(lines) and (
+                _mermaid_line_re.search(lines[i]) or
+                re.match(r'^\s*\w+[\[\(\{]', lines[i]) or
+                not lines[i].strip()
+            ):
                 mermaid_lines.append(lines[i])
                 i += 1
             mermaid_code = '\n'.join(mermaid_lines)
@@ -1318,7 +1336,10 @@ def _build_docx(answer_text, question=""):
                 doc.add_picture(io.BytesIO(png_data), width=Inches(6))
                 doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
             else:
-                doc.add_paragraph("[Diagramme non disponible — voir la version en ligne]")
+                p = doc.add_paragraph()
+                run = p.add_run("[Diagramme Mermaid — voir la version en ligne pour le rendu interactif]")
+                run.italic = True
+                run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
             continue
 
         # Markdown table
