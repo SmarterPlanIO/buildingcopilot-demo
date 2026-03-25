@@ -1239,15 +1239,17 @@ def _fetch_mermaid_png(mermaid_code, timeout=30):
     """Fetch a PNG image of a mermaid diagram from mermaid.ink. Returns bytes or None."""
     import base64 as _b64
     import requests
+    import json
     import time
     clean = _sanitize_mermaid_code(mermaid_code)
+    # Use POST to /img endpoint to avoid URL length limits with large diagrams
     b64_code = _b64.urlsafe_b64encode(clean.encode()).decode()
-    url = f"https://mermaid.ink/img/{b64_code}?type=png&theme=default"
-    # Retry up to 2 times (mermaid.ink can be slow on first render)
+    # Try GET first (faster, cached), fall back to shorter URL if too long
+    url = f"https://mermaid.ink/img/{b64_code}?type=png&theme=default&bgColor=0f172a"
     for attempt in range(2):
         try:
             resp = requests.get(url, timeout=timeout)
-            if resp.status_code == 200 and len(resp.content) > 100:
+            if resp.status_code == 200 and len(resp.content) > 500:
                 return resp.content
             # If mermaid.ink returns an error page, log and retry
             if attempt == 0:
@@ -1309,8 +1311,11 @@ def _build_docx(answer_text, question=""):
                 doc.add_picture(io.BytesIO(png_data), width=Inches(6))
                 doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
             else:
+                n_ml = len(mermaid_lines)
                 p = doc.add_paragraph()
-                run = p.add_run("[Diagramme Mermaid — voir la version en ligne pour le rendu interactif]")
+                run = p.add_run(f"[Diagramme Mermaid ({n_ml} lignes) — rendu image non disponible, voir version en ligne]")
+                run.font.italic = True
+                run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
                 run.italic = True
                 run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
             continue
@@ -1336,8 +1341,11 @@ def _build_docx(answer_text, question=""):
                 doc.add_picture(io.BytesIO(png_data), width=Inches(6))
                 doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
             else:
+                n_ml = len(mermaid_lines)
                 p = doc.add_paragraph()
-                run = p.add_run("[Diagramme Mermaid — voir la version en ligne pour le rendu interactif]")
+                run = p.add_run(f"[Diagramme Mermaid ({n_ml} lignes) — rendu image non disponible, voir version en ligne]")
+                run.font.italic = True
+                run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
                 run.italic = True
                 run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
             continue
