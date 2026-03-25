@@ -1245,7 +1245,8 @@ def _fetch_mermaid_png(mermaid_code, timeout=30):
     # Use POST to /img endpoint to avoid URL length limits with large diagrams
     b64_code = _b64.urlsafe_b64encode(clean.encode()).decode()
     # Try GET first (faster, cached), fall back to shorter URL if too long
-    url = f"https://mermaid.ink/img/{b64_code}?type=png&theme=default&bgColor=0f172a"
+    # Use neutral theme with white background for Word/PDF export (print-friendly)
+    url = f"https://mermaid.ink/img/{b64_code}?type=png&theme=neutral&bgColor=ffffff"
     for attempt in range(2):
         try:
             resp = requests.get(url, timeout=timeout)
@@ -1260,6 +1261,46 @@ def _fetch_mermaid_png(mermaid_code, timeout=30):
         except Exception:
             break
     return None
+
+
+def _insert_mermaid_in_docx(doc, mermaid_code, diagram_num):
+    """Insert a mermaid diagram as PNG image in a Word doc with a bookmark."""
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    import io
+
+    # Add bookmark anchor for internal linking
+    bookmark_name = f"diagram_{diagram_num}"
+    p_anchor = doc.add_paragraph()
+    p_anchor.paragraph_format.space_after = Pt(2)
+    # Create bookmark start/end XML elements
+    bm_start = OxmlElement('w:bookmarkStart')
+    bm_start.set(qn('w:id'), str(diagram_num))
+    bm_start.set(qn('w:name'), bookmark_name)
+    bm_end = OxmlElement('w:bookmarkEnd')
+    bm_end.set(qn('w:id'), str(diagram_num))
+    p_anchor._p.append(bm_start)
+    # Add diagram label
+    run = p_anchor.add_run(f"📊 Diagramme {diagram_num}")
+    run.bold = True
+    run.font.size = Pt(11)
+    run.font.color.rgb = RGBColor(0x1e, 0x40, 0xaf)
+    p_anchor._p.append(bm_end)
+
+    # Fetch and insert the image
+    png_data = _fetch_mermaid_png(mermaid_code)
+    if png_data:
+        doc.add_picture(io.BytesIO(png_data), width=Inches(6.5))
+        doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    else:
+        n_ml = mermaid_code.count('\n') + 1
+        p = doc.add_paragraph()
+        run = p.add_run(f"[Diagramme ({n_ml} lignes) — rendu non disponible, voir version en ligne]")
+        run.font.italic = True
+        run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
+    doc.add_paragraph()  # spacing after diagram
 
 
 def _build_docx(answer_text, question=""):
@@ -1288,6 +1329,7 @@ def _build_docx(answer_text, question=""):
     # Parse markdown text into document elements
     lines = answer_text.split('\n')
     i = 0
+    _diagram_count = 0
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
@@ -1306,18 +1348,8 @@ def _build_docx(answer_text, question=""):
                 i += 1
             i += 1  # skip closing ```
             mermaid_code = '\n'.join(mermaid_lines)
-            png_data = _fetch_mermaid_png(mermaid_code)
-            if png_data:
-                doc.add_picture(io.BytesIO(png_data), width=Inches(6))
-                doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            else:
-                n_ml = len(mermaid_lines)
-                p = doc.add_paragraph()
-                run = p.add_run(f"[Diagramme Mermaid ({n_ml} lignes) — rendu image non disponible, voir version en ligne]")
-                run.font.italic = True
-                run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
-                run.italic = True
-                run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
+            _diagram_count += 1
+            _insert_mermaid_in_docx(doc, mermaid_code, _diagram_count)
             continue
 
         # Bare mermaid (no fencing) — detect and render
@@ -1336,18 +1368,8 @@ def _build_docx(answer_text, question=""):
                 mermaid_lines.append(lines[i])
                 i += 1
             mermaid_code = '\n'.join(mermaid_lines)
-            png_data = _fetch_mermaid_png(mermaid_code)
-            if png_data:
-                doc.add_picture(io.BytesIO(png_data), width=Inches(6))
-                doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            else:
-                n_ml = len(mermaid_lines)
-                p = doc.add_paragraph()
-                run = p.add_run(f"[Diagramme Mermaid ({n_ml} lignes) — rendu image non disponible, voir version en ligne]")
-                run.font.italic = True
-                run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
-                run.italic = True
-                run.font.color.rgb = RGBColor(0x94, 0xa3, 0xb8)
+            _diagram_count += 1
+            _insert_mermaid_in_docx(doc, mermaid_code, _diagram_count)
             continue
 
         # Markdown table
