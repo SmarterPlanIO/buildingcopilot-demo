@@ -1242,11 +1242,28 @@ def _fetch_mermaid_png(mermaid_code, timeout=30):
     import json
     import time
     clean = _sanitize_mermaid_code(mermaid_code)
-    # Use POST to /img endpoint to avoid URL length limits with large diagrams
+    # Inject a colorful print-friendly theme
+    theme_dir = (
+        '%%{init: {"theme": "base", "themeVariables": {'
+        '"primaryColor": "#dbeafe", "primaryTextColor": "#1e293b", '
+        '"primaryBorderColor": "#3b82f6", '
+        '"secondaryColor": "#fef3c7", "secondaryTextColor": "#1e293b", '
+        '"secondaryBorderColor": "#f59e0b", '
+        '"tertiaryColor": "#d1fae5", "tertiaryTextColor": "#1e293b", '
+        '"tertiaryBorderColor": "#10b981", '
+        '"lineColor": "#475569", "textColor": "#1e293b", '
+        '"background": "#ffffff", "mainBkg": "#dbeafe", '
+        '"nodeBorder": "#3b82f6", '
+        '"fontFamily": "Segoe UI, Arial, sans-serif", '
+        '"fontSize": "14px", '
+        '"edgeLabelBackground": "#f8fafc", '
+        '"clusterBkg": "#f1f5f9", "clusterBorder": "#94a3b8"'
+        '}, "flowchart": {"curve": "basis", "padding": 16, '
+        '"htmlLabels": true}}}%%'
+    )
+    clean = theme_dir + '\n' + clean
     b64_code = _b64.urlsafe_b64encode(clean.encode()).decode()
-    # Try GET first (faster, cached), fall back to shorter URL if too long
-    # Use neutral theme with white background for Word/PDF export (print-friendly)
-    url = f"https://mermaid.ink/img/{b64_code}?type=png&theme=neutral&bgColor=ffffff"
+    url = f"https://mermaid.ink/img/{b64_code}?type=png&bgColor=ffffff"
     for attempt in range(2):
         try:
             resp = requests.get(url, timeout=timeout)
@@ -1289,10 +1306,28 @@ def _insert_mermaid_in_docx(doc, mermaid_code, diagram_num):
     run.font.color.rgb = RGBColor(0x1e, 0x40, 0xaf)
     p_anchor._p.append(bm_end)
 
-    # Fetch and insert the image
+    # Fetch and insert the image — scale to fit page
     png_data = _fetch_mermaid_png(mermaid_code)
     if png_data:
-        doc.add_picture(io.BytesIO(png_data), width=Inches(6.5))
+        # Read PNG dimensions from header (bytes 16-24) to calculate aspect ratio
+        # PNG spec: width at offset 16 (4 bytes big-endian), height at offset 20
+        import struct
+        try:
+            img_w, img_h = struct.unpack('>II', png_data[16:24])
+            aspect = img_w / max(img_h, 1)
+            max_w_in = 6.5   # max width in inches (page width - margins)
+            max_h_in = 8.5   # max height in inches (page height - margins ~1.5in total)
+            # Calculate constrained dimensions
+            fit_w = max_w_in
+            fit_h = fit_w / aspect
+            if fit_h > max_h_in:
+                # Height-constrained: scale by height instead
+                fit_h = max_h_in
+                fit_w = fit_h * aspect
+            doc.add_picture(io.BytesIO(png_data), width=Inches(fit_w), height=Inches(fit_h))
+        except Exception:
+            # Fallback: just set width
+            doc.add_picture(io.BytesIO(png_data), width=Inches(6.5))
         doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
     else:
         n_ml = mermaid_code.count('\n') + 1
