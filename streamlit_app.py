@@ -220,6 +220,62 @@ def get_total_chunks():
         cur.execute("SELECT COUNT(*) FROM chunks;")
         return cur.fetchone()[0]
 
+@st.cache_data(ttl=60)
+def get_dossiers(copropriete=None):
+    """Fetch dossiers for sidebar display."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            if copropriete:
+                cur.execute("""
+                    SELECT dossier_id, nom_dossier, type_dossier, statut,
+                           date_ouverture, etapes, pieces_requises, pieces_fournies,
+                           lese_nom, expert_nom, assureur, montant_estime
+                    FROM dossiers WHERE copropriete = %s
+                    ORDER BY
+                        CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
+                        date_ouverture DESC
+                """, [copropriete])
+            else:
+                cur.execute("""
+                    SELECT dossier_id, nom_dossier, type_dossier, statut,
+                           date_ouverture, etapes, pieces_requises, pieces_fournies,
+                           lese_nom, expert_nom, assureur, montant_estime
+                    FROM dossiers
+                    ORDER BY
+                        CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
+                        date_ouverture DESC
+                """)
+            return cur.fetchall()
+    except Exception:
+        return []
+
+
+def get_dossier_detail(dossier_id):
+    """Fetch full dossier detail for prompt injection."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT dossier_id, copropriete, type_dossier, nom_dossier, statut,
+                       date_ouverture, date_cloture, lese_nom, lese_lot,
+                       responsable_nom, responsable_lot, expert_nom, assureur,
+                       etapes, pieces_requises, pieces_fournies,
+                       montant_estime, montant_reel, documents_lies, resume_ia
+                FROM dossiers WHERE dossier_id = %s
+            """, [dossier_id])
+            row = cur.fetchone()
+            if row:
+                cols = ["dossier_id", "copropriete", "type_dossier", "nom_dossier", "statut",
+                        "date_ouverture", "date_cloture", "lese_nom", "lese_lot",
+                        "responsable_nom", "responsable_lot", "expert_nom", "assureur",
+                        "etapes", "pieces_requises", "pieces_fournies",
+                        "montant_estime", "montant_reel", "documents_lies", "resume_ia"]
+                return dict(zip(cols, row))
+            return None
+    except Exception:
+        return None
+
 # Pré-chauffage Bedrock
 if "bedrock_warm" not in st.session_state:
     try:
@@ -236,6 +292,8 @@ if "bedrock_warm" not in st.session_state:
 # Session state — multi-turn
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "selected_dossier" not in st.session_state:
+    st.session_state.selected_dossier = None
 
 
 # =====================================================
@@ -258,7 +316,8 @@ Réponds UNIQUEMENT par un objet JSON valide, sans commentaire :
   "sous_type": "MRI|DDE|RAVALEMENT|ASCENSEUR|CHAUFFAGE|TOITURE|SYNDIC|etc ou null",
   "statut": "actif|expire|resilie|cloture|en_cours|null",
   "is_followup": true ou false,
-  "expanded_query": "version complète et autonome de la question si is_followup=true, sinon null"
+  "expanded_query": "version complète et autonome de la question si is_followup=true, sinon null",
+  "diagramme": true ou false
 }}
 
 Règles pour la stratégie :
@@ -277,13 +336,14 @@ Règles pour les filtres :
 Règles pour le suivi de conversation :
 - is_followup=true si la question actuelle est une continuation de la question précédente (trop courte ou ambiguë pour être comprise seule, fait référence implicite au contexte précédent)
 - Si is_followup=true, expanded_query DOIT être une reformulation complète et autonome combinant le contexte précédent et la question actuelle. Exemple : question précédente "liste des sinistres en 2023", question actuelle "et en 2024 ?" → expanded_query "liste des sinistres en 2024"
-- Si is_followup=false → expanded_query=null"""
+- Si is_followup=false → expanded_query=null
+- "diagramme": true si la question demande explicitement ou implicitement un diagramme, un workflow, un schema, une chronologie, un processus a visualiser. false sinon."""
 
 
 def detect_strategy_haiku(query, prev_query=None):
     """
     v4 : détection unifiée stratégie + pré-filtrage + suivi conversationnel via Haiku.
-    Retourne (strategie, prefilter, doc_type_hint, is_followup, expanded_query) ou None.
+    Retourne (strategie, prefilter, doc_type_hint, is_followup, expanded_query, diagramme) ou None.
     """
     prev_context = f"Question précédente de l'utilisateur : {prev_query}" if prev_query else "Pas de question précédente (premier tour)."
     prompt = STRATEGY_PROMPT.format(query=query, prev_context=prev_context)
@@ -330,7 +390,9 @@ def detect_strategy_haiku(query, prev_query=None):
         if expanded_query == "null" or not expanded_query:
             expanded_query = None
 
-        return strategie, prefilter, doc_type_hint, is_followup, expanded_query
+        diagramme = bool(parsed.get("diagramme", False))
+
+        return strategie, prefilter, doc_type_hint, is_followup, expanded_query, diagramme
 
     except Exception:
         return None
@@ -339,26 +401,26 @@ def detect_strategy_haiku(query, prev_query=None):
 def detect_retrieval_strategy(query, demo_mode=False, prev_query=None):
     """
     v4 : détection via Haiku avec fallback.
-    Retourne (chunks_per_source, doc_type_boost, max_chunks_llm, label, prefilter, doc_type_hint, is_followup, expanded_query).
+    Retourne (chunks_per_source, doc_type_boost, max_chunks_llm, label, prefilter, doc_type_hint, is_followup, expanded_query, diagramme).
     """
     haiku_result = detect_strategy_haiku(query, prev_query=prev_query)
 
     if haiku_result:
-        strategie, prefilter, doc_type_hint, is_followup, expanded_query = haiku_result
+        strategie, prefilter, doc_type_hint, is_followup, expanded_query, diagramme = haiku_result
 
         if strategie == "inventaire":
             mcl = 40 if demo_mode else 80
-            return 2, 0.03, mcl, "🔎 Inventaire", prefilter, doc_type_hint, is_followup, expanded_query
+            return 2, 0.03, mcl, "🔎 Inventaire", prefilter, doc_type_hint, is_followup, expanded_query, diagramme
         elif strategie == "cible":
             mcl = 30 if demo_mode else 50
-            return 8, 0.005, mcl, "🔬 Ciblé", prefilter, doc_type_hint, is_followup, expanded_query
+            return 8, 0.005, mcl, "🔬 Ciblé", prefilter, doc_type_hint, is_followup, expanded_query, diagramme
         else:
             mcl = 30 if demo_mode else 50
-            return 3, 0.01, mcl, "⚖️ Équilibré", prefilter, doc_type_hint, is_followup, expanded_query
+            return 3, 0.01, mcl, "⚖️ Équilibré", prefilter, doc_type_hint, is_followup, expanded_query, diagramme
 
     # Fallback : mode équilibré sans pré-filtrage
     mcl = 30 if demo_mode else 50
-    return 3, 0.01, mcl, "⚖️ Équilibré (fallback)", None, None, False, None
+    return 3, 0.01, mcl, "⚖️ Équilibré (fallback)", None, None, False, None, False
 
 
 def get_embedding(text):
@@ -705,7 +767,7 @@ def build_history_messages(chat_history):
 # =====================================================
 # LLM — POINTS 8 + 9 : concision + multi-turn
 # =====================================================
-def build_llm_payload(query, search_results, doc_type_hint, chat_history=None):
+def build_llm_payload(query, search_results, doc_type_hint, chat_history=None, diagramme=False):
     """Construit system prompt, liste de messages, max_tokens."""
     # Contexte RAG
     context_parts = []
@@ -778,6 +840,30 @@ CONTEXTE CONVERSATIONNEL :
         context_hints.append(f"Type de document principal : {doc_type_hint} (mais l'info peut apparaître dans d'autres types)")
     hints_text = "\n".join(context_hints) if context_hints else "Aucun filtre spécifique"
 
+    # ── Dossier context injection ──
+    _sel_dossier_id = st.session_state.get("selected_dossier")
+    if _sel_dossier_id:
+        _dossier = get_dossier_detail(_sel_dossier_id)
+        if _dossier:
+            _etapes = _dossier["etapes"] if isinstance(_dossier["etapes"], list) else json.loads(_dossier["etapes"] or "[]")
+            _pieces_manq = [p for p in (_dossier["pieces_requises"] or []) if p not in (_dossier["pieces_fournies"] or [])]
+            _etapes_summary = "; ".join(
+                f"{e['nom']}: {e['statut']}" for e in _etapes
+            )
+            system_prompt += f"""
+
+DOSSIER ACTIF : {_dossier['type_dossier']} — {_dossier['nom_dossier']}
+Statut global : {_dossier['statut']}
+Date ouverture : {_dossier['date_ouverture'] or 'inconnue'}
+Lese : {_dossier['lese_nom'] or 'inconnu'} (lot {_dossier['lese_lot'] or '?'})
+Expert : {_dossier['expert_nom'] or 'non designe'} | Assureur : {_dossier['assureur'] or 'inconnu'}
+Montant estime : {_dossier['montant_estime'] or 'non chiffre'}
+Etapes : {_etapes_summary}
+Pieces manquantes : {', '.join(_pieces_manq) if _pieces_manq else 'aucune'}
+Documents lies : {len(_dossier['documents_lies'] or [])} fichiers
+
+Utilise ces informations structurees pour enrichir ta reponse quand la question concerne ce dossier. Tu peux mentionner les etapes en cours, les pieces manquantes, et proposer des actions concretes."""
+
     primary_sources = set()
     primary_types_found = set()
     for r in search_results:
@@ -802,6 +888,9 @@ Si la question demande une liste exhaustive, cite TOUTES les occurrences trouvé
     # ── POINT 8 : max_tokens adaptatif ──
     max_tokens_response = 8192 if len(search_results) > 50 else (4096 if len(search_results) > 30 else 2500)
 
+    if diagramme:
+        system_prompt += "\n\nGenere un diagramme Mermaid flowchart TD pour illustrer ta reponse. Limite a 15-20 noeuds max."
+
     # ── Messages avec historique (POINT 4) ──
     messages = build_history_messages(chat_history) if has_history else []
     messages.append({"role": "user", "content": user_prompt})
@@ -810,11 +899,11 @@ Si la question demande une liste exhaustive, cite TOUTES les occurrences trouvé
 
 
 def generate_answer(query, search_results, doc_type_hint,
-                    model_id=LLM_MODEL, chat_history=None):
+                    model_id=LLM_MODEL, chat_history=None, diagramme=False):
     """Synchrone (non-streaming)."""
     bedrock = get_bedrock_client()
     system_prompt, messages, max_tokens = build_llm_payload(
-        query, search_results, doc_type_hint, chat_history
+        query, search_results, doc_type_hint, chat_history, diagramme=diagramme
     )
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
@@ -830,11 +919,11 @@ def generate_answer(query, search_results, doc_type_hint,
 
 
 def generate_answer_stream(query, search_results, doc_type_hint,
-                           model_id, placeholder, chat_history=None):
+                           model_id, placeholder, chat_history=None, diagramme=False):
     """Streaming : écrit progressivement dans un placeholder Streamlit."""
     bedrock = get_bedrock_client()
     system_prompt, messages, max_tokens = build_llm_payload(
-        query, search_results, doc_type_hint, chat_history
+        query, search_results, doc_type_hint, chat_history, diagramme=diagramme
     )
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
@@ -1603,6 +1692,72 @@ with st.sidebar:
         copro_count = next((c[1] for c in copros if c[0] == selected_copro), 0)
         st.caption(f"{copro_count} chunks disponibles")
 
+    # ── Mes dossiers (Module Gestion de Projet) ──
+    st.markdown("---")
+    try:
+        _copro_for_dossiers = selected_copro if selected_copro and "Toutes" not in selected_copro else None
+        _dossiers = get_dossiers(_copro_for_dossiers)
+    except Exception:
+        _dossiers = []
+
+    if _dossiers:
+        _STATUS_BADGE = {"EN_ATTENTE": "🔴", "EN_COURS": "🟡", "CLOTURE": "🟢"}
+
+        # Count overdue
+        from datetime import date as _date, timedelta as _td
+        _today = _date.today()
+        _overdue = 0
+        for _d in _dossiers:
+            if _d[3] == "CLOTURE":
+                continue
+            _d_etapes = _d[5] if isinstance(_d[5], list) else json.loads(_d[5] or "[]")
+            _d_date = _d[4]
+            if _d_date and _d_etapes:
+                for _e in _d_etapes:
+                    if _e.get("statut") == "FAIT":
+                        continue
+                    try:
+                        _deadline = _d_date + _td(days=_e.get("delai_j", 0))
+                        if _today > _deadline:
+                            _overdue += 1
+                            break
+                    except Exception:
+                        pass
+
+        if _overdue > 0:
+            st.warning(f"⚠️ {_overdue} dossier(s) en retard")
+
+        with st.expander(f"📂 Mes dossiers ({len(_dossiers)})", expanded=False):
+            for _d in _dossiers:
+                _did, _dname, _dtype, _dstatut = _d[0], _d[1], _d[2], _d[3]
+                _badge = _STATUS_BADGE.get(_dstatut, "⚪")
+                _d_etapes = _d[5] if isinstance(_d[5], list) else json.loads(_d[5] or "[]")
+                _etapes_done = sum(1 for e in _d_etapes if e.get("statut") == "FAIT")
+                _pieces_req = _d[6] if isinstance(_d[6], list) else []
+                _pieces_four = _d[7] if isinstance(_d[7], list) else []
+                _pieces_manq = len(_pieces_req) - len(_pieces_four)
+
+                _is_selected = st.session_state.selected_dossier == _did
+                _label = f"{_badge} **{_dname}**"
+                if _pieces_manq > 0:
+                    _label += f" · {_pieces_manq} pièce(s) manquante(s)"
+                _label += f"\n{_etapes_done}/{len(_d_etapes)} étapes"
+
+                if st.button(_label, key=f"dos_{_did}", use_container_width=True,
+                             type="primary" if _is_selected else "secondary"):
+                    if _is_selected:
+                        st.session_state.selected_dossier = None
+                    else:
+                        st.session_state.selected_dossier = _did
+                    st.rerun()
+
+        if st.session_state.selected_dossier:
+            _sel = get_dossier_detail(st.session_state.selected_dossier)
+            if _sel:
+                st.info(f"📋 Dossier actif : **{_sel['nom_dossier']}**")
+    else:
+        st.caption("Aucun dossier actif")
+
     st.markdown("---")
     demo_mode = st.toggle("⚡ Mode Démo", value=False,
                            help="Haiku 4.5 + streaming + chunks réduits. ~15-20s au lieu de ~90s.")
@@ -1734,7 +1889,7 @@ if user_input:
     prev_query = prev_queries[-1] if prev_queries else None
 
     if _auto:
-        CPS_ACTUAL, DTB_ACTUAL, MCL_ACTUAL, strategy_label, prefilter, doc_type_hint, was_expanded, expanded_query = detect_retrieval_strategy(
+        CPS_ACTUAL, DTB_ACTUAL, MCL_ACTUAL, strategy_label, prefilter, doc_type_hint, was_expanded, expanded_query, _diagramme = detect_retrieval_strategy(
             user_input, demo_mode=_demo, prev_query=prev_query
         )
         query_for_retrieval = expanded_query if was_expanded and expanded_query else user_input
@@ -1747,6 +1902,7 @@ if user_input:
         doc_type_hint = None
         was_expanded = False
         query_for_retrieval = user_input
+        _diagramme = False
 
     active_model = LLM_MODEL_FAST if _demo else LLM_MODEL
     model_label = "Haiku 4.5 ⚡" if _demo else "Sonnet 4.6"
@@ -1816,6 +1972,7 @@ if user_input:
                 answer = generate_answer_stream(
                     user_input, results, doc_type_hint,
                     active_model, answer_placeholder, chat_history=history_for_llm,
+                    diagramme=_diagramme,
                 )
                 answer_placeholder.empty()
                 render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
@@ -1824,6 +1981,7 @@ if user_input:
                     answer = generate_answer(
                         user_input, results, doc_type_hint,
                         model_id=active_model, chat_history=history_for_llm,
+                        diagramme=_diagramme,
                     )
                 render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
 
