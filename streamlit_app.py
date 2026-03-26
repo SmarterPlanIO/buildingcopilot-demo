@@ -210,7 +210,7 @@ def get_bedrock_client():
 def get_copros():
     conn = get_db_connection()
     with conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT copropriete, COUNT(*) FROM chunks GROUP BY copropriete ORDER BY copropriete;")
+        cur.execute("SELECT DISTINCT code_ncg, COUNT(*) FROM chunks WHERE code_ncg IS NOT NULL GROUP BY code_ncg ORDER BY code_ncg;")
         return cur.fetchall()
 
 @st.cache_data(ttl=300)
@@ -231,7 +231,7 @@ def get_dossiers(copropriete=None):
                     SELECT dossier_id, nom_dossier, type_dossier, statut,
                            date_ouverture, etapes, pieces_requises, pieces_fournies,
                            lese_nom, expert_nom, assureur, montant_estime
-                    FROM dossiers WHERE copropriete = %s
+                    FROM dossiers WHERE code_ncg = %s
                     ORDER BY
                         CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
                         date_ouverture DESC
@@ -313,7 +313,7 @@ def search_dossiers_for_query(query, copropriete=None):
             where_sql = " OR ".join(where_parts)
             copro_filter = ""
             if copropriete:
-                copro_filter = " AND copropriete = %s"
+                copro_filter = " AND code_ncg = %s"
                 params.append(copropriete)
 
             cur.execute(f"""
@@ -696,7 +696,7 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                 pf_clauses, pf_params = [], []
 
                 if copropriete:
-                    pf_clauses.append("copropriete = %s")
+                    pf_clauses.append("code_ncg = %s")
                     pf_params.append(copropriete)
 
                 if prefilter.get("doc_type"):
@@ -752,7 +752,7 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
         where_clauses.append(f"c.nb_caracteres >= {MIN_CHUNK_CHARS}")
 
         if copropriete:
-            where_clauses.append("c.copropriete = %s")
+            where_clauses.append("c.code_ncg = %s")
             params_before.append(copropriete)
 
         if prefilter_active and prefilter_files:
@@ -1868,9 +1868,10 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.markdown("---")
-    copro_names = ["Toutes les copropriétés"] + [c[0] for c in copros]
+    # code_ncg values from DB; display as code_ncg in dropdown
+    copro_codes = ["Toutes les copropriétés"] + [c[0] for c in copros]
     default_idx = 1 if len(copros) == 1 else 0
-    selected_copro = st.selectbox("📁 Filtrer par copropriété", copro_names, index=default_idx)
+    selected_copro = st.selectbox("📁 Filtrer par copropriété (code NCG)", copro_codes, index=default_idx)
     if selected_copro != "Toutes les copropriétés":
         copro_count = next((c[1] for c in copros if c[0] == selected_copro), 0)
         st.caption(f"{copro_count} chunks disponibles")
@@ -2111,11 +2112,16 @@ if user_input:
             if _d.get("ref_cie"):
                 _enrichment_parts.append(_d["ref_cie"])
             query_for_retrieval = " ".join(_enrichment_parts)
-            # Override strategy
-            if "Inventaire" in strategy_label:
-                strategy_label = strategy_label.replace("Inventaire", "Ciblé (dossier)")
-            elif "Équilibré" in strategy_label:
-                strategy_label = strategy_label.replace("Équilibré", "Ciblé (dossier)")
+            # Override strategy AND parameters — dossier context = focused search
+            strategy_label = "Ciblé (dossier)"
+            MCL_ACTUAL = min(MCL_ACTUAL, 30)  # Max 30 RAG chunks + 1 Airtable chunk
+            CPS_ACTUAL = min(CPS_ACTUAL, 3)   # Max 3 per source file
+            # Force doc_type if dossier is a sinistre
+            if _d.get("type_dossier") and "SINISTRE" in (_d["type_dossier"] or "").upper():
+                doc_type_hint = "SINISTRE"
+                if prefilter is None:
+                    prefilter = {}
+                prefilter["doc_type"] = "SINISTRE"
 
     # ── Recherche (Phase 1b : décomposition temporelle si inventaire) ──
     _strategie = "inventaire" if "Inventaire" in strategy_label else (
