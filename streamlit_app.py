@@ -276,6 +276,190 @@ def get_dossier_detail(dossier_id):
     except Exception:
         return None
 
+def search_dossiers_for_query(query, copropriete=None):
+    """Search dossiers table for records matching the user query.
+    Returns a list of dossier dicts that match by name, lese, ref, or keywords."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            # Build search: match on nom_dossier, lese_nom, ref_cie, ref_assynco, circonstances
+            where_parts = []
+            params = []
+            search_term = f"%{query}%"
+
+            # Extract potential identifiers from query (refs like A2110352, names, etc.)
+            import re as _re
+            # Ref patterns: A followed by digits, or Idigits
+            refs = _re.findall(r'\b[AI]\d{5,}[A-Z]*\b', query, _re.IGNORECASE)
+            # Name patterns: capitalized words
+            names = _re.findall(r'\b[A-Z][a-zéèêëàâùûôîïç]{2,}\b', query)
+
+            if refs:
+                for ref in refs:
+                    where_parts.append("(nom_dossier ILIKE %s OR ref_cie ILIKE %s OR ref_assynco ILIKE %s OR ref_sinistre_client ILIKE %s)")
+                    ref_pattern = f"%{ref}%"
+                    params.extend([ref_pattern, ref_pattern, ref_pattern, ref_pattern])
+
+            if names:
+                for name in names:
+                    where_parts.append("(lese_nom ILIKE %s OR nom_dossier ILIKE %s)")
+                    name_pattern = f"%{name}%"
+                    params.extend([name_pattern, name_pattern])
+
+            # Also do a general text search on nom_dossier
+            where_parts.append("nom_dossier ILIKE %s")
+            params.append(search_term)
+
+            where_sql = " OR ".join(where_parts)
+            copro_filter = ""
+            if copropriete:
+                copro_filter = " AND copropriete = %s"
+                params.append(copropriete)
+
+            cur.execute(f"""
+                SELECT dossier_id, copropriete, type_dossier, nom_dossier, statut,
+                       date_ouverture, date_cloture, lese_nom, lese_tel, lese_email,
+                       appt_origine, ref_cie, ref_expert, ref_sinistre_client, ref_assynco,
+                       at_declaration, at_expertise, at_accord, at_reglement, at_mise_en_cause,
+                       at_situation, at_attente, cause, irsi, cause_identifiee, cause_reparee,
+                       garantie_impactee, montant_estime, montant_reel, franchise, provisions,
+                       reglement_realise, total_regle, honoraire_syndic,
+                       circonstances, dommages_description, conclusion_expert,
+                       commentaire_assureur, commentaire_assynco,
+                       elements_manquants, important, judiciaire, en_carence,
+                       expert_nom, assureur, resume_ia
+                FROM dossiers
+                WHERE ({where_sql}){copro_filter}
+                ORDER BY date_ouverture DESC NULLS LAST
+                LIMIT 5
+            """, params)
+
+            cols = [desc[0] for desc in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def dossier_to_virtual_chunk(dossier, source_index):
+    """Convert an Airtable dossier dict into a text block formatted like a RAG chunk source."""
+    d = dossier
+    lines = []
+    lines.append(f"=== DOSSIER SINISTRE (base Assynco/Airtable) ===")
+    lines.append(f"Nom : {d.get('nom_dossier', 'N/A')}")
+    lines.append(f"Statut : {d.get('at_situation') or d.get('statut', 'N/A')}")
+    if d.get('lese_nom'):
+        contact = d['lese_nom']
+        if d.get('lese_tel'):
+            contact += f" — Tel: {d['lese_tel']}"
+        if d.get('lese_email'):
+            contact += f" — Email: {d['lese_email']}"
+        if d.get('appt_origine'):
+            contact += f" — Appt: {d['appt_origine']}"
+        lines.append(f"Lese : {contact}")
+    if d.get('date_ouverture'):
+        lines.append(f"Date survenance : {d['date_ouverture']}")
+    if d.get('date_cloture'):
+        lines.append(f"Date cloture : {d['date_cloture']}")
+    if d.get('cause'):
+        lines.append(f"Cause : {d['cause']}")
+    if d.get('irsi') is not None:
+        lines.append(f"Convention IRSI : {'Oui' if d['irsi'] else 'Non'}")
+    if d.get('cause_identifiee') is not None:
+        lines.append(f"Cause identifiee : {'Oui' if d['cause_identifiee'] else 'Non'}")
+    if d.get('cause_reparee') is not None:
+        lines.append(f"Cause reparee : {'Oui' if d['cause_reparee'] else 'Non'}")
+    if d.get('garantie_impactee'):
+        lines.append(f"Garantie : {', '.join(d['garantie_impactee'])}")
+    # References
+    refs = []
+    if d.get('ref_cie'):
+        refs.append(f"Ref Cie: {d['ref_cie']}")
+    if d.get('ref_expert'):
+        refs.append(f"Ref Expert: {d['ref_expert']}")
+    if d.get('ref_sinistre_client'):
+        refs.append(f"Ref Client: {d['ref_sinistre_client']}")
+    if refs:
+        lines.append(f"References : {' | '.join(refs)}")
+    # Expert & assureur
+    if d.get('expert_nom'):
+        lines.append(f"Expert : {d['expert_nom']}")
+    if d.get('assureur'):
+        lines.append(f"Assureur : {d['assureur']}")
+    # Pipeline
+    pipeline = []
+    if d.get('at_declaration'):
+        pipeline.append(f"Declaration: {d['at_declaration']}")
+    if d.get('at_expertise'):
+        pipeline.append(f"Expertise: {d['at_expertise']}")
+    if d.get('at_accord'):
+        pipeline.append(f"Accord: {d['at_accord']}")
+    if d.get('at_reglement'):
+        pipeline.append(f"Reglement: {d['at_reglement']}")
+    if d.get('at_mise_en_cause'):
+        pipeline.append(f"Mise en cause: {d['at_mise_en_cause']}")
+    if pipeline:
+        lines.append(f"Pipeline : {' | '.join(pipeline)}")
+    if d.get('at_attente'):
+        lines.append(f"En attente de : {d['at_attente']}")
+    # Financier
+    financials = []
+    if d.get('montant_estime'):
+        financials.append(f"Estimation: {d['montant_estime']} EUR")
+    if d.get('montant_reel'):
+        financials.append(f"Cout assureur: {d['montant_reel']} EUR")
+    if d.get('franchise'):
+        financials.append(f"Franchise: {d['franchise']} EUR")
+    if d.get('reglement_realise'):
+        financials.append(f"Regle: {d['reglement_realise']} EUR")
+    if d.get('total_regle'):
+        financials.append(f"Total regle: {d['total_regle']} EUR")
+    if d.get('honoraire_syndic'):
+        financials.append(f"Honoraire syndic: {d['honoraire_syndic']} EUR")
+    if financials:
+        lines.append(f"Financier : {' | '.join(financials)}")
+    # Textes
+    if d.get('circonstances'):
+        lines.append(f"Circonstances : {d['circonstances'][:500]}")
+    if d.get('dommages_description'):
+        lines.append(f"Dommages : {d['dommages_description'][:500]}")
+    if d.get('conclusion_expert'):
+        lines.append(f"Conclusion expert : {d['conclusion_expert'][:500]}")
+    if d.get('commentaire_assureur'):
+        lines.append(f"Commentaire assureur : {d['commentaire_assureur'][:300]}")
+    if d.get('commentaire_assynco'):
+        lines.append(f"Commentaire Assynco : {d['commentaire_assynco'][:300]}")
+    # Elements manquants
+    if d.get('elements_manquants'):
+        lines.append(f"Elements manquants : {', '.join(d['elements_manquants'])}")
+    # Flags
+    flags = []
+    if d.get('important'):
+        flags.append("IMPORTANT")
+    if d.get('judiciaire'):
+        flags.append("JUDICIAIRE")
+    if d.get('en_carence'):
+        flags.append("EN CARENCE")
+    if flags:
+        lines.append(f"Alertes : {', '.join(flags)}")
+
+    text = "\n".join(lines)
+
+    # Return in the same tuple format as search_chunks results:
+    # (chunk_id, copro, source_file, nom_fichier, doc_type, text, vec_similarity, bm25, rrf, chunk_idx)
+    return (
+        f"airtable_{d['dossier_id']}",     # chunk_id
+        d.get('copropriete', ''),            # copro
+        "AIRTABLE_ASSYNCO",                  # source_file
+        f"Dossier Assynco: {d.get('nom_dossier', 'N/A')[:60]}",  # nom_fichier
+        "SINISTRE_AIRTABLE",                 # doc_type
+        text,                                # text
+        1.0,                                 # vec_similarity (max, since it's a direct match)
+        1.0,                                 # bm25
+        0.99,                                # rrf (high but below 1.0)
+        0,                                   # chunk_idx
+    )
+
+
 # Pré-chauffage Bedrock
 if "bedrock_warm" not in st.session_state:
     try:
@@ -840,29 +1024,15 @@ CONTEXTE CONVERSATIONNEL :
         context_hints.append(f"Type de document principal : {doc_type_hint} (mais l'info peut apparaître dans d'autres types)")
     hints_text = "\n".join(context_hints) if context_hints else "Aucun filtre spécifique"
 
-    # ── Dossier context injection ──
+    # ── Dossier context: injected as virtual chunk in search_results (Fix A), not in system prompt ──
+    # If a dossier is selected, add a hint to the system prompt to use it
     _sel_dossier_id = st.session_state.get("selected_dossier")
     if _sel_dossier_id:
-        _dossier = get_dossier_detail(_sel_dossier_id)
-        if _dossier:
-            _etapes = _dossier["etapes"] if isinstance(_dossier["etapes"], list) else json.loads(_dossier["etapes"] or "[]")
-            _pieces_manq = [p for p in (_dossier["pieces_requises"] or []) if p not in (_dossier["pieces_fournies"] or [])]
-            _etapes_summary = "; ".join(
-                f"{e['nom']}: {e['statut']}" for e in _etapes
-            )
-            system_prompt += f"""
+        system_prompt += """
 
-DOSSIER ACTIF : {_dossier['type_dossier']} — {_dossier['nom_dossier']}
-Statut global : {_dossier['statut']}
-Date ouverture : {_dossier['date_ouverture'] or 'inconnue'}
-Lese : {_dossier['lese_nom'] or 'inconnu'} (lot {_dossier['lese_lot'] or '?'})
-Expert : {_dossier['expert_nom'] or 'non designe'} | Assureur : {_dossier['assureur'] or 'inconnu'}
-Montant estime : {_dossier['montant_estime'] or 'non chiffre'}
-Etapes : {_etapes_summary}
-Pieces manquantes : {', '.join(_pieces_manq) if _pieces_manq else 'aucune'}
-Documents lies : {len(_dossier['documents_lies'] or [])} fichiers
-
-Utilise ces informations structurees pour enrichir ta reponse quand la question concerne ce dossier. Tu peux mentionner les etapes en cours, les pieces manquantes, et proposer des actions concretes."""
+Un dossier Airtable (base Assynco) a été sélectionné par l'utilisateur et injecté comme Source 1 dans les extraits ci-dessous.
+Utilise ces données structurées en PRIORITÉ pour répondre. Si des documents RAG complètent le dossier Airtable, cite-les aussi.
+Tu peux mentionner les étapes en cours, les pièces manquantes, et proposer des actions concrètes au gestionnaire."""
 
     primary_sources = set()
     primary_types_found = set()
@@ -1923,6 +2093,30 @@ if user_input:
     active_model = LLM_MODEL_FAST if _demo else LLM_MODEL
     model_label = "Haiku 4.5 ⚡" if _demo else "Sonnet 4.6"
 
+    # ── Fix B : enrichir la requête avec le dossier sélectionné ──
+    _sel_dossier_id = st.session_state.get("selected_dossier")
+    _sel_dossier_data = None
+    if _sel_dossier_id:
+        _sel_dossier_data = get_dossier_detail(_sel_dossier_id)
+        if _sel_dossier_data:
+            # Forcer stratégie ciblée quand un dossier est sélectionné
+            _strategie_override = "cible"
+            # Enrichir la requête vague avec les identifiants du dossier
+            _d = _sel_dossier_data
+            _enrichment_parts = [query_for_retrieval]
+            if _d.get("nom_dossier"):
+                _enrichment_parts.append(_d["nom_dossier"])
+            if _d.get("lese_nom"):
+                _enrichment_parts.append(_d["lese_nom"])
+            if _d.get("ref_cie"):
+                _enrichment_parts.append(_d["ref_cie"])
+            query_for_retrieval = " ".join(_enrichment_parts)
+            # Override strategy
+            if "Inventaire" in strategy_label:
+                strategy_label = strategy_label.replace("Inventaire", "Ciblé (dossier)")
+            elif "Équilibré" in strategy_label:
+                strategy_label = strategy_label.replace("Équilibré", "Ciblé (dossier)")
+
     # ── Recherche (Phase 1b : décomposition temporelle si inventaire) ──
     _strategie = "inventaire" if "Inventaire" in strategy_label else (
         "cible" if "Ciblé" in strategy_label else "equilibre"
@@ -1935,6 +2129,27 @@ if user_input:
             prefilter=prefilter, doc_type_hint=doc_type_hint,
             strategie=_strategie,
         )
+
+    # ── Fix A : injection chunk virtuel Airtable ──
+    # 1. Toujours injecter le dossier sélectionné (priorité max)
+    _airtable_chunks = []
+    if _sel_dossier_data:
+        _vc = dossier_to_virtual_chunk(_sel_dossier_data, 1)
+        _airtable_chunks.append(_vc)
+
+    # 2. Aussi chercher des dossiers par matching textuel (pour les requêtes sans sélection)
+    _text_query = expanded_query if was_expanded and expanded_query else user_input
+    _text_dossiers = search_dossiers_for_query(_text_query, copropriete=copro_filter)
+    for _ad in _text_dossiers:
+        # Éviter les doublons avec le dossier déjà sélectionné
+        if _sel_dossier_data and _ad.get("dossier_id") == _sel_dossier_data.get("dossier_id"):
+            continue
+        _vc = dossier_to_virtual_chunk(_ad, len(results) + len(_airtable_chunks) + 1)
+        _airtable_chunks.append(_vc)
+
+    if _airtable_chunks:
+        # Prepend Airtable chunks (highest priority — structured data from Assynco)
+        results = _airtable_chunks + list(results)
 
     # ── Réponse ──
     with st.chat_message("assistant"):
