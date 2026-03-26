@@ -341,97 +341,22 @@ def search_dossiers_for_query(query, copropriete=None):
 
 
 def dossier_to_virtual_chunk(dossier, source_index):
-    """Convert an Airtable dossier dict into a text block formatted like a RAG chunk source."""
+    """Convert an Airtable dossier dict into a rich text block formatted like a RAG chunk source.
+    Includes ALL non-null fields organized by section for maximum context to Sonnet."""
     d = dossier
-    lines = []
-    lines.append(f"=== DOSSIER SINISTRE (base Assynco/Airtable) ===")
-    lines.append(f"Nom : {d.get('nom_dossier', 'N/A')}")
-    lines.append(f"Statut : {d.get('at_situation') or d.get('statut', 'N/A')}")
-    if d.get('lese_nom'):
-        contact = d['lese_nom']
-        if d.get('lese_tel'):
-            contact += f" — Tel: {d['lese_tel']}"
-        if d.get('lese_email'):
-            contact += f" — Email: {d['lese_email']}"
-        if d.get('appt_origine'):
-            contact += f" — Appt: {d['appt_origine']}"
-        lines.append(f"Lese : {contact}")
-    if d.get('date_ouverture'):
-        lines.append(f"Date survenance : {d['date_ouverture']}")
-    if d.get('date_cloture'):
-        lines.append(f"Date cloture : {d['date_cloture']}")
-    if d.get('cause'):
-        lines.append(f"Cause : {d['cause']}")
-    if d.get('irsi') is not None:
-        lines.append(f"Convention IRSI : {'Oui' if d['irsi'] else 'Non'}")
-    if d.get('cause_identifiee') is not None:
-        lines.append(f"Cause identifiee : {'Oui' if d['cause_identifiee'] else 'Non'}")
-    if d.get('cause_reparee') is not None:
-        lines.append(f"Cause reparee : {'Oui' if d['cause_reparee'] else 'Non'}")
-    if d.get('garantie_impactee'):
-        lines.append(f"Garantie : {', '.join(d['garantie_impactee'])}")
-    # References
-    refs = []
-    if d.get('ref_cie'):
-        refs.append(f"Ref Cie: {d['ref_cie']}")
-    if d.get('ref_expert'):
-        refs.append(f"Ref Expert: {d['ref_expert']}")
-    if d.get('ref_sinistre_client'):
-        refs.append(f"Ref Client: {d['ref_sinistre_client']}")
-    if refs:
-        lines.append(f"References : {' | '.join(refs)}")
-    # Expert & assureur
-    if d.get('expert_nom'):
-        lines.append(f"Expert : {d['expert_nom']}")
-    if d.get('assureur'):
-        lines.append(f"Assureur : {d['assureur']}")
-    # Pipeline
-    pipeline = []
-    if d.get('at_declaration'):
-        pipeline.append(f"Declaration: {d['at_declaration']}")
-    if d.get('at_expertise'):
-        pipeline.append(f"Expertise: {d['at_expertise']}")
-    if d.get('at_accord'):
-        pipeline.append(f"Accord: {d['at_accord']}")
-    if d.get('at_reglement'):
-        pipeline.append(f"Reglement: {d['at_reglement']}")
-    if d.get('at_mise_en_cause'):
-        pipeline.append(f"Mise en cause: {d['at_mise_en_cause']}")
-    if pipeline:
-        lines.append(f"Pipeline : {' | '.join(pipeline)}")
-    if d.get('at_attente'):
-        lines.append(f"En attente de : {d['at_attente']}")
-    # Financier
-    financials = []
-    if d.get('montant_estime'):
-        financials.append(f"Estimation: {d['montant_estime']} EUR")
-    if d.get('montant_reel'):
-        financials.append(f"Cout assureur: {d['montant_reel']} EUR")
-    if d.get('franchise'):
-        financials.append(f"Franchise: {d['franchise']} EUR")
-    if d.get('reglement_realise'):
-        financials.append(f"Regle: {d['reglement_realise']} EUR")
-    if d.get('total_regle'):
-        financials.append(f"Total regle: {d['total_regle']} EUR")
-    if d.get('honoraire_syndic'):
-        financials.append(f"Honoraire syndic: {d['honoraire_syndic']} EUR")
-    if financials:
-        lines.append(f"Financier : {' | '.join(financials)}")
-    # Textes
-    if d.get('circonstances'):
-        lines.append(f"Circonstances : {d['circonstances'][:500]}")
-    if d.get('dommages_description'):
-        lines.append(f"Dommages : {d['dommages_description'][:500]}")
-    if d.get('conclusion_expert'):
-        lines.append(f"Conclusion expert : {d['conclusion_expert'][:500]}")
-    if d.get('commentaire_assureur'):
-        lines.append(f"Commentaire assureur : {d['commentaire_assureur'][:300]}")
-    if d.get('commentaire_assynco'):
-        lines.append(f"Commentaire Assynco : {d['commentaire_assynco'][:300]}")
-    # Elements manquants
-    if d.get('elements_manquants'):
-        lines.append(f"Elements manquants : {', '.join(d['elements_manquants'])}")
-    # Flags
+    sections = []
+
+    # ── HEADER ──
+    sections.append("=== DOSSIER SINISTRE — BASE ASSYNCO/AIRTABLE (SOURCE PRIORITAIRE) ===")
+    sections.append(f"Nom du dossier : {d.get('nom_dossier', 'N/A')}")
+    sections.append(f"Type : {d.get('type_dossier', 'N/A')}")
+    sections.append(f"Statut : {d.get('at_situation') or d.get('statut', 'N/A')}")
+    if d.get('statut_detail'):
+        sections.append(f"Statut detail : {d['statut_detail']}")
+    if d.get('triage'):
+        sections.append(f"Priorite (triage) : {d['triage']}")
+
+    # ── ALERTES & FLAGS ──
     flags = []
     if d.get('important'):
         flags.append("IMPORTANT")
@@ -439,10 +364,177 @@ def dossier_to_virtual_chunk(dossier, source_index):
         flags.append("JUDICIAIRE")
     if d.get('en_carence'):
         flags.append("EN CARENCE")
+    if d.get('a_relancer') and str(d['a_relancer']).lower() not in ('non', 'no', 'false'):
+        flags.append("A RELANCER")
+    if d.get('prescription_status') and str(d['prescription_status']).lower() not in ('no', 'non', 'false'):
+        flags.append(f"PRESCRIPTION: {d['prescription_status']}")
     if flags:
-        lines.append(f"Alertes : {', '.join(flags)}")
+        sections.append(f"ALERTES : {' | '.join(flags)}")
+    if d.get('elements_manquants'):
+        els = d['elements_manquants'] if isinstance(d['elements_manquants'], list) else [d['elements_manquants']]
+        sections.append(f"Elements manquants : {', '.join(els)}")
 
-    text = "\n".join(lines)
+    # ── IDENTIFICATION DU SINISTRE ──
+    sections.append("")
+    sections.append("--- Identification ---")
+    if d.get('date_ouverture'):
+        sections.append(f"Date survenance : {d['date_ouverture']}")
+    if d.get('date_cloture'):
+        sections.append(f"Date cloture : {d['date_cloture']}")
+    if d.get('cause'):
+        sections.append(f"Cause : {d['cause']}")
+    if d.get('irsi') is not None:
+        sections.append(f"Convention IRSI : {'Oui' if d['irsi'] else 'Non'}")
+    if d.get('cause_identifiee') is not None:
+        sections.append(f"Cause identifiee : {'Oui' if d['cause_identifiee'] else 'Non'}")
+    if d.get('cause_reparee') is not None:
+        sections.append(f"Cause reparee : {'Oui' if d['cause_reparee'] else 'Non'}")
+    if d.get('garantie_impactee'):
+        g = d['garantie_impactee'] if isinstance(d['garantie_impactee'], list) else [d['garantie_impactee']]
+        sections.append(f"Garantie : {', '.join(g)}")
+    if d.get('dommage_copro') is not None:
+        sections.append(f"Dommage copropriete : {'Oui' if d['dommage_copro'] else 'Non'}")
+    if d.get('adresse_sinistre'):
+        sections.append(f"Adresse sinistre : {d['adresse_sinistre']}")
+    if d.get('adresse_copro'):
+        sections.append(f"Adresse copropriete : {d['adresse_copro']}")
+
+    # ── REFERENCES ──
+    refs = []
+    if d.get('ref_cie'):
+        refs.append(f"Ref Compagnie: {d['ref_cie']}")
+    if d.get('ref_expert'):
+        refs.append(f"Ref Expert: {d['ref_expert']}")
+    if d.get('ref_sinistre_client'):
+        refs.append(f"Ref Client: {d['ref_sinistre_client']}")
+    if d.get('ref_assynco'):
+        refs.append(f"Ref Assynco: {d['ref_assynco']}")
+    if d.get('ref_inch'):
+        refs.append(f"Ref Inch: {d['ref_inch']}")
+    if refs:
+        sections.append(f"References : {' | '.join(refs)}")
+    if d.get('airtable_url'):
+        sections.append(f"Lien dossier Airtable : {d['airtable_url']}")
+
+    # ── PARTIES PRENANTES ──
+    sections.append("")
+    sections.append("--- Parties prenantes ---")
+    if d.get('lese_nom'):
+        lese = f"Lese : {d['lese_nom']}"
+        if d.get('lese_tel'):
+            lese += f" | Tel: {d['lese_tel']}"
+        if d.get('lese_email'):
+            lese += f" | Email: {d['lese_email']}"
+        if d.get('appt_origine'):
+            lese += f" | Appt: {d['appt_origine']}"
+        sections.append(lese)
+    if d.get('expert_nom'):
+        sections.append(f"Expert : {d['expert_nom']}")
+    if d.get('etat_expert'):
+        sections.append(f"Etat expert : {d['etat_expert']}")
+    if d.get('assureur'):
+        sections.append(f"Assureur : {d['assureur']}")
+    if d.get('gestionnaire_syndic'):
+        sections.append(f"Gestionnaire syndic : {d['gestionnaire_syndic']}")
+    if d.get('email_gestionnaire'):
+        sections.append(f"Email gestionnaire syndic : {d['email_gestionnaire']}")
+    if d.get('tel_syndic'):
+        sections.append(f"Tel syndic : {d['tel_syndic']}")
+    if d.get('adresse_syndic'):
+        sections.append(f"Adresse syndic : {d['adresse_syndic']}")
+    if d.get('email_gestionnaire_sinistre'):
+        sections.append(f"Email gestionnaire sinistre (assureur) : {d['email_gestionnaire_sinistre']}")
+    if d.get('tel_gestionnaire_sinistre'):
+        sections.append(f"Tel gestionnaire sinistre (assureur) : {d['tel_gestionnaire_sinistre']}")
+
+    # ── PIPELINE / AVANCEMENT ──
+    sections.append("")
+    sections.append("--- Pipeline ---")
+    pipeline_fields = [
+        ('at_declaration', 'Declaration'),
+        ('at_expertise', 'Expertise'),
+        ('at_accord', 'Accord'),
+        ('at_reglement', 'Reglement'),
+        ('at_mise_en_cause', 'Mise en cause'),
+    ]
+    for key, label in pipeline_fields:
+        if d.get(key):
+            sections.append(f"  {label} : {d[key]}")
+    if d.get('at_attente'):
+        sections.append(f"En attente de : {d['at_attente']}")
+    if d.get('situation_sinistre'):
+        sections.append(f"Situation sinistre : {d['situation_sinistre']}")
+
+    # ── DATES CLES ──
+    date_fields = [
+        ('date_declaration', 'Declaration'),
+        ('date_mission_expert', 'Mission expert'),
+        ('date_invitation_expertise', 'Invitation expertise'),
+        ('date_premiere_visite', 'Premiere visite'),
+        ('date_pv', 'PV'),
+        ('date_lettre_acceptation', 'Lettre acceptation'),
+        ('date_depot_rapport', 'Depot rapport'),
+        ('date_reglement', 'Reglement'),
+        ('date_derniere_relance', 'Derniere relance'),
+        ('date_relance_expert', 'Relance expert'),
+        ('date_relance_compagnie', 'Relance compagnie'),
+        ('date_relance_client', 'Relance client'),
+        ('date_rappel', 'Rappel'),
+        ('date_prescription', 'Prescription'),
+        ('date_prescription_estimate', 'Prescription estimee'),
+    ]
+    dates_found = [(label, d[key]) for key, label in date_fields if d.get(key)]
+    if dates_found:
+        sections.append("")
+        sections.append("--- Dates cles ---")
+        for label, val in dates_found:
+            sections.append(f"  {label} : {val}")
+
+    # ── FINANCIER ──
+    fin_fields = [
+        ('montant_estime', 'Estimation'),
+        ('montant_reel', 'Cout assureur'),
+        ('franchise', 'Franchise'),
+        ('provisions', 'Provisions'),
+        ('reglement_realise', 'Reglement realise'),
+        ('reglement_frais', 'Reglement frais'),
+        ('recours_en_cours', 'Recours en cours'),
+        ('recours_realise', 'Recours realise'),
+        ('cout_client', 'Cout client'),
+        ('honoraire_syndic', 'Honoraire syndic'),
+        ('dommages', 'Dommages (montant)'),
+        ('indemnite_immediate', 'Indemnite immediate'),
+        ('indemnite_differee', 'Indemnite differee'),
+        ('total_regle', 'Total regle'),
+    ]
+    fins_found = [(label, d[key]) for key, label in fin_fields if d.get(key)]
+    if fins_found:
+        sections.append("")
+        sections.append("--- Financier ---")
+        for label, val in fins_found:
+            sections.append(f"  {label} : {val} EUR")
+
+    # ── TEXTES DESCRIPTIFS ──
+    text_fields = [
+        ('circonstances', 'Circonstances', 600),
+        ('dommages_description', 'Description des dommages', 600),
+        ('conclusion_expert', 'Conclusion de l expert', 600),
+        ('observations_declaration', 'Observations declaration', 400),
+        ('commentaire_assureur', 'Commentaire assureur', 400),
+        ('commentaire_assynco', 'Commentaire Assynco', 400),
+        ('motif_rappel', 'Motif rappel', 300),
+        ('commentaire_relance_expert', 'Commentaire relance expert', 300),
+        ('commentaire_relance_compagnie', 'Commentaire relance compagnie', 300),
+        ('commentaire_relance_client', 'Commentaire relance client', 300),
+    ]
+    texts_found = [(label, d[key][:maxlen]) for key, label, maxlen in text_fields if d.get(key)]
+    if texts_found:
+        sections.append("")
+        sections.append("--- Textes ---")
+        for label, val in texts_found:
+            sections.append(f"{label} : {val}")
+
+    text = "\n".join(sections)
 
     # Return in the same tuple format as search_chunks results:
     # (chunk_id, copro, source_file, nom_fichier, doc_type, text, vec_similarity, bm25, rrf, chunk_idx)
@@ -1030,9 +1122,16 @@ CONTEXTE CONVERSATIONNEL :
     if _sel_dossier_id:
         system_prompt += """
 
-Un dossier Airtable (base Assynco) a été sélectionné par l'utilisateur et injecté comme Source 1 dans les extraits ci-dessous.
-Utilise ces données structurées en PRIORITÉ pour répondre. Si des documents RAG complètent le dossier Airtable, cite-les aussi.
-Tu peux mentionner les étapes en cours, les pièces manquantes, et proposer des actions concrètes au gestionnaire."""
+INSTRUCTIONS PRIORITAIRES — DOSSIER AIRTABLE SÉLECTIONNÉ :
+La Source 1 (marquée "DOSSIER SINISTRE — BASE ASSYNCO/AIRTABLE") est la source PRINCIPALE et PRIORITAIRE.
+Elle contient les données structurées du dossier sinistre sélectionné par le gestionnaire.
+- Base ta réponse PRINCIPALEMENT sur cette source Airtable.
+- Structure ta réponse en reprenant les sections du dossier : identification, parties prenantes, pipeline, dates clés, financier, textes.
+- Cite les montants, dates, références, contacts exacts du dossier.
+- Signale les alertes (éléments manquants, relances, prescription).
+- Les autres sources (documents RAG) ne servent qu'à COMPLÉTER avec des détails documentaires.
+- Si un document RAG CONTREDIT le dossier Airtable, précise la divergence.
+- Propose des ACTIONS CONCRÈTES au gestionnaire (relancer expert, fournir pièce manquante, etc.)."""
 
     primary_sources = set()
     primary_types_found = set()
@@ -1434,6 +1533,10 @@ def render_answer_segments(segments):
                 for i, nid in enumerate(all_node_ids):
                     if nid not in styled:
                         style_lines.append(f'    style {nid} {blues[i % 2]}')
+            # Use neutral theme for non-flowchart diagrams (timeline, sequence, etc.)
+            # — better readability with default light colors and dark text
+            if _diagram_type not in ('flowchart', 'graph'):
+                theme_directive = '%%{init: {"theme": "neutral"}}%%'
             themed_code = theme_directive + '\n' + clean_code
             if style_lines and _supports_style:
                 themed_code += '\n' + '\n'.join(style_lines)
@@ -2113,9 +2216,10 @@ if user_input:
                 _enrichment_parts.append(_d["ref_cie"])
             query_for_retrieval = " ".join(_enrichment_parts)
             # Override strategy AND parameters — dossier context = focused search
+            # The Airtable virtual chunk is the PRIMARY source; RAG chunks are supplementary
             strategy_label = "Ciblé (dossier)"
-            MCL_ACTUAL = min(MCL_ACTUAL, 30)  # Max 30 RAG chunks + 1 Airtable chunk
-            CPS_ACTUAL = min(CPS_ACTUAL, 3)   # Max 3 per source file
+            MCL_ACTUAL = min(MCL_ACTUAL, 10)  # Max 10 RAG chunks — Airtable chunk dominates
+            CPS_ACTUAL = min(CPS_ACTUAL, 2)   # Max 2 per source file
             # Force doc_type if dossier is a sinistre
             if _d.get("type_dossier") and "SINISTRE" in (_d["type_dossier"] or "").upper():
                 doc_type_hint = "SINISTRE"
