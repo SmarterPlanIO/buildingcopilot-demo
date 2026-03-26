@@ -1210,11 +1210,12 @@ def render_answer_segments(segments):
                 '"edgeLabelBackground": "#334155", '
                 '"clusterBkg": "#1e293b", "clusterBorder": "#475569"'
                 '}, "flowchart": {"curve": "basis", "padding": 16, '
-                '"nodeSpacing": 50, "rankSpacing": 60, "htmlLabels": true, '
-                '"defaultRenderer": "dagre"}}}%%'
+                '"nodeSpacing": 50, "rankSpacing": 60, "htmlLabels": true}}}%%'
             )
-            # Auto-style ALL nodes by scanning entire lines (not just start)
-            # Use findall to catch mid-line node definitions like "A --> B[text]"
+            # Auto-style nodes ONLY for flowchart/graph diagrams
+            # timeline, sequenceDiagram, erDiagram, gantt, pie do NOT support style directives
+            _diagram_type = clean_code.strip().split('\n')[0].strip().split()[0].lower() if clean_code.strip() else ""
+            _supports_style = _diagram_type in ('flowchart', 'graph')
             _skip_ids = {'flowchart', 'graph', 'subgraph', 'style', 'class', 'end', 'TD', 'LR', 'RL', 'BT'}
             all_node_ids = []  # ordered by first appearance
             diamond_ids = []
@@ -1264,13 +1265,20 @@ def render_answer_segments(segments):
                     if nid not in styled:
                         style_lines.append(f'    style {nid} {blues[i % 2]}')
             themed_code = theme_directive + '\n' + clean_code
-            if style_lines:
+            if style_lines and _supports_style:
                 themed_code += '\n' + '\n'.join(style_lines)
+            # Debug: show exact code sent to st_mermaid
+            with st.expander(f"Debug Mermaid v10 — {themed_code.count(chr(10))+1} lignes", expanded=False):
+                st.code(themed_code, language="text")
             try:
                 stmd.st_mermaid(themed_code, height="auto")
             except Exception as e:
                 st.error(f"Erreur rendu Mermaid : {e}")
-                st.code(clean_code, language="text")
+                # Try without theme directive as fallback
+                try:
+                    stmd.st_mermaid(clean_code, height="auto")
+                except Exception:
+                    st.code(clean_code, language="text")
         else:
             st.markdown(seg_content, unsafe_allow_html=True)
 
@@ -1321,6 +1329,13 @@ def _sanitize_mermaid_code(code):
     clean = re.sub(r'\[\s*-\s*', '[', clean)
     # Strip non-ASCII except French accents
     clean = re.sub(r'[^\x00-\x7F\u00C0-\u00FF\u0152\u0153\u0178]', '', clean)
+    # Remove style/class directives from non-flowchart diagrams (timeline, sequence, etc.)
+    first_line = clean.strip().split('\n')[0].strip().split()[0].lower() if clean.strip() else ""
+    if first_line not in ('flowchart', 'graph'):
+        clean = re.sub(r'^\s*style\s+.*$', '', clean, flags=re.MULTILINE)
+        clean = re.sub(r'^\s*class\s+.*$', '', clean, flags=re.MULTILINE)
+        # Remove blank lines left by the removal
+        clean = re.sub(r'\n{3,}', '\n\n', clean)
     return clean
 
 
@@ -1662,19 +1677,17 @@ with st.sidebar:
     ]
     if _user_questions:
         st.markdown("##### 💬 Questions posées")
+        _links_html = ""
         for _qi, (_msg_idx, _q) in enumerate(_user_questions):
             _truncated = (_q[:50] + "...") if len(_q) > 50 else _q
             _anchor_id = f"q-anchor-{_msg_idx}"
-            # Use st.html so onclick JS executes in the parent frame (not blocked by sandbox)
-            st.html(
-                f'<div onclick="'
-                f"window.parent.document.getElementById('{_anchor_id}')?.scrollIntoView({{behavior:'smooth',block:'start'}})"
-                f'" style="display:block;font-size:0.82rem;padding:4px 8px;margin:2px 0;color:#a0aec0;'
-                f'text-decoration:none;border-radius:6px;transition:background 0.15s;cursor:pointer;'
-                f'font-family:Inter,sans-serif;" '
-                f'onmouseover="this.style.background=\'#1e293b\'" onmouseout="this.style.background=\'none\'">'
-                f'<span style="color:#f59e0b;font-weight:500;">{_qi+1}.</span> {_truncated}</div>'
+            _links_html += (
+                f'<a href="#{_anchor_id}" style="display:block;font-size:0.82rem;padding:4px 8px;margin:2px 0;'
+                f'color:#a0aec0;text-decoration:none;border-radius:6px;transition:background 0.15s;'
+                f'font-family:Inter,sans-serif;">'
+                f'<span style="color:#f59e0b;font-weight:500;">{_qi+1}.</span> {_truncated}</a>'
             )
+        st.markdown(_links_html, unsafe_allow_html=True)
         st.markdown("---")
 
     copros = get_copros()
