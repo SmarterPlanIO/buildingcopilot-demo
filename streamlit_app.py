@@ -1710,9 +1710,12 @@ with st.sidebar:
     try:
         _copro_for_dossiers = selected_copro if selected_copro and "Toutes" not in selected_copro else None
         _dossiers = get_dossiers(_copro_for_dossiers)
-    except Exception:
+    except Exception as _e:
         _dossiers = []
+        st.caption(f"⚠️ Erreur dossiers: {_e}")
 
+    if not _dossiers:
+        st.caption("📂 Aucun dossier trouvé")
     if _dossiers:
         _STATUS_BADGE = {"EN_ATTENTE": "🔴", "EN_COURS": "🟡", "CLOTURE": "🟢"}
 
