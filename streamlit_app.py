@@ -230,7 +230,8 @@ def get_dossiers(copropriete=None):
                 cur.execute("""
                     SELECT dossier_id, nom_dossier, type_dossier, statut,
                            date_ouverture, etapes, pieces_requises, pieces_fournies,
-                           lese_nom, expert_nom, assureur, montant_estime
+                           lese_nom, expert_nom, assureur, montant_estime,
+                           ref_assynco, ref_cie
                     FROM dossiers WHERE code_ncg = %s
                     ORDER BY
                         CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
@@ -240,7 +241,8 @@ def get_dossiers(copropriete=None):
                 cur.execute("""
                     SELECT dossier_id, nom_dossier, type_dossier, statut,
                            date_ouverture, etapes, pieces_requises, pieces_fournies,
-                           lese_nom, expert_nom, assureur, montant_estime
+                           lese_nom, expert_nom, assureur, montant_estime,
+                           ref_assynco, ref_cie
                     FROM dossiers
                     ORDER BY
                         CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
@@ -1120,18 +1122,28 @@ CONTEXTE CONVERSATIONNEL :
     # If a dossier is selected, add a hint to the system prompt to use it
     _sel_dossier_id = st.session_state.get("selected_dossier")
     if _sel_dossier_id:
-        system_prompt += """
+        _sel_d = get_dossier_detail(_sel_dossier_id) or {}
+        _ref_a = _sel_d.get("ref_assynco", "")
+        system_prompt += f"""
 
-INSTRUCTIONS PRIORITAIRES — DOSSIER AIRTABLE SÉLECTIONNÉ :
-La Source 1 (marquée "DOSSIER SINISTRE — BASE ASSYNCO/AIRTABLE") est la source PRINCIPALE et PRIORITAIRE.
-Elle contient les données structurées du dossier sinistre sélectionné par le gestionnaire.
-- Base ta réponse PRINCIPALEMENT sur cette source Airtable.
-- Structure ta réponse en reprenant les sections du dossier : identification, parties prenantes, pipeline, dates clés, financier, textes.
-- Cite les montants, dates, références, contacts exacts du dossier.
-- Signale les alertes (éléments manquants, relances, prescription).
-- Les autres sources (documents RAG) ne servent qu'à COMPLÉTER avec des détails documentaires.
-- Si un document RAG CONTREDIT le dossier Airtable, précise la divergence.
-- Propose des ACTIONS CONCRÈTES au gestionnaire (relancer expert, fournir pièce manquante, etc.)."""
+INSTRUCTIONS IMPÉRATIVES — DOSSIER SÉLECTIONNÉ (Réf. Assynco : {_ref_a}) :
+
+1. FOCUS EXCLUSIF : L'utilisateur a cliqué sur un dossier spécifique. Ta réponse DOIT se concentrer EXCLUSIVEMENT sur ce dossier ({_ref_a}). NE LISTE PAS et NE MENTIONNE PAS les autres sinistres sauf si l'utilisateur le demande explicitement.
+
+2. SOURCE PRIORITAIRE : La Source 1 (marquée "DOSSIER SINISTRE — BASE ASSYNCO/AIRTABLE") contient les données structurées officielles de ce dossier. C'est ta source PRINCIPALE — cite les montants, dates, références, contacts, conclusion expert EXACTEMENT comme indiqués.
+
+3. STRUCTURE DE RÉPONSE :
+   - Titre avec la réf. Assynco ({_ref_a}) et le nom du lésé
+   - Résumé en 2-3 lignes (cause, statut, montant)
+   - Chronologie des dates clés
+   - Parties prenantes et contacts
+   - Détail financier
+   - Alertes et actions à mener
+   - Conclusion expert (si disponible)
+
+4. ENRICHISSEMENT RAG : Les autres sources ne servent qu'à COMPLÉTER le dossier Airtable avec des détails documentaires (constats, convocations, rapports). Si un document RAG contredit le dossier Airtable, SIGNALE la divergence.
+
+5. ACTIONS CONCRÈTES : Propose des actions spécifiques au gestionnaire (relancer expert, fournir pièce manquante, vérifier prescription, etc.)."""
 
     primary_sources = set()
     primary_types_found = set()
@@ -2020,6 +2032,9 @@ with st.sidebar:
         with st.expander(f"📂 Mes dossiers ({len(_dossiers)})", expanded=False):
             for _d in _dossiers:
                 _did, _dname, _dtype, _dstatut = _d[0], _d[1], _d[2], _d[3]
+                _d_ref_assynco = _d[12] if len(_d) > 12 else None  # ref_assynco
+                _d_ref_cie = _d[13] if len(_d) > 13 else None  # ref_cie
+                _d_lese = _d[8] if len(_d) > 8 else None  # lese_nom
                 _badge = _STATUS_BADGE.get(_dstatut, "⚪")
                 _d_etapes = _d[5] if isinstance(_d[5], list) else json.loads(_d[5] or "[]")
                 _etapes_done = sum(1 for e in _d_etapes if e.get("statut") == "FAIT")
@@ -2028,10 +2043,16 @@ with st.sidebar:
                 _pieces_manq = len(_pieces_req) - len(_pieces_four)
 
                 _is_selected = st.session_state.selected_dossier == _did
-                _label = f"{_badge} **{_dname}**"
+                # Display ref_assynco as primary identifier + lésé name
+                _short_ref = _d_ref_assynco or _dname[:30]
+                _label = f"{_badge} **{_short_ref}**"
+                if _d_lese:
+                    _label += f" — {_d_lese}"
+                if _d_ref_cie:
+                    _label += f"\nRéf. cie: {_d_ref_cie}"
                 if _pieces_manq > 0:
                     _label += f" · {_pieces_manq} pièce(s) manquante(s)"
-                _label += f"\n{_etapes_done}/{len(_d_etapes)} étapes"
+                _label += f" · {_etapes_done}/{len(_d_etapes)} étapes"
 
                 if st.button(_label, key=f"dos_{_did}", use_container_width=True,
                              type="primary" if _is_selected else "secondary"):
@@ -2044,7 +2065,9 @@ with st.sidebar:
         if st.session_state.selected_dossier:
             _sel = get_dossier_detail(st.session_state.selected_dossier)
             if _sel:
-                st.info(f"📋 Dossier actif : **{_sel['nom_dossier']}**")
+                _sel_ref = _sel.get('ref_assynco') or _sel.get('nom_dossier', '')[:30]
+                _sel_lese = _sel.get('lese_nom', '')
+                st.info(f"📋 Dossier actif : **{_sel_ref}** — {_sel_lese}")
     else:
         st.caption("Aucun dossier actif")
 
@@ -2205,21 +2228,31 @@ if user_input:
         if _sel_dossier_data:
             # Forcer stratégie ciblée quand un dossier est sélectionné
             _strategie_override = "cible"
-            # Enrichir la requête vague avec les identifiants du dossier
+            # Enrichir la requête avec ref_assynco + lésé (pas le nom_dossier complet qui est trop large)
             _d = _sel_dossier_data
             _enrichment_parts = [query_for_retrieval]
-            if _d.get("nom_dossier"):
-                _enrichment_parts.append(_d["nom_dossier"])
+            # Extraire ref_assynco du nom_dossier si pas dans un champ dédié
+            _ref_assynco = _d.get("ref_assynco") or ""
+            if not _ref_assynco and _d.get("nom_dossier"):
+                import re as _re
+                _m = _re.search(r'Ref:\s*(\w+)', _d["nom_dossier"])
+                if _m:
+                    _ref_assynco = _m.group(1)
+            if _ref_assynco:
+                _enrichment_parts.append(_ref_assynco)
             if _d.get("lese_nom"):
                 _enrichment_parts.append(_d["lese_nom"])
             if _d.get("ref_cie"):
                 _enrichment_parts.append(_d["ref_cie"])
+            if _d.get("circonstances"):
+                # Add first 50 chars of circumstances for better semantic matching
+                _enrichment_parts.append(_d["circonstances"][:50])
             query_for_retrieval = " ".join(_enrichment_parts)
             # Override strategy AND parameters — dossier context = focused search
             # The Airtable virtual chunk is the PRIMARY source; RAG chunks are supplementary
             strategy_label = "Ciblé (dossier)"
-            MCL_ACTUAL = min(MCL_ACTUAL, 10)  # Max 10 RAG chunks — Airtable chunk dominates
-            CPS_ACTUAL = min(CPS_ACTUAL, 2)   # Max 2 per source file
+            MCL_ACTUAL = min(MCL_ACTUAL, 5)  # Max 5 RAG chunks — Airtable chunk dominates
+            CPS_ACTUAL = min(CPS_ACTUAL, 1)   # Max 1 per source file — only the best per doc
             # Force doc_type if dossier is a sinistre
             if _d.get("type_dossier") and "SINISTRE" in (_d["type_dossier"] or "").upper():
                 doc_type_hint = "SINISTRE"
