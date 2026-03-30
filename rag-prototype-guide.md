@@ -1,6 +1,7 @@
 # Guide complet — Prototype RAG pour archives de copropriété sur AWS
 
-**Projet :** Building Copilot — Essai RAG sur 6 copropriétés  
+**Projet :** Building Copilot — RAG multi-copropriétés  
+**Dernière mise à jour :** 30 mars 2026  
 **Volume :** 9 GO, 1 430 dossiers, 11 000 fichiers  
 **Profil :** Non-développeur, copier/coller dans VS Code ou Antigravity  
 **Stack :** Full AWS (Textract, Bedrock, RDS pgvector)
@@ -15,10 +16,11 @@ Archives locales (9 GO)
   → Étape 1 : Upload S3
   → Étape 2 : OCR via Textract
   → Étape 3 : Parsing structurel + classification doc_type (3 passes dont LLM) + filtre contenu binaire
-  → Étape 4 : Enrichissement métadonnées & thèmes
+  → Étape 4 : Extraction métadonnées document-level (date, sous-type, statut) via Haiku
   → Étape 5 : Embedding via Bedrock Titan (15 workers parallèles)
-  → Étape 6 : Stockage pgvector + tsvector BM25 (RDS Postgres)
-  → Étape 7 : Requête hybride (RRF + source diversity + FlashRank rerank + Claude) + UI Streamlit multi-turn
+  → Étape 6 : Stockage pgvector + tsvector BM25 + table documents (RDS Postgres)
+  → Étape 7 : Requête hybride (pré-filtrage document → RRF + source diversity + FlashRank rerank + Claude) + UI Streamlit multi-turn
+  → Étape 8 : Synchronisation Airtable Assynco → table dossiers PostgreSQL (UPSERT par copropriété)
 ```
 
 **Coût estimé pour l'essai complet :** ~$50–$80 (dont ~$12 RDS, ~$15–$30 Textract, ~$5–$10 Bedrock)
@@ -40,7 +42,7 @@ Archives locales (9 GO)
 
 4. **pip packages** — À installer une seule fois :
    ```bash
-   pip install boto3 psycopg2-binary pgvector tiktoken tqdm pandas openpyxl python-docx extract-msg streamlit flashrank
+   pip install boto3 psycopg2-binary pgvector tiktoken tqdm pandas openpyxl python-docx extract-msg streamlit flashrank requests
    ```
 
 ### Services AWS à activer
@@ -1349,6 +1351,7 @@ Le script `03_chunking.py` est maintenu séparément du guide (voir fichier `.py
 - Chunking par résolutions pour les PV d'AG — **robuste OCR** : gère les formats alternatifs (ordinal, "Point N°", numérotation simple)
 - Pré-nettoyage systématique du texte OCR (recollage des mots coupés par `\n`, normalisation des espaces multiples)
 - Garde-fou `CHUNK_HARD_MAX = 5000` caractères — aucun chunk ne dépasse cette limite (compatible Titan V2)
+- **`chunk_whole_document` (v4)** : les documents courts (FACTURE, DEVIS, BUDGET, COURRIER, COMPTABILITE, PLAN) sont gardés en un seul chunk jusqu'à `CHUNK_HARD_MAX` (5000 chars) au lieu d'être découpés à `CHUNK_TARGET_SIZE` (1500 chars). Évite que le content_filter supprime des chunks intermédiaires contenant des montants/mesures, et préserve l'intégrité du contexte.
 - Fallback intelligent : si aucun pattern structurel n'est détecté, découpage par taille avec respect des frontières de phrases
 - **Rapport de fin** : affiche les stats de classification LLM + les stats du filtre binaire (fichiers OK/placeholder/skip, chunks gardés/filtrés, raisons)
 
@@ -1361,230 +1364,850 @@ Le script `03_chunking.py` est maintenu séparément du guide (voir fichier `.py
 
 ---
 
-## Étape 4 — Enrichissement thématique
+## Étape 4 — Extraction métadonnées document-level
 
-Crée `04_enrichissement.py` :
+L'étape 3 produit `chunks_copro.jsonl` avec `doc_type`, `source_file`, `copropriete`. Il manque des métadonnées structurées au niveau du **document** (pas du chunk) : date de signature, sous-type précis, statut actif/expiré, montant principal, parties concernées, rattachement à un dossier transversal. Ces métadonnées permettront un pré-filtrage SQL en amont du retrieval hybride (étape 7), éliminant le bruit sur les requêtes factuelles et temporelles.
+
+Le script tourne en **3 passes** :
+1. **Extraction parallèle** (10 workers) — Haiku extrait les métadonnées de chaque document (doc_type_corrige, date, sous_type, dossier_lie, statut, montant, parties, résumé).
+2. **Consolidation des sous_types** — Un second appel Haiku normalise les variantes synonymes (`DDE_CHAUDIERE` → `DDE`, `CONTRAT_SYNDIC` → `SYNDIC`, etc.) pour homogénéiser le vocabulaire sur l'ensemble du corpus.
+3. **Déduplication** — Un troisième appel Haiku identifie, au sein de chaque groupe `(copro, doc_type, année)`, les vrais doublons (PDF + DOCX, brouillon + final) des documents distincts. Chaque document reçoit `groupe_doc` (identifiant du groupe logique) et `est_reference` (true si c'est la version de référence).
+
+### Principe
+
+On agrège les chunks par `source_file`, on construit une fenêtre de texte adaptée au `doc_type`, et on demande à Haiku d'extraire un JSON structuré de métadonnées.
+
+### Fenêtre de lecture adaptative
+
+Tous les `doc_type` n'ont pas leurs métadonnées au même endroit dans le document :
+- **En-tête seul** — COURRIER, DEVIS, FACTURE, DIAGNOSTIC, PV_AG, RCP, ENTRETIEN, PLAN, AUTRE : la date, l'objet et les parties sont dans les premiers paragraphes. **→ 2000 premiers caractères.**
+- **Tête + queue** — CONTRAT, BUDGET, COMPTABILITE, SINISTRE, ASSURANCE : la date et les parties sont en haut, mais le statut (actif/résilié), le montant total et les clauses d'échéance sont souvent en fin de document. **→ 1500 premiers + 1500 derniers caractères.**
+
+Construction de la fenêtre à partir des chunks (déjà triés par `chunk_index`) :
+
+```python
+TETE_QUEUE_TYPES = {"CONTRAT", "BUDGET", "COMPTABILITE", "SINISTRE", "ASSURANCE"}
+
+def build_extraction_window(chunks_du_document, doc_type):
+    """Construit la fenêtre de texte pour l'extraction metadata Haiku."""
+    all_text = [c["text"] for c in sorted(chunks_du_document, key=lambda x: x["chunk_index"])]
+    
+    if doc_type in TETE_QUEUE_TYPES:
+        # Tête : concat depuis le début jusqu'à ~1500 chars
+        head = ""
+        for t in all_text:
+            if len(head) + len(t) > 1500:
+                head += t[:1500 - len(head)]
+                break
+            head += t + "\n"
+        
+        # Queue : concat depuis la fin jusqu'à ~1500 chars
+        tail = ""
+        for t in reversed(all_text):
+            if len(tail) + len(t) > 1500:
+                tail = t[-(1500 - len(tail)):] + "\n" + tail
+                break
+            tail = t + "\n" + tail
+        
+        return head.strip() + "\n\n[...]\n\n" + tail.strip()
+    else:
+        # En-tête seul : ~2000 premiers chars
+        window = ""
+        for t in all_text:
+            if len(window) + len(t) > 2000:
+                window += t[:2000 - len(window)]
+                break
+            window += t + "\n"
+        return window.strip()
+```
+
+### Prompt Haiku
+
+```python
+METADATA_PROMPT = """Tu es un assistant spécialisé en gestion de copropriété.
+Extrais les métadonnées de ce document. Le type de document ACTUEL est : {doc_type}.
+Ce type a été déterminé automatiquement par le dossier parent, il peut être INCORRECT.
+
+Réponds UNIQUEMENT par un objet JSON valide, sans commentaire ni markdown :
+{{
+  "doc_type_corrige": "Le vrai type basé sur le CONTENU parmi : RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, AUTRE",
+  "date_document": "YYYY-MM-DD. Si seuls année+mois trouvés → YYYY-MM-01. Si seule année → YYYY-01-01. Si année introuvable → null. Ne JAMAIS inventer.",
+  "annee": 2024 ou null,
+  "sous_type": "Catégorie précise en UN MOT-CLÉ canonique, ou null — voir règles ci-dessous",
+  "parties_concernees": ["nom entreprise", "assureur", "expert"] ou [],
+  "statut": "actif|expire|resilie|cloture|en_cours|null",
+  "montant_principal": 12500.00 ou null,
+  "dossier_lie": "SINISTRE|TRAVAUX|CONTENTIEUX|null — dossier transversal même si le doc_type est différent (ex: FACTURE liée à un SINISTRE, DEVIS lié à des TRAVAUX)",
+  "resume_une_ligne": "Description courte du document"
+}}
+
+Règles pour doc_type_corrige — UNIQUEMENT une de ces valeurs exactes :
+  RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, AUTRE
+- Un procès-verbal d'AG (compte-rendu de votes, résolutions) → PV_AG
+- Une convocation à l'AG, un ordre du jour, une feuille de présence → COURRIER
+- Un contrat (syndic, maintenance, assurance) → CONTRAT
+- Un règlement intérieur / de copropriété → RCP
+- Un état daté, pré-état daté, questionnaire acquisition → MUTATION
+- Un plan d'architecte, plan technique, DOE → PLAN
+- Un guide pratique, liste, annexe diverse → AUTRE
+
+Règles pour sous_type — CONVENTIONS DE NOMMAGE :
+- Format : MAJUSCULE, un seul terme court, underscores si besoin, PAS d'accents, PAS de pluriel
+- UN SEUL sous_type par document (le principal). Jamais de liste séparée par virgules.
+- Utiliser le terme MÉTIER LE PLUS COURT et courant. Exemples :
+  ✅ DDE (pas DEGAT_DES_EAUX), ✅ MRI (pas MULTIRISQUE_IMMEUBLE), ✅ SYNDIC (pas CONTRAT_DE_SYNDIC)
+  ✅ MUTATION (pas PRE_ETAT_DATE), ✅ CHAUFFAGE (pas CHAUDIERE), ✅ DIGICODE (pas CONTROLE_ACCES)
+  ✅ DERATISATION (pas RONGEURS), ✅ VMC (pas EXTRACTION), ✅ PARKING (pas STATIONNEMENT)
+- Si impossible à déterminer → null
+
+Règles pour le statut :
+- Date d'échéance future → "actif"
+- Date d'échéance passée → "expire"
+- Mentions "résilié", "résiliation", "annulé" → "resilie"
+- Mentions "clos", "clôturé", "indemnisé" → "cloture"
+- Impossible à déterminer → null
+
+Texte du document :
+{texte}"""
+```
+
+> **Note :** Le champ `doc_type_corrige` permet à Haiku de corriger la classification automatique (passe 1 du chunking basée sur les dossiers). Exemple : un fichier `CONTRAT SYNDIC 2013.doc` dans un dossier `AG/` est classé PV_AG par la passe 1, mais Haiku le reclassifie CONTRAT. Deux nouveaux types sont désormais reconnus : `MUTATION` (états datés, actes de vente, questionnaires acquisition) et `PLAN` (plans d'architecte, DOE, schémas d'implantation). Le pré-filtrage en étape 7 utilise `COALESCE(doc_type_corrige, doc_type)` pour bénéficier de cette correction.
+>
+> Le champ `dossier_lie` permet de retrouver des documents liés à un même dossier transversal même si leur `doc_type` est différent : par exemple une `FACTURE` rattachée au dossier `SINISTRE`, ou un `COURRIER` rattaché à `CONTENTIEUX`. La passe de consolidation des `sous_type` fusionne automatiquement les variantes synonymes produites par Haiku (`DDE_CHAUDIERE` → `DDE`, etc.).
+
+### Script `04_metadata_documents.py`
+
+Crée `04_metadata_documents.py` :
 
 ```python
 """
-ÉTAPE 4 — Enrichissement thématique des chunks
-Ajoute les tags thématiques métier à chaque chunk pour le filtrage hybride.
-Lance : python 04_enrichissement.py
+ÉTAPE 4 — Extraction métadonnées document-level via Haiku
+Lit chunks_copro.jsonl (sortie de l'étape 3), agrège par source_file, extrait metadata via LLM.
+Fenêtre de lecture adaptative : en-tête seul ou tête+queue selon le doc_type.
+Sortie : documents_metadata.jsonl (1 ligne JSON par document source)
+Lance : python 04_metadata_documents.py
 """
 import json
+import os
 import re
+import time
+import unicodedata
+import boto3
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 # =====================================================
 # CONFIGURATION
 # =====================================================
 INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"     # ← MODIFIER
-OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_enrichis.jsonl"  # ← MODIFIER
+OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\documents_metadata.jsonl"  # ← MODIFIER
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_FILE = os.path.join(SCRIPT_DIR, "metadata_cache.json")
+AWS_REGION = "eu-west-1"
+LLM_MODEL = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+# Parallélisme
+MAX_WORKERS = 10        # Workers parallèles — baisser à 5 si beaucoup de ThrottlingException
+MAX_RETRIES = 3         # Retries par document avant abandon
+
+# Types nécessitant une lecture tête+queue (date/statut/montant souvent en fin de document)
+TETE_QUEUE_TYPES = {"CONTRAT", "BUDGET", "COMPTABILITE", "SINISTRE", "ASSURANCE"}
+
 
 # =====================================================
-# Dictionnaire thématique métier — syndic de copropriété
+# Agrégation par source_file
 # =====================================================
-# Chaque thème contient des mots-clés et variantes.
-# Un chunk est taggé avec un thème si au moins 2 mots-clés sont présents
-# (seuil ajustable par thème).
+print("=" * 60)
+print("  EXTRACTION MÉTADONNÉES DOCUMENT-LEVEL VIA HAIKU")
+print("=" * 60)
 
-THEMES = {
-    "syndic_obligations": {
-        "keywords": [
-            "syndic", "obligation du syndic", "mission", "mandat", "gestionnaire",
-            "responsabilité du syndic", "compte séparé", "reddition des comptes",
-            "rapport de gestion", "représentant légal"
-        ],
-        "min_matches": 1
-    },
-    "parties_communes": {
-        "keywords": [
-            "parties communes", "partie commune", "communs", "hall", "toiture",
-            "façade", "escalier", "ascenseur", "jardin commun", "parking commun",
-            "couloir", "palier", "cave commune", "local commun", "gros oeuvre",
-            "structure", "fondation", "terrasse commune"
-        ],
-        "min_matches": 1
-    },
-    "parties_privatives": {
-        "keywords": [
-            "parties privatives", "partie privative", "privatif", "privative",
-            "lot", "appartement", "cave privative", "box", "parking privatif",
-            "tantième", "millième", "quote-part", "jouissance exclusive"
-        ],
-        "min_matches": 1
-    },
-    "charges_generales": {
-        "keywords": [
-            "charges générales", "charge générale", "conservation", "entretien",
-            "administration", "article 10", "budget prévisionnel", "appel de fonds",
-            "provision", "régularisation", "dépenses courantes"
-        ],
-        "min_matches": 1
-    },
-    "charges_speciales": {
-        "keywords": [
-            "charges spéciales", "charge spéciale", "utilité", "ascenseur",
-            "chauffage collectif", "eau chaude", "antenne collective",
-            "service collectif", "équipement commun", "clé de répartition"
-        ],
-        "min_matches": 1
-    },
-    "assemblee_generale": {
-        "keywords": [
-            "assemblée générale", "ag", "ordre du jour", "convocation",
-            "majorité", "article 24", "article 25", "article 26", "article 49",
-            "vote", "résolution", "quorum", "procuration", "mandataire",
-            "scrutin", "scrutateur"
-        ],
-        "min_matches": 1
-    },
-    "conseil_syndical": {
-        "keywords": [
-            "conseil syndical", "président du conseil", "membre du conseil",
-            "contrôle", "assistance", "avis du conseil"
-        ],
-        "min_matches": 1
-    },
-    "travaux": {
-        "keywords": [
-            "travaux", "ravalement", "rénovation", "amélioration", "urgence",
-            "mise en conformité", "réhabilitation", "maître d'oeuvre",
-            "appel d'offre", "devis", "entreprise", "chantier",
-            "travaux privatifs", "autorisation de travaux"
-        ],
-        "min_matches": 1
-    },
-    "mutations_ventes": {
-        "keywords": [
-            "vente", "cession", "mutation", "état daté", "pré-état daté",
-            "notaire", "acquéreur", "copropriétaire sortant",
-            "opposition", "privilège", "dette du vendeur"
-        ],
-        "min_matches": 1
-    },
-    "assurance_sinistres": {
-        "keywords": [
-            "assurance", "sinistre", "dommage", "responsabilité civile",
-            "dégât des eaux", "incendie", "multirisque", "indemnisation",
-            "déclaration de sinistre", "expert", "franchise"
-        ],
-        "min_matches": 1
-    },
-    "contentieux": {
-        "keywords": [
-            "contentieux", "mise en demeure", "assignation", "tribunal",
-            "impayé", "recouvrement", "huissier", "procédure judiciaire",
-            "injonction", "saisie", "commandement de payer"
-        ],
-        "min_matches": 1
-    },
-    "diagnostics_techniques": {
-        "keywords": [
-            "diagnostic", "dpe", "amiante", "plomb", "termite", "gaz",
-            "électricité", "carnet d'entretien", "dtt", "dtg",
-            "audit énergétique", "performance énergétique"
-        ],
-        "min_matches": 1
-    },
-    "reglement_interieur": {
-        "keywords": [
-            "règlement intérieur", "nuisance", "bruit", "usage",
-            "destination de l'immeuble", "jouissance", "trouble",
-            "bon voisinage", "animaux", "local poubelle"
-        ],
-        "min_matches": 1
-    },
-    "comptabilite": {
-        "keywords": [
-            "budget", "comptabilité", "bilan", "annexe comptable",
-            "solde", "crédit", "débit", "trésorerie", "fonds de travaux",
-            "compte bancaire", "relevé", "exercice comptable"
-        ],
-        "min_matches": 1
-    },
-    "personnel_immeuble": {
-        "keywords": [
-            "gardien", "concierge", "employé d'immeuble", "contrat de travail",
-            "convention collective", "salaire", "loge", "ménage"
-        ],
-        "min_matches": 1
-    }
+print("\nChargement et agrégation des chunks par document source...")
+docs = {}  # source_file → {copropriete, doc_type, nom_fichier, chunks: [...]}
+
+with open(INPUT_FILE, "r", encoding="utf-8") as f:
+    for line in f:
+        chunk = json.loads(line)
+        sf = chunk["source_file"]
+        if sf not in docs:
+            docs[sf] = {
+                "copropriete": chunk["copropriete"],
+                "doc_type": chunk["doc_type"],
+                "nom_fichier": chunk["nom_fichier"],
+                "total_chunks": chunk.get("total_chunks", 1),
+                "chunks": []
+            }
+        docs[sf]["chunks"].append({
+            "text": chunk["text"],
+            "chunk_index": chunk["chunk_index"]
+        })
+
+print(f"  → {len(docs)} documents sources identifiés")
+
+# Répartition par doc_type
+type_counts = {}
+for d in docs.values():
+    dt = d["doc_type"]
+    type_counts[dt] = type_counts.get(dt, 0) + 1
+print(f"  Répartition : {dict(sorted(type_counts.items(), key=lambda x: -x[1]))}")
+tq_count = sum(1 for d in docs.values() if d["doc_type"] in TETE_QUEUE_TYPES)
+print(f"  → {tq_count} documents en mode tête+queue, {len(docs) - tq_count} en mode en-tête seul")
+
+
+# =====================================================
+# Fenêtre de lecture adaptative
+# =====================================================
+def build_extraction_window(chunks, doc_type):
+    """Construit la fenêtre de texte pour l'extraction metadata Haiku.
+    - En-tête seul (2000 chars) pour la majorité des doc_types
+    - Tête+queue (1500+1500 chars) pour CONTRAT, BUDGET, COMPTABILITE, SINISTRE, ASSURANCE
+    """
+    all_text = [c["text"] for c in sorted(chunks, key=lambda x: x["chunk_index"])]
+
+    if doc_type in TETE_QUEUE_TYPES:
+        # Tête : concat depuis le début jusqu'à ~1500 chars
+        head = ""
+        for t in all_text:
+            if len(head) + len(t) > 1500:
+                head += t[:1500 - len(head)]
+                break
+            head += t + "\n"
+
+        # Queue : concat depuis la fin jusqu'à ~1500 chars
+        tail = ""
+        for t in reversed(all_text):
+            if len(tail) + len(t) > 1500:
+                tail = t[-(1500 - len(tail)):] + "\n" + tail
+                break
+            tail = t + "\n" + tail
+
+        return head.strip() + "\n\n[...]\n\n" + tail.strip()
+    else:
+        # En-tête seul : ~2000 premiers chars
+        window = ""
+        for t in all_text:
+            if len(window) + len(t) > 2000:
+                window += t[:2000 - len(window)]
+                break
+            window += t + "\n"
+        return window.strip()
+
+
+# =====================================================
+# Extraction Haiku
+# =====================================================
+METADATA_PROMPT = """Tu es un assistant spécialisé en gestion de copropriété.
+Extrais les métadonnées de ce document. Le type de document ACTUEL est : {doc_type}.
+Ce type a été déterminé automatiquement par le dossier parent, il peut être INCORRECT.
+
+Réponds UNIQUEMENT par un objet JSON valide, sans commentaire ni markdown :
+{{
+  "doc_type_corrige": "Le vrai type basé sur le CONTENU du document, parmi : RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, AUTRE. Exemples : une convocation → COURRIER, un contrat syndic → CONTRAT, un règlement intérieur → RCP, un ordre du jour seul → COURRIER, une liste de copropriétaires → AUTRE, un guide résidence → AUTRE, un état daté → MUTATION, un plan technique → PLAN",
+  "date_document": "YYYY-MM-DD. Si seuls l'année et le mois sont trouvés → YYYY-MM-01. Si seule l'année est trouvée → YYYY-01-01. Si l'année est introuvable ou incertaine → null. Ne JAMAIS inventer une date ou un jour absent du document.",
+  "annee": 2024,
+  "sous_type": "Catégorie précise en UN MOT-CLÉ canonique, ou null — voir règles ci-dessous",
+  "parties_concernees": ["nom entreprise", "assureur", "expert"] ou [],
+  "statut": "actif|expire|resilie|cloture|en_cours|null",
+  "montant_principal": 12500.00,
+  "dossier_lie": "SINISTRE|TRAVAUX|CONTENTIEUX|null — le dossier transversal auquel ce document est rattaché, même si le doc_type est différent (ex: une FACTURE liée à un SINISTRE, un DEVIS lié à des TRAVAUX, un COURRIER lié à un CONTENTIEUX)",
+  "resume_une_ligne": "Description courte du document"
+}}
+
+Règles pour dossier_lie :
+- Un document peut avoir un doc_type (FACTURE, DEVIS, COURRIER, COMPTABILITE...) tout en étant lié à un dossier transversal
+- SINISTRE : le texte mentionne un sinistre, dégât des eaux, constat, expertise, indemnisation, dégorgement, fuite
+- TRAVAUX : le texte concerne des travaux votés en AG, un chantier, une réfection, un ravalement
+- CONTENTIEUX : le texte concerne un impayé, une mise en demeure, une procédure judiciaire, un recouvrement
+- Si le doc_type_corrige est déjà SINISTRE, ENTRETIEN ou DIAGNOSTIC → dossier_lie = null (redondant)
+- Si aucun dossier transversal identifiable → null
+
+Règles pour sous_type — CONVENTIONS DE NOMMAGE :
+- Format : MAJUSCULE, un seul terme, underscores si besoin, PAS d'accents
+- TOUJOURS AU SINGULIER : BALCON (pas BALCONS), ASCENSEUR (pas ASCENSEURS), EXTINCTEUR (pas EXTINCTEURS)
+- UN SEUL sous_type par document (le principal, celui du titre ou de l'objet). Jamais de liste séparée par virgules.
+- Utiliser le terme MÉTIER LE PLUS COURT et courant du domaine syndic/copro.
+- REGROUPER sous le terme générique le plus simple. Exemples :
+  ✅ DDE (pas DEGAT_DES_EAUX, DÉGÂT_DES_EAUX, DOMMAGES_DES_EAUX, FUITE, INFILTRATIONS)
+  ✅ MRI (pas MULTIRISQUE_IMMEUBLE)
+  ✅ SYNDIC (pas CONTRAT_DE_SYNDIC)
+  ✅ MUTATION (pas PRE_ETAT_DATE, QUESTIONNAIRE_ACQUISITION, AVIS_DE_MUTATION, VENTE_IMMOBILIERE, ACTE_NOTARIE)
+  ✅ CHAUFFAGE (pas CHAUDIERE, CALORIFIQUE, CVC, CLIMATISATION)
+  ✅ DIGICODE (pas CONTROLE_ACCES, INTERPHONE, SERRURERIE, VIGIK, BADGE_VIGIK, CYLINDRE)
+  ✅ DERATISATION (pas RONGEURS, NUISIBLES)
+  ✅ VMC (pas EXTRACTION, DESENFUMAGE, EXTRACTEUR, VENTILATION)
+  ✅ PARKING (pas STATIONNEMENT, VELOS, BORNES_RECHARGE, BORNE_RECHARGE, IRVE)
+  ✅ COMPTE_GESTION (pas COMPTE_DE_GESTION, COMPTES_ANNUELS)
+  ✅ FONDS_TRAVAUX (pas FONDS_ALUR, FDS_ALUR, FONDS_DE_TRAVAUX)
+  ✅ CHARGES (pas DECOMPTE_CHARGES, SOLDES_COPROPRIÉTAIRES, CHARGES_COMMUNES, APPEL_FONDS)
+  ✅ ESPACES_VERTS (pas ELAGAGE, ABATTAGE, ENGAZONNEMENT, ARBORICULTURE, PAYSAGER)
+  ✅ FERME_PORTE (pas FERMEPORTE, GROOM)
+  ✅ PORTE_AUTOMATIQUE (pas PORTES_AUTOMATIQUES, PORTES, FERMETURE, FERMETURES)
+  ✅ RELEVAGE (pas POMPES_RELEVAGE, RELEVAGE_EAUX, POMPE_RELEVAGE)
+  ✅ COMPTEUR (pas COMPTEURS, COMPTAGE, COMPTAGE_EAU, RELEVE_COMPTEURS)
+  ✅ SECURITE_INCENDIE (pas BAES, SSI, COLONNE_SECHE, DESENFUMAGE, EXTINCTEUR)
+  ✅ ETANCHEITE (pas INFILTRATIONS, COUVERTURE, TOITURE quand c'est un problème d'étanchéité)
+- Si le document porte sur un sujet non couvert par les exemples ci-dessus, crée un terme court suivant les mêmes conventions
+- Si impossible à déterminer → null
+
+Règles pour doc_type_corrige — UNIQUEMENT une de ces valeurs exactes :
+  RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, AUTRE
+- PV_AG = procès-verbal d'assemblée générale UNIQUEMENT. Un PV_AG contient obligatoirement les RÉSULTATS de votes (tantièmes pour/contre/abstention, "résolution adoptée/rejetée"). Sans résultats de votes → ce n'est PAS un PV_AG.
+- COURRIER = convocation à l'AG, ordre du jour, feuille de présence, procuration, projet de résolutions. ATTENTION : un ORDRE DU JOUR n'est JAMAIS un PV_AG même s'il liste des projets de résolutions — un OJ contient "il sera proposé de voter..." ou liste les résolutions SANS résultats de vote.
+- Un brouillon ou projet de PV ("projet PV", "baze PV") reste PV_AG s'il contient des résultats de votes, sinon → COURRIER.
+- Un rapport du conseil syndical → AUTRE (pas PV_AG)
+- Un compte-rendu rédigé avec les résultats des votes → PV_AG
+- Un contrat (syndic, maintenance, assurance, prestation) → CONTRAT
+- Un règlement intérieur, règlement de copropriété → RCP
+- Un état daté, pré-état daté, questionnaire acquisition, notification de vente → MUTATION
+- Un plan d'architecte, plan technique, DOE, schéma d'implantation → PLAN
+- Un guide pratique, liste de copropriétaires, annexe diverse → AUTRE
+- Un devis, une facture, un budget → DEVIS, FACTURE, BUDGET respectivement
+- Une annexe au contrat → CONTRAT
+
+Règles pour le statut :
+- Date d'échéance future → "actif"
+- Date d'échéance passée → "expire"
+- Mentions "résilié", "résiliation", "annulé" → "resilie"
+- Mentions "clos", "clôturé", "indemnisé" → "cloture"
+- Dossier en cours de traitement → "en_cours"
+- Impossible à déterminer → null
+
+Texte du document :
+{texte}"""
+
+
+
+# Client Bedrock thread-safe (un par thread)
+_thread_local = threading.local()
+
+def _get_bedrock():
+    if not hasattr(_thread_local, "client"):
+        _thread_local.client = boto3.client("bedrock-runtime", region_name=AWS_REGION)
+    return _thread_local.client
+
+
+def extract_json(text):
+    """Extrait le premier objet JSON valide d'un texte (ignore le bavardage Haiku après le JSON)."""
+    text = text.strip()
+    text = re.sub(r"^```json?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    # Trouver le premier '{' et son '}' fermant correspondant
+    start = text.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("No JSON object found", text, 0)
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if escape:
+            escape = False
+            continue
+        if c == '\\':
+            escape = True
+            continue
+        if c == '"' and not escape:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start:i+1])
+    raise json.JSONDecodeError("Unterminated JSON object", text, start)
+
+# Cache pour reprises (thread-safe)
+cache = {}
+_cache_lock = threading.Lock()
+if os.path.exists(CACHE_FILE):
+    with open(CACHE_FILE, "r", encoding="utf-8") as f:
+        cache = json.load(f)
+    print(f"  → {len(cache)} documents en cache (reprise)")
+
+stats = {"llm_calls": 0, "cache_hits": 0, "errors": 0, "too_short": 0}
+_stats_lock = threading.Lock()
+
+FALLBACK_RESULT = {
+    "date_document": None, "annee": None, "sous_type": None,
+    "parties_concernees": [], "statut": None,
+    "montant_principal": None, "resume_une_ligne": None
 }
 
-def tag_themes(text):
-    """Retourne la liste des thèmes matchés pour un texte donné."""
-    text_lower = text.lower()
-    matched_themes = []
-    theme_scores = {}
-    
-    for theme_name, config in THEMES.items():
-        matches = 0
-        for keyword in config["keywords"]:
-            if keyword.lower() in text_lower:
-                matches += 1
-        
-        if matches >= config["min_matches"]:
-            matched_themes.append(theme_name)
-            theme_scores[theme_name] = matches
-    
-    return matched_themes, theme_scores
+
+def normalize_sous_type(st):
+    """Normalisation mécanique du sous_type — règles de forme, pas de sémantique.
+    Corrige les problèmes récurrents que le prompt ne suffit pas à éviter."""
+    if not st or st == "null":
+        return None
+    # Majuscule + strip
+    st = st.strip().upper()
+    # Accents → ASCII
+    st = unicodedata.normalize("NFD", st)
+    st = "".join(c for c in st if unicodedata.category(c) != "Mn")
+    # Espaces et tirets → underscores
+    st = st.replace(" ", "_").replace("-", "_")
+    # Supprimer underscores multiples
+    st = re.sub(r"_+", "_", st).strip("_")
+    # Composite "X, Y, Z" → premier seulement
+    if "," in st:
+        st = st.split(",")[0].strip().strip("_")
+    return st or None
+
+
+def extract_metadata(source_file, doc_type, texte):
+    """Appelle Haiku pour extraire les métadonnées. Thread-safe via locks."""
+    with _cache_lock:
+        if source_file in cache:
+            with _stats_lock:
+                stats["cache_hits"] += 1
+            return cache[source_file]
+
+    if len(texte.strip()) < 100:
+        with _stats_lock:
+            stats["too_short"] += 1
+        with _cache_lock:
+            cache[source_file] = FALLBACK_RESULT
+        return FALLBACK_RESULT
+
+    prompt = METADATA_PROMPT.format(doc_type=doc_type, texte=texte[:3500])
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 400,
+        "messages": [{"role": "user", "content": prompt}]
+    })
+
+    bedrock_client = _get_bedrock()
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = bedrock_client.invoke_model(
+                modelId=LLM_MODEL, body=body,
+                contentType="application/json", accept="application/json"
+            )
+            result_text = json.loads(response["body"].read())["content"][0]["text"].strip()
+            metadata = extract_json(result_text)
+            # Normalisation mécanique du sous_type
+            if metadata.get("sous_type"):
+                metadata["sous_type"] = normalize_sous_type(metadata["sous_type"])
+            with _stats_lock:
+                stats["llm_calls"] += 1
+            with _cache_lock:
+                cache[source_file] = metadata
+            return metadata
+
+        except json.JSONDecodeError as e:
+            # JSON invalide — pas de retry, le modèle redonnerait la même chose
+            tqdm.write(f"  ⚠️ JSON invalide {os.path.basename(source_file)}: {e}")
+            break
+
+        except Exception as e:
+            err_str = str(e)
+            if "ThrottlingException" in err_str:
+                wait = min(2 ** attempt, 15)
+                time.sleep(wait)
+                continue
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(1)
+                continue
+            tqdm.write(f"  ⚠️ Erreur {os.path.basename(source_file)}: {e}")
+            break
+
+    with _stats_lock:
+        stats["errors"] += 1
+    with _cache_lock:
+        cache[source_file] = FALLBACK_RESULT
+    return FALLBACK_RESULT
+
 
 # =====================================================
-# Exécution
+# Exécution parallèle
 # =====================================================
-# Nettoyage de l'ancien fichier d'enrichissement
-if os.path.exists(OUTPUT_FILE):
-    print(f"Nettoyage de l'ancien fichier : {OUTPUT_FILE}")
-    os.remove(OUTPUT_FILE)
+print(f"\nExtraction des métadonnées pour {len(docs)} documents ({MAX_WORKERS} workers)...\n")
 
-print("=" * 50)
-print("ENRICHISSEMENT THÉMATIQUE DES CHUNKS")
-print("=" * 50)
+start_time = time.time()
+results = {}  # source_file → record
 
-# Compter les lignes
-with open(INPUT_FILE, "r", encoding="utf-8") as f:
-    total = sum(1 for _ in f)
+def process_one(source_file, doc_info):
+    texte = build_extraction_window(doc_info["chunks"], doc_info["doc_type"])
+    metadata = extract_metadata(source_file, doc_info["doc_type"], texte)
+    return source_file, {
+        "source_file": source_file,
+        "copropriete": doc_info["copropriete"],
+        "nom_fichier": doc_info["nom_fichier"],
+        "doc_type": doc_info["doc_type"],
+        "total_chunks": doc_info["total_chunks"],
+        "premier_texte": doc_info["chunks"][0]["text"][:500] if doc_info["chunks"] else "",
+        **metadata
+    }
 
-print(f"\n{total} chunks à enrichir\n")
+with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    futures = {
+        executor.submit(process_one, sf, di): sf
+        for sf, di in docs.items()
+    }
 
-theme_global_stats = {}
-chunks_sans_theme = 0
+    pbar = tqdm(total=len(futures), desc="Metadata")
+    cache_save_counter = 0
 
-with open(INPUT_FILE, "r", encoding="utf-8") as fin, \
-     open(OUTPUT_FILE, "w", encoding="utf-8") as fout:
-    
-    for line in tqdm(fin, total=total, desc="Enrichissement"):
-        chunk = json.loads(line)
-        
-        # Tagger les thèmes
-        themes, scores = tag_themes(chunk["text"])
-        
-        chunk["themes"] = themes
-        chunk["theme_scores"] = scores
-        
-        if not themes:
-            chunks_sans_theme += 1
-        
-        for t in themes:
-            theme_global_stats[t] = theme_global_stats.get(t, 0) + 1
-        
-        fout.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+    for future in as_completed(futures):
+        sf, record = future.result()
+        results[sf] = record
+        pbar.update(1)
+
+        # Sauvegarder le cache tous les 50 documents
+        cache_save_counter += 1
+        if cache_save_counter % 50 == 0:
+            with _cache_lock:
+                with open(CACHE_FILE, "w", encoding="utf-8") as fc:
+                    json.dump(cache, fc, ensure_ascii=False)
+
+    pbar.close()
+
+# =====================================================
+# Consolidation des sous_types par Haiku
+# =====================================================
+# Collecter tous les sous_types uniques avec leur fréquence
+sous_type_counts = {}
+for r in results.values():
+    st = r.get("sous_type")
+    if st:
+        sous_type_counts[st] = sous_type_counts.get(st, 0) + 1
+
+if sous_type_counts:
+    print(f"\n⏳ Consolidation des {len(sous_type_counts)} sous_types uniques via Haiku...")
+
+    consolidation_prompt = f"""Tu es un expert en gestion de copropriété.
+Voici une liste de sous-types de documents extraits automatiquement, avec leur fréquence d'apparition.
+Certains sont des variantes, synonymes ou formes singulier/pluriel du même concept.
+
+Produis un mapping JSON qui regroupe les variantes sous la forme canonique la plus courte et standard.
+Règles :
+- Garder la forme la PLUS COURTE et la plus standard du domaine syndic/copro
+- TOUJOURS au singulier sauf si le pluriel est la forme standard (CHARGES, ESPACES_VERTS, FONDS_TRAVAUX)
+- Ne mapper que les vrais synonymes/variantes. Ne PAS fusionner des concepts différents.
+- Les termes déjà canoniques → se mapper vers eux-mêmes
+- Format : un objet JSON plat {{"variante": "canonique", ...}}
+
+Sous-types à consolider :
+{json.dumps(sous_type_counts, indent=2, ensure_ascii=False)}"""
+
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 4000,
+        "messages": [{"role": "user", "content": consolidation_prompt}]
+    })
+
+    try:
+        bedrock_client = boto3.client("bedrock-runtime", region_name=AWS_REGION)
+        # Retry pour throttling et erreurs réseau
+        for attempt in range(3):
+            try:
+                response = bedrock_client.invoke_model(
+                    modelId=LLM_MODEL, body=body,
+                    contentType="application/json", accept="application/json"
+                )
+                result_text = json.loads(response["body"].read())["content"][0]["text"].strip()
+                mapping = extract_json(result_text)
+                break
+            except json.JSONDecodeError:
+                raise
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
+
+        # Appliquer le mapping
+        remapped = 0
+        for sf, record in results.items():
+            st = record.get("sous_type")
+            if st and st in mapping and mapping[st] != st:
+                record["sous_type"] = mapping[st]
+                remapped += 1
+
+        # Rapport
+        merges = {}
+        for old, new in mapping.items():
+            if old != new:
+                merges.setdefault(new, []).append(old)
+        if merges:
+            print(f"  ✅ {remapped} documents remappés, {len(merges)} fusions :")
+            for canonical, variants in sorted(merges.items()):
+                print(f"    {canonical:25s} ← {', '.join(variants)}")
+        else:
+            print(f"  ✅ Aucune fusion nécessaire")
+
+    except Exception as e:
+        print(f"  ⚠️ Consolidation échouée ({e}) — sous_types non fusionnés")
+
+# =====================================================
+# Déduplication : groupement par document logique
+# =====================================================
+print(f"\n⏳ Déduplication des documents par groupe logique...")
+
+# Grouper par (copropriete, doc_type_corrige, annee)
+groups = {}
+for sf, record in results.items():
+    dt = record.get("doc_type_corrige") or record.get("doc_type", "AUTRE")
+    annee = record.get("annee")
+    copro = record.get("copropriete", "")
+    if annee:
+        key = (copro, dt, annee)
+        groups.setdefault(key, []).append(sf)
+
+# Groupes avec doublons potentiels (>1 fichier)
+multi_groups = {k: v for k, v in groups.items() if len(v) > 1}
+print(f"  {len(multi_groups)} groupes avec >1 fichier (total {sum(len(v) for v in multi_groups.values())} fichiers)")
+
+# Initialiser tous les documents comme référence unique (groupe = eux-mêmes)
+for sf, record in results.items():
+    dt = record.get("doc_type_corrige") or record.get("doc_type", "AUTRE")
+    annee = record.get("annee")
+    copro = record.get("copropriete", "")
+    if annee:
+        record["groupe_doc"] = f"{dt}_{annee}_{copro}"
+    else:
+        record["groupe_doc"] = f"{dt}_NODATE_{copro}"
+    record["est_reference"] = True
+
+# Pour chaque groupe multi-fichiers, demander à Haiku de trier
+DEDUP_PROMPT = """Tu es un expert en gestion documentaire de copropriété.
+Voici un groupe de fichiers du même type, même année, même copropriété.
+Identifie les VRAIS doublons (copies du même document) et les documents DISTINCTS (sujets différents).
+
+ATTENTION : dans un même type/année, il y a souvent PLUSIEURS documents DIFFÉRENTS.
+Par exemple :
+- 3 ventes à 3 copropriétaires différents (VENTE JURADO ≠ VENTE KNEITZ) → DISTINCTS
+- 3 contrats pour 3 équipements différents (ascenseur ≠ portes ≠ VMC) → DISTINCTS
+- 3 états datés pour 3 ventes différentes (Hoche ≠ Suzan ≠ Foucher) → DISTINCTS
+- 3 factures de fournisseurs différents → DISTINCTS
+- 3 plans d'étages différents (N02, N04, N05) → DISTINCTS
+- 2 constats de sinistres différents (ADICEBM ≠ CRUET) → DISTINCTS
+- 6 devis numérotés différemment (WY752, WY753...) pour des emplacements différents → DISTINCTS
+
+Sont des COPIES/DOUBLONS uniquement quand :
+- Même document en PDF + DOCX (ex: "Contrat syndic 2023.pdf" et "Contrat syndic 2023.docx")
+- Version brouillon + version finale (ex: "BAZ PV AG.docx" et "PV AG 2014.pdf")
+- Versions numérotées du même document (ex: "V1.docx" et "V2.docx")
+
+Groupe : {doc_type} {annee} — {n} fichiers :
+{file_list}
+
+Réponds UNIQUEMENT par un objet JSON valide :
+{{
+  "reference": "nom_du_fichier_reference (parmi les copies/brouillons, celui qui est le plus complet)",
+  "copies": ["copie1", "copie2"],
+  "brouillons": ["projet_ou_baze"],
+  "distincts": ["fichier_sur_un_sujet_different"]
+}}
+
+Critères pour la référence (uniquement parmi les copies du MÊME document) :
+- PDF signé ("SIGNE", "FINAL") prime toujours
+- Sinon le fichier le plus long (plus de chunks)
+- PDF prime sur DOCX
+- Si TOUS les fichiers sont distincts, choisis le premier comme reference et mets tous les autres dans distincts"""
+
+bedrock_client = boto3.client("bedrock-runtime", region_name=AWS_REGION)
+dedup_ok = 0
+dedup_err = 0
+
+for (copro, dt, annee), source_files in multi_groups.items():
+    # Construire la liste pour Haiku — nom + chunks + résumé pour distinguer les sujets
+    file_lines = []
+    for sf in source_files:
+        rec = results[sf]
+        resume = rec.get("resume_une_ligne") or ""
+        if resume:
+            file_lines.append(f"  - {rec['nom_fichier']} ({rec.get('total_chunks', '?')} chunks) → {resume[:100]}")
+        else:
+            file_lines.append(f"  - {rec['nom_fichier']} ({rec.get('total_chunks', '?')} chunks)")
+
+    prompt = DEDUP_PROMPT.format(
+        doc_type=dt, annee=annee, n=len(source_files),
+        file_list="\n".join(file_lines)
+    )
+
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 1000,
+        "messages": [{"role": "user", "content": prompt}]
+    })
+
+    try:
+        # Retry pour throttling et erreurs réseau
+        for attempt in range(3):
+            try:
+                response = bedrock_client.invoke_model(
+                    modelId=LLM_MODEL, body=body,
+                    contentType="application/json", accept="application/json"
+                )
+                result_text = json.loads(response["body"].read())["content"][0]["text"].strip()
+                dedup_result = extract_json(result_text)
+                break
+            except json.JSONDecodeError:
+                raise  # pas de retry sur JSON invalide
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
+
+        ref_name = dedup_result.get("reference", "")
+        copies = set(dedup_result.get("copies", []))
+        brouillons = set(dedup_result.get("brouillons", []))
+        distincts = set(dedup_result.get("distincts", []))
+        groupe_id = f"{dt}_{annee}_{copro}"
+
+        for sf in source_files:
+            rec = results[sf]
+            nom = rec["nom_fichier"]
+            rec["groupe_doc"] = groupe_id
+
+            if nom in distincts:
+                # Document distinct → son propre groupe
+                rec["groupe_doc"] = f"{dt}_{annee}_{copro}_{nom[:20]}"
+                rec["est_reference"] = True
+            elif nom == ref_name:
+                rec["est_reference"] = True
+            else:
+                rec["est_reference"] = False
+
+        dedup_ok += 1
+
+    except Exception as e:
+        dedup_err += 1
+        tqdm.write(f"  ⚠️ Dédup échoué {dt} {annee}: {e}")
+
+non_ref = sum(1 for r in results.values() if not r.get("est_reference", True))
+print(f"  ✅ {dedup_ok} groupes traités, {dedup_err} erreurs")
+print(f"  📊 {non_ref} documents marqués comme copies/brouillons")
+
+# Écriture finale (ordre stable par source_file)
+with open(OUTPUT_FILE, "w", encoding="utf-8") as fout:
+    for sf in docs:
+        if sf in results:
+            fout.write(json.dumps(results[sf], ensure_ascii=False) + "\n")
+
+# Sauvegarde finale du cache
+with _cache_lock:
+    with open(CACHE_FILE, "w", encoding="utf-8") as fc:
+        json.dump(cache, fc, ensure_ascii=False)
+
+elapsed = time.time() - start_time
+
 
 # =====================================================
 # Rapport
 # =====================================================
-print("\n" + "=" * 50)
-print("RAPPORT D'ENRICHISSEMENT")
-print("=" * 50)
-print(f"\nChunks sans thème identifié : {chunks_sans_theme} / {total}")
-print(f"\nDistribution des thèmes :")
-for theme, count in sorted(theme_global_stats.items(), key=lambda x: -x[1]):
-    print(f"  {theme:30s} : {count:5d} chunks")
-print(f"\n📁 Chunks enrichis : {OUTPUT_FILE}")
+all_records = []
+with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
+    for line in f:
+        all_records.append(json.loads(line))
+
+with_date = sum(1 for r in all_records if r.get("date_document"))
+with_sous_type = sum(1 for r in all_records if r.get("sous_type"))
+with_statut = sum(1 for r in all_records if r.get("statut"))
+with_montant = sum(1 for r in all_records if r.get("montant_principal"))
+reclassified = sum(1 for r in all_records if r.get("doc_type_corrige") and r["doc_type_corrige"] != r["doc_type"])
+
+print("\n" + "=" * 60)
+print("RAPPORT D'EXTRACTION METADATA")
+print("=" * 60)
+print(f"\nTerminé en {elapsed:.0f}s ({elapsed/60:.1f} min) — {MAX_WORKERS} workers")
+print(f"Documents traités : {len(all_records)}")
+print(f"  Appels Haiku : {stats['llm_calls']}")
+print(f"  Cache hits   : {stats['cache_hits']}")
+print(f"  Trop courts  : {stats['too_short']}")
+print(f"  Erreurs      : {stats['errors']}")
+print(f"\nCouverture des champs :")
+print(f"  date_document    : {with_date}/{len(all_records)} ({100*with_date/len(all_records):.0f}%)")
+print(f"  sous_type        : {with_sous_type}/{len(all_records)} ({100*with_sous_type/len(all_records):.0f}%)")
+print(f"  statut           : {with_statut}/{len(all_records)} ({100*with_statut/len(all_records):.0f}%)")
+print(f"  montant_principal: {with_montant}/{len(all_records)} ({100*with_montant/len(all_records):.0f}%)")
+
+# Reclassification doc_type
+print(f"\n📊 Reclassification doc_type par Haiku :")
+print(f"  {reclassified}/{len(all_records)} documents reclassifiés ({100*reclassified/len(all_records):.0f}%)")
+reclass_details = {}
+for r in all_records:
+    orig = r["doc_type"]
+    corr = r.get("doc_type_corrige") or orig
+    if orig != corr:
+        key = f"{orig} → {corr}"
+        reclass_details[key] = reclass_details.get(key, 0) + 1
+if reclass_details:
+    for key, count in sorted(reclass_details.items(), key=lambda x: -x[1]):
+        print(f"    {key:35s} : {count}")
+
+# Répartition doc_type_corrige
+corr_types = {}
+for r in all_records:
+    ct = r.get("doc_type_corrige") or r["doc_type"]
+    corr_types[ct] = corr_types.get(ct, 0) + 1
+print(f"\nRépartition doc_type_corrige (post-Haiku) :")
+for ct, count in sorted(corr_types.items(), key=lambda x: -x[1]):
+    print(f"  {ct:25s} : {count}")
+
+# Répartition sous-types
+sous_types = {}
+for r in all_records:
+    st_val = r.get("sous_type") or "null"
+    sous_types[st_val] = sous_types.get(st_val, 0) + 1
+print(f"\nRépartition sous-types :")
+for st_val, count in sorted(sous_types.items(), key=lambda x: -x[1]):
+    print(f"  {st_val:25s} : {count}")
+
+# Répartition statuts
+statuts = {}
+for r in all_records:
+    s = r.get("statut") or "null"
+    statuts[s] = statuts.get(s, 0) + 1
+print(f"\nRépartition statuts :")
+for s, count in sorted(statuts.items(), key=lambda x: -x[1]):
+    print(f"  {s:25s} : {count}")
+
+# Déduplication
+refs = sum(1 for r in all_records if r.get("est_reference", True))
+copies = sum(1 for r in all_records if not r.get("est_reference", True))
+groupes = len(set(r.get("groupe_doc", r["source_file"]) for r in all_records))
+print(f"\n📋 Déduplication :")
+print(f"  Documents référence    : {refs}")
+print(f"  Copies/brouillons      : {copies}")
+print(f"  Groupes logiques       : {groupes}")
+
+# Détail des groupes avec copies
+groups_with_copies = {}
+for r in all_records:
+    g = r.get("groupe_doc", "")
+    groups_with_copies.setdefault(g, []).append((r["nom_fichier"], r.get("est_reference", True)))
+for g, members in sorted(groups_with_copies.items()):
+    if len(members) > 1 and any(not ref for _, ref in members):
+        print(f"\n  Groupe: {g}")
+        for nom, is_ref in members:
+            tag = "✅ REF" if is_ref else "  copie"
+            print(f"    {tag}  {nom}")
+
+print(f"\n📁 Métadonnées : {OUTPUT_FILE}")
+
+# Coût estimé
+cost = stats["llm_calls"] * 1000 * 0.80 / 1_000_000  # ~1000 tokens input, $0.80/MTok
+print(f"💰 Coût estimé Haiku : ${cost:.2f}")
+
 ```
 
-**Lance :** `python 04_enrichissement.py`
+**Lance :** `python 04_metadata_documents.py`
+
+**Sortie :** `documents_metadata.jsonl` — un JSON par ligne, un par document source. Exemple :
+```json
+{"source_file": "RESIDENCE_LILAS/Contrats/MRI_Generali_2023.pdf", "copropriete": "RESIDENCE_LILAS", "doc_type": "CONTRAT", "doc_type_corrige": "CONTRAT", "date_document": "2023-03-15", "annee": 2023, "sous_type": "MRI", "parties_concernees": ["Generali", "Syndic NCG"], "statut": "actif", "montant_principal": 8500.00, "dossier_lie": null, "groupe_doc": "CONTRAT_2023_RESIDENCE_LILAS", "est_reference": true, "resume_une_ligne": "Contrat assurance multirisque immeuble Generali - Résidence des Lilas"}
+```
+
+**Coût estimé :** ~1500 docs × ~1000 tokens input (passe 1) + ~$0.05 (consolidation + dédup) × $0.80/MTok ≈ **~$1.25**
+
+> **⚠️ Limites connues du champ `statut` :** un contrat résilié par courrier séparé ne sera pas détecté comme "résilié" dans le texte du contrat lui-même. Le statut est inféré par heuristique (date d'échéance, mots-clés). Couverture attendue : ~40-60%. Le fallback au pipeline complet (sans pré-filtrage) couvre les cas non déterminés.
 
 ---
 
@@ -1624,7 +2247,7 @@ from tqdm import tqdm
 # =====================================================
 # CONFIGURATION
 # =====================================================
-INPUT_FILE = r"G:\Mon Drive\...\chunks_enrichis.jsonl"    # ← MODIFIER
+INPUT_FILE = r"G:\Mon Drive\...\chunks_copro.jsonl"    # ← MODIFIER
 OUTPUT_FILE = r"G:\Mon Drive\...\chunks_avec_embeddings.jsonl"  # ← MODIFIER
 AWS_REGION = "eu-west-1"
 
@@ -1807,7 +2430,7 @@ print(f"📁 {OUTPUT_FILE}")
 
 ---
 
-## Étape 6 — Stockage dans PostgreSQL + pgvector
+## Étape 6 — Stockage dans PostgreSQL + pgvector + table documents
 
 ### 6.1 Créer l'instance RDS
 
@@ -1936,6 +2559,36 @@ cur.execute("""
 """)
 print("✅ Index GIN full-text (BM25) créé")
 
+# =====================================================
+# Table documents — métadonnées document-level (étape 4b)
+# =====================================================
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS documents (
+        source_file         TEXT PRIMARY KEY,
+        copropriete         TEXT NOT NULL,
+        nom_fichier         TEXT NOT NULL,
+        doc_type            TEXT NOT NULL,
+        doc_type_corrige    TEXT,
+        date_document       DATE,
+        annee               INTEGER,
+        sous_type           TEXT,
+        statut              TEXT,
+        montant_principal   NUMERIC,
+        parties_concernees  TEXT[],
+        resume              TEXT,
+        total_chunks        INTEGER,
+        premier_texte       TEXT
+    );
+""")
+print("✅ Table 'documents' créée")
+
+cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_copro ON documents (copropriete);")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_doctype ON documents (doc_type);")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_annee ON documents (annee);")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_statut ON documents (statut);")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_soustype ON documents (sous_type);")
+print("✅ Index sur documents créés (copro, doc_type, annee, statut, sous_type)")
+
 cur.close()
 conn.close()
 print("\n✅ Base de données initialisée avec succès")
@@ -1953,6 +2606,7 @@ Crée `06b_load_db.py` :
 Lance : python 06b_load_db.py
 """
 import json
+import os
 import psycopg2
 from psycopg2.extras import execute_values
 from tqdm import tqdm
@@ -2053,6 +2707,70 @@ conn.commit()
 updated = cur.rowcount
 print(f"✅ Index full-text peuplé pour {updated} chunks")
 
+# =====================================================
+# Chargement de la table documents (métadonnées étape 4b)
+# =====================================================
+METADATA_FILE = r"G:\Mon Drive\...\documents_metadata.jsonl"  # ← MODIFIER (sortie de 04)
+
+if os.path.exists(METADATA_FILE):
+    print("\n⏳ Chargement des métadonnées document-level...")
+    
+    cur.execute("TRUNCATE TABLE documents;")  # Clean reload à chaque fois
+    conn.commit()
+    
+    doc_batch = []
+    with open(METADATA_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            rec = json.loads(line)
+            row = (
+                rec["source_file"],
+                rec["copropriete"],
+                rec["nom_fichier"],
+                rec["doc_type"],
+                rec.get("date_document"),     # peut être null
+                rec.get("annee"),
+                rec.get("sous_type"),
+                rec.get("statut"),
+                rec.get("montant_principal"),
+                rec.get("parties_concernees", []),
+                rec.get("resume_une_ligne"),
+                rec.get("total_chunks"),
+                rec.get("premier_texte", "")[:500]
+            )
+            doc_batch.append(row)
+    
+    execute_values(cur, """
+        INSERT INTO documents 
+        (source_file, copropriete, nom_fichier, doc_type,
+         date_document, annee, sous_type, statut, montant_principal,
+         parties_concernees, resume, total_chunks, premier_texte)
+        VALUES %s
+        ON CONFLICT (source_file) DO UPDATE SET
+            doc_type = EXCLUDED.doc_type,
+            date_document = EXCLUDED.date_document,
+            annee = EXCLUDED.annee,
+            sous_type = EXCLUDED.sous_type,
+            statut = EXCLUDED.statut,
+            montant_principal = EXCLUDED.montant_principal,
+            parties_concernees = EXCLUDED.parties_concernees,
+            resume = EXCLUDED.resume,
+            total_chunks = EXCLUDED.total_chunks,
+            premier_texte = EXCLUDED.premier_texte
+    """, doc_batch)
+    conn.commit()
+    
+    cur.execute("SELECT COUNT(*) FROM documents;")
+    doc_count = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM documents WHERE annee IS NOT NULL;")
+    with_date = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM documents WHERE statut IS NOT NULL;")
+    with_statut = cur.fetchone()[0]
+    
+    print(f"✅ {doc_count} documents chargés ({with_date} avec date, {with_statut} avec statut)")
+else:
+    print(f"\n⚠️ {METADATA_FILE} introuvable — table documents non peuplée.")
+    print(f"  Lance d'abord : python 04_metadata_documents.py")
+
 cur.close()
 conn.close()
 
@@ -2069,30 +2787,32 @@ C'est le script final qui permet de poser des questions et obtenir des réponses
 
 **Fonctionnalités du pipeline de retrieval :**
 - Interface web conversationnelle multi-turn avec `st.chat_input` / `st.chat_message`
-- **14 types de documents** dans `DOC_TYPE_KEYWORDS` : RCP, PV_AG, CONTRAT, BUDGET, DIAGNOSTIC, ENTRETIEN, SINISTRE, COMPTABILITE — détection automatique dans la requête
-- **`doc_type` détecté = boost dynamique, pas filtre** : un sinistre apparaît dans des constats (SINISTRE), des PVs (PV_AG), des courriers (COURRIER), de la compta (COMPTABILITE). Le `doc_type` détecté est injecté comme bonus **dynamique** dans le score RRF : 0.03 en inventaire (fort, pour que les SINISTRE dominent le top), 0.01 en mode équilibré, 0.005 en mode ciblé.
-- **Pipeline de retrieval hybride en 4 étapes** :
-  1. **SQL** : similarité vectorielle (pgvector cosine) + BM25 (`ts_rank` français) → classements indépendants
-  2. **SQL** : **Reciprocal Rank Fusion (RRF)** — fusionne par rang (pas par score). Formule : `score = 1/(60+vec_rank) + 1/(60+bm25_rank) + theme_boost + doc_type_boost`
+- **Routeur de requête Haiku (v4)** : un appel Haiku (~300ms, $0.0002/requête) classifie chaque requête et retourne en un seul JSON : la stratégie (inventaire/ciblé/équilibré), le `doc_type` pour le boost RRF, les filtres structurels (année, sous-type, statut), et la détection de suivi conversationnel. Remplace toutes les listes de mots-clés des versions précédentes.
+- **`doc_type` détecté = boost dynamique, pas filtre** : le `doc_type` retourné par Haiku est injecté comme bonus **dynamique** dans le score RRF : 0.03 en inventaire, 0.01 en mode équilibré, 0.005 en mode ciblé.
+- **Pipeline de retrieval hybride en 5 étapes** :
+  0. **Pré-filtrage document** (conditionnel) : si Haiku détecte des contraintes factuelles (année, sous-type, statut), un CTE SQL pré-sélectionne les `source_file` éligibles via la table `documents` (utilise `COALESCE(doc_type_corrige, doc_type)` pour bénéficier des corrections Haiku). Si 0 ou >50 documents → fallback au pipeline complet. Zone idéale : 1 à 20 documents pré-sélectionnés. Protégé par `try/except` → si la table `documents` n'existe pas, fallback silencieux.
+  1. **SQL** : similarité vectorielle (pgvector cosine) + BM25 (`ts_rank` français) → classements indépendants (avec `WHERE source_file IN (pre_filtre)` si activé)
+  2. **SQL** : **Reciprocal Rank Fusion (RRF)** — fusionne par rang (pas par score). Formule : `score = 1/(60+vec_rank) + 1/(60+bm25_rank) + doc_type_boost`
   3. **SQL** : **Diversité par source** (`PARTITION BY source_file`) — empêche un document volumineux de monopoliser les résultats. Hard cap dynamique par type de requête (inventaire=2/source, ciblé=8/source, défaut=3/source)
-  4. **Python** : **FlashRank reranking** (cross-encoder `ms-marco-MultiBERT-L-12`) — re-score chaque paire (requête, chunk) pour un classement final précis. ~50-100ms de latence.
-- **Stratégie de retrieval automatique** : détecte si la requête est large (inventaire) ou ciblée (document), ajuste `chunks_per_source`, `doc_type_boost` et `max_chunks_llm` sans intervention utilisateur
-  - **Détection temporelle** (v2) : si la requête mentionne une plage de >2 ans (`"charges de 2022 à 2025"`, `"depuis 2020"`) → force automatiquement la stratégie inventaire (80 chunks). Mots-clés ajoutés : "évolution", "tendance", "progression".
-- **Quota minimum RCP** (v2) : après reranking, si <3 chunks RCP dans le top, des chunks RCP sont remontés du pool inférieur en éjectant les derniers non-RCP. Évite que les RCP soient noyés par les PV_AG.
-- **Sources PRIMAIRES vs CONTEXTUELLES** : chaque source envoyée à Claude est marquée `[PRIMAIRE]` (SINISTRE, ENTRETIEN, COMPTABILITE, DEVIS, FACTURE — événements distincts) ou `[CONTEXTUEL]` (PV_AG, RCP, CONTRAT — enrichissement). Le prompt exige de couvrir CHAQUE source primaire pour les inventaires.
+  4. **Python** : **FlashRank reranking adaptatif** (cross-encoder `ms-marco-MultiBERT-L-12`) — 3 améliorations pour protéger les chunks OCR bruités :
+     - **(D) Bypass FlashRank si pré-filtrage actif** : quand Haiku pré-sélectionne les documents (inventaire sinistres, etc.), FlashRank est court-circuité. Le RRF suffit car les bons docs sont déjà sélectionnés, et FlashRank pénalise lourdement les formulaires manuscrits/scans dégradés. Cap dynamique par source appliqué sur l'ordre RRF.
+     - **(A) Injection métadonnées** : quand FlashRank est actif, chaque passage reçoit un en-tête structuré `[DOC_TYPE] nom_fichier_nettoyé` avant le texte OCR. Le cross-encoder voit des termes propres ("Constat amiable", "SINISTRE", "LEMEAU") même quand le contenu est bruité.
+     - **(B) Score hybride RRF × FlashRank** : au lieu d'un reranking pur (FlashRank remplace le RRF), le score final est `α × rrf_norm + (1-α) × flashrank_norm` avec `RERANK_RRF_WEIGHT=0.4`. Empêche les chutes brutales (un chunk rang #3 RRF ne peut plus tomber à #68 post-rerank). ~50-100ms de latence.
+- **Quota minimum RCP** : après reranking, si <3 chunks RCP dans le top, des chunks RCP sont remontés du pool inférieur en éjectant les derniers non-RCP.
+- **Sources PRIMAIRES vs CONTEXTUELLES** : chaque source envoyée à Claude est marquée `[PRIMAIRE]` (SINISTRE, ENTRETIEN, COMPTABILITE, DEVIS, FACTURE — événements distincts) ou `[CONTEXTUEL]` (PV_AG, RCP, CONTRAT). Le prompt exige de couvrir CHAQUE source primaire pour les inventaires.
 - **Fenêtre d'analyse dynamique** : `MAX_CHUNKS_LLM` = 80 en inventaire (couverture max), 50 en équilibré/ciblé (réduits à 40/30 en mode démo). `TOP_K_DISPLAY = 20` sources principales + `TOP_K_EXTRA = 50` sources supplémentaires (repliées par défaut).
-- `max_tokens` adaptatif : 4096 si >30 chunks analysés, 2500 sinon (réduit pour la concision v2)
+- `max_tokens` adaptatif : 4096 si >30 chunks analysés, 2500 sinon
 - Timeout Bedrock augmenté à 300s (nécessaire pour 80 chunks ~120K chars)
-- **System prompt concis** (v2) : instruction explicite de concision (~400 mots max sauf inventaires), pas de reformulation de la question, pas de formules de politesse.
+- **System prompt concis** : instruction explicite de concision (~400 mots max sauf inventaires), pas de reformulation de la question, pas de formules de politesse.
 - Sidebar avec sliders : "Chunks analysés par l'IA", "Sources affichées", stratégie auto/manuelle
 
-**Multi-turn conversationnel (v2) :**
-- **UX chat** : `st.chat_input` (barre fixe en bas) + `st.chat_message` (bulles user/assistant) remplacent le `st.text_input` simple. Historique défilable avec sources attachées à chaque réponse.
-- **Historique LLM** : les 3 derniers tours de conversation (plafond ~4K tokens) sont injectés dans le tableau `messages` du payload Bedrock. Les chunks RAG restent prioritaires — l'historique ne cannibalise pas la fenêtre de contexte.
-- **Query expansion** : si la question est un suivi court (<60 chars, marqueurs comme "et en 2023 ?", "quel montant ?"), elle est enrichie avec la question précédente pour le retrieval vectoriel/BM25. L'utilisateur voit sa question courte mais le retrieval utilise une version enrichie. Badge visuel "🔗 Suite de la conversation".
-- **Prompt multi-turn** : instruction au LLM de ne pas répéter les infos déjà données dans les tours précédents.
+**Multi-turn conversationnel :**
+- **UX chat** : `st.chat_input` (barre fixe en bas) + `st.chat_message` (bulles user/assistant). Historique défilable avec sources attachées à chaque réponse.
+- **Historique LLM** : les 3 derniers tours de conversation (plafond ~4K tokens) sont injectés dans le tableau `messages` du payload Bedrock.
+- **Suivi conversationnel via Haiku (v4)** : le routeur Haiku reçoit la question précédente et détecte automatiquement si la question actuelle est un suivi. Si oui, il produit une `expanded_query` autonome (ex: "et en 2024 ?" → "liste des sinistres en 2024") utilisée pour le retrieval. Badge visuel "🔗 Suite de la conversation". Remplace l'ancienne détection par mots-clés (`expand_followup_query`).
+- **Prompt multi-turn** : instruction au LLM de ne pas répéter les infos déjà données.
 - **Bouton "🗑️ Nouvelle conversation"** dans la sidebar pour reset.
-- **Nettoyage mémoire** : les sources des anciens messages sont purgées de `session_state` pour rester léger ; seul le dernier message conserve ses sources complètes.
+- **Nettoyage mémoire** : les sources des anciens messages sont purgées de `session_state` ; seul le dernier message conserve ses sources complètes.
 
 **Sources en 2 sections (v2) :**
 - **Sources principales** (top 20) : affichées directement avec expanders, scores, rangs rerankés.
@@ -2117,10 +2837,36 @@ Le script `07_query_rag_ui.py` (version locale, pipeline complet avec FlashRank)
 
 > **Note :** L'absence de FlashRank en version cloud dégrade légèrement l'exhaustivité des requêtes inventaire (ex: sinistres). La version desktop avec FlashRank reste la référence pour les démonstrations nécessitant une couverture maximale.
 
-**Scripts de diagnostic du retrieval (v2) :**
-- **`diag_db_inventory.py`** : inventaire rapide de la base sans appel Bedrock. Vérifie : répartition doc_type, fichiers SINISTRE, chunks sans embedding, chunks sans text_search, doublons, total_chunks incohérent, fichiers sinistre mal classés. Usage : `python diag_db_inventory.py "NOM_COPRO"`
-- **`diag_retrieval.py`** : trace pas à pas du pipeline de retrieval (étapes A→H). Identifie exactement où chaque fichier sinistre est perdu (diversity, seuil, LIMIT, top N). Nécessite Bedrock pour l'embedding. Usage : `python diag_retrieval.py "requête" "NOM_COPRO"`
-- **`sim_retrieval.py`** : simulation comparative AVANT/APRÈS les corrections de retrieval. Compare les résultats avec les paramètres actuels vs proposés et vérifie les effets de bord sur d'autres requêtes. Usage : `python sim_retrieval.py "requête" "NOM_COPRO"`
+> **Diagnostic FlashRank vs OCR (cas LEMEAU) :** Le constat amiable DDE LEMEAU (formulaire manuscrit) atteignait rang #3 RRF mais chutait à #68 post-FlashRank — le cross-encoder pénalise le texte OCR bruité ("Examplaire pour deptine assuréte"). Les corrections A+B+D (bypass pré-filtrage, injection métadonnées, score hybride) ramènent ce chunk en top 5 (inventaire) ou top 20-25 (requête ciblée sans pré-filtrage). Impact sur tout le corpus : tous les constats amiables manuscrits, déclarations de sinistre, vieux scans bénéficient du même traitement.
+
+**Scripts de diagnostic :**
+- **`diag_dde_lemeau.py`** : diagnostic complet du constat LEMEAU — recherche dans chunks (par source_file, nom_fichier, full-text), table documents, exploration dossier TARIEL/SINISTRE. Usage : `python diag_dde_lemeau.py`
+- **`diag_scores_lemeau.py`** : calcule les scores retrieval détaillés (vec, BM25, RRF, rang global, rank_in_source, pré-filtrabilité) des chunks LEMEAU avec une requête donnée. Usage : `python diag_scores_lemeau.py "requête"`
+- **`diag_avant_apres_flashrank.py`** : validation AVANT/APRÈS des corrections FlashRank (A+B+D). Simule 3 classements (FlashRank pur, A+B hybride, D RRF pur) sur les mêmes candidats et compare les rangs des chunks sinistre surveillés. Usage : `python diag_avant_apres_flashrank.py "requête"`
+- **`diag_resolutions_ag.py`** : diagnostic couverture des résolutions AG — utilise la table `documents` pour identifier les PV_AG par année, simule le pré-filtrage, mesure l'impact du cap `rank_in_source` à différents niveaux, détaille la couverture par année et le contenu 📋résolution de chaque chunk. Usage : `python diag_resolutions_ag.py "requête"`
+- **`diag_metadata.py`** : diagnostic qualité des métadonnées extraites par Haiku (étape 4). Vérifie : couverture des champs, reclassifications doc_type, contrats syndic correctement taggés, convocations → COURRIER, factures liées à sinistres, intégrité des chunks (fix chunk_whole_document). Usage : `python diag_metadata.py`
+- **`diag_db_inventory.py`** : inventaire rapide de la base sans appel Bedrock. Usage : `python diag_db_inventory.py "NOM_COPRO"`
+- **`diag_retrieval.py`** : trace pas à pas du pipeline de retrieval (étapes A→H). Usage : `python diag_retrieval.py "requête" "NOM_COPRO"`
+- **`sim_retrieval.py`** : simulation comparative AVANT/APRÈS corrections de retrieval. Usage : `python sim_retrieval.py "requête" "NOM_COPRO"`
+
+**Intégration Airtable (dossiers sinistres) :**
+- **Table `dossiers`** : créée par `06a_init_db.py`, peuplée par `08_airtable_sync.py`. Contient ~100 champs par sinistre (réf Assynco, réf compagnie, lésé, expert, assureur, montants, dates, pipeline, alertes, textes libres).
+- **Sidebar dossiers** : affiche la liste des sinistres de la copropriété sélectionnée. Un clic sur un dossier l'injecte comme **chunk virtuel prioritaire** (Source 1) dans chaque requête RAG.
+- **`dossier_to_virtual_chunk()`** : convertit un enregistrement `dossiers` en bloc texte structuré (sections : header, alertes, identification, références, parties prenantes, pipeline, dates clés, financier, textes). Score RRF = 1.0 (priorité absolue). Injecté en tête des `search_results` avant le passage au LLM.
+- **Limites de troncature des champs texte** (mis à jour mars 2026) :
+  - `circonstances`, `dommages_description` : 1500 chars
+  - `conclusion_expert` : **2000 chars** (rapport d'expert complet)
+  - `commentaire_assureur`, `observations_declaration` : 1500 / 1000 chars
+  - `commentaire_assynco` : 1000 chars
+  - Commentaires relance, motif rappel : 600 chars
+- **Prompt dossier sélectionné** : si un dossier est sélectionné, le system prompt reçoit des instructions impératives de focus exclusif sur ce dossier (ne pas lister les autres), de citation exacte des données Airtable, et de proposition d'actions concrètes (relancer expert, vérifier prescription, etc.).
+
+**Persistance de session (chat_sessions) :**
+- **Table `chat_sessions`** : `session_id`, `chat_history` (JSONB), `selected_dossier`, `pending_query`, `updated_at`. Créée par `06a_init_db.py`.
+- **UUID de session** dans `st.query_params["sid"]` — survit à un refresh navigateur.
+- **Reconnexion automatique** : si `sid` présent dans l'URL au chargement, la conversation et le dossier sélectionné sont restaurés depuis la DB.
+- **Récupération de requête interrompue** : si `pending_query` non-NULL au chargement (requête lancée avant déconnexion mobile), un bouton "🔄 Relancer" permet de la resoumettre en 1 clic.
+- **TTL** : sessions purgées après 24h. Configurable en étendant la requête de nettoyage dans `06a_init_db.py`.
 
 **Configuration à modifier :**
 - `DB_HOST`, `DB_PASSWORD` : coordonnées de ton instance RDS
@@ -2128,10 +2874,54 @@ Le script `07_query_rag_ui.py` (version locale, pipeline complet avec FlashRank)
 - `LLM_MODEL_FAST` : `eu.anthropic.claude-haiku-4-5-20251001-v1:0` (mode démo)
 - `DEMO_3D_LINKS_FILE` : chemin vers le fichier `URL_SP_demo.txt` contenant les liens 3D de démo (format `MOT_CLE : URL`, un par ligne)
 - `CLIENT_LOGO_FILE` : chemin vers le logo du client (PNG/JPG, fond sombre ou transparent recommandé pour s'intégrer au header bleu marine). Le logo est affiché dans le bandeau header en haut à droite. Par défaut pointe vers `Logo_NCG.png` dans le même dossier que le script. Pour un autre client : remplacer le fichier et adapter le nom dans la constante `CLIENT_LOGO_FILE`. Mettre le chemin à `""` ou supprimer le fichier pour désactiver.
+- `RERANK_RRF_WEIGHT` : poids du score RRF dans le mix hybride RRF×FlashRank (défaut 0.4). 0=FlashRank pur, 1=RRF pur. Augmenter vers 0.5-0.6 si le corpus contient beaucoup de scans OCR bruités.
 
 **Lance :** `streamlit run 07_query_rag_ui.py`
 
 > **Première fois :** Streamlit ouvre automatiquement un onglet dans ton navigateur sur `http://localhost:8501`.
+
+---
+
+## Étape 8 — Synchronisation Airtable Assynco → PostgreSQL
+
+Cette étape alimente la table `dossiers` avec les données des sinistres issues de la base Airtable du courtier Assynco. Elle est indépendante du pipeline OCR/RAG et peut être relancée à tout moment pour mettre à jour les données.
+
+**Script :** `08_airtable_sync.py`
+
+**Mode :** UPSERT par `airtable_record_id` (insert si nouveau, update si existant)
+
+**Fonctionnement :**
+1. Appel API Airtable REST (v0) avec filtre par formule (`filterByFormula`) pour cibler les sinistres d'une copropriété
+2. Pagination automatique (100 records/page via le champ `offset`)
+3. Mapping champs Airtable → colonnes PostgreSQL (normalisation des types : dates ISO, booléens, listes → arrays)
+4. UPSERT dans la table `dossiers` via `ON CONFLICT (airtable_record_id) DO UPDATE`
+5. Calcul automatique de `date_prescription_estimate` (date_ouverture + 2 ans) si non fournie par Airtable
+6. Dérivation de `ref_assynco` depuis le champ `Name` du dossier Airtable (regex `A\d{7}`)
+
+**Configuration à modifier dans `08_airtable_sync.py` :**
+```python
+AIRTABLE_PAT = "patXXX..."          # Personal Access Token Airtable
+AIRTABLE_BASE_ID = "appi1ee5p..."   # ID de la base Airtable
+AIRTABLE_TABLE_ID = "tblvvkh..."    # ID de la table Sinistres
+
+# Filtres par copropriété — clé = copropriete dans dossiers, valeur = formule Airtable
+COPRO_FILTERS = {
+    "SOURCE_ARCHIVES": 'OR(FIND("5390",{Name}),FIND("TIVOLI",{Name}))',
+    # Ajouter d'autres copros ici :
+    # "COPRO_XYZ": 'FIND("1234",{Name})',
+}
+```
+
+**Pour ajouter une copropriété :**
+1. Identifier le code NCG ou nom dans le champ `Name` des dossiers Airtable
+2. Ajouter une entrée dans `COPRO_FILTERS` avec la formule de filtre Airtable
+3. Relancer `python 08_airtable_sync.py`
+
+**Champs synchronisés (~60 champs) :** références (Assynco, compagnie, expert, client), lésé (nom, tel, email, appt), pipeline (déclaration, expertise, accord, règlement, mise en cause), dates clés (déclaration, mission expert, invitation, première visite, PV, dépôt rapport, règlement, relances, prescription), financier (coût assureur, estimation, franchise, provisions, dommages, indemnités, total réglé, honoraires), textes libres (circonstances, description dommages, conclusion expert, commentaires assureur/Assynco, observations, motif rappel, commentaires relance), alertes (important, judiciaire, en carence, à relancer, prescription_status), contacts (gestionnaire syndic, email, tél, adresse syndic, gestionnaire sinistre).
+
+**Lance :** `python 08_airtable_sync.py`
+
+> **Note :** La table `dossiers` doit exister avant de lancer ce script (créée par `python 06a_init_db.py`).
 
 ---
 
@@ -2141,12 +2931,13 @@ Le script `07_query_rag_ui.py` (version locale, pipeline complet avec FlashRank)
 |---|---|---|
 | OCR (Textract) | ~10 000 pages scannées | ~$15 |
 | Classification doc_type (Bedrock Haiku) | ~500-1000 documents AUTRE | ~$0.01 |
+| Metadata documents (Bedrock Haiku) | ~1500 documents (étape 4) | ~$1.20 |
 | Embeddings (Bedrock Titan) | ~20 000 chunks | ~$0.50 |
 | Reranking (FlashRank local) | cross-encoder multilingue | gratuit |
 | Requêtes LLM (Bedrock Claude Sonnet) | ~100 requêtes de test | ~$4 |
 | RDS Postgres (t4g.micro) | 1 mois | ~$12 |
 | S3 stockage | 7 GO | ~$0.16 |
-| **TOTAL** | | **~$32** |
+| **TOTAL** | | **~$33** |
 
 > Pense à supprimer l'instance RDS quand tu as fini les essais pour arrêter les frais.
 
@@ -2160,20 +2951,27 @@ Le script `07_query_rag_ui.py` (version locale, pipeline complet avec FlashRank)
 □ Étape 0 : python 00_inventaire.py → vérifier le rapport
 □ Étape 0 : python 01_filtrage.py → vérifier les décisions LLM dans le log
 □ Étape 1 : aws s3 sync → upload des fichiers filtrés
-□ Étape 2 : python 02_extraction.py → extraction de texte (2-4h)
+□ Étape 2 : python 02_extraction_optimized.py → extraction de texte (30min-1h, architecture fire-all-then-collect)
 □ Étape 3 : copier content_filter.py dans le même dossier que 03_chunking.py
 □ Étape 3 : python 03_chunking.py → découpage intelligent + filtre binaire + classification doc_type 3 passes
 □          Vérifier le rapport de fin : fichiers placeholder, chunks filtrés, raisons
-□ Étape 4 : python 04_enrichissement.py → tags thématiques
+□ Étape 4 : python 04_metadata_documents.py → extraction métadonnées (10 workers parallèles) + consolidation sous_types + déduplication (~$1.25)
+□          Vérifier le rapport : % docs avec date, reclassifications doc_type, répartition sous-types consolidés, copies/brouillons détectés
 □ Étape 5 : python 05_embedding.py → embeddings Titan parallèles (5-10min avec 15 workers)
-□ Étape 6 : Créer instance RDS + python 06a_init_db.py (crée table + index BM25) + python 06b_load_db.py (charge + peuple tsvector)
+□ Étape 6 : Créer instance RDS + python 06a_init_db.py (crée tables chunks + documents + index)
+□          python 06b_load_db.py (charge chunks + peuple tsvector + charge table documents)
 □         ⚠️ Si relance après changement de doc_type : TRUNCATE TABLE chunks; avant 06b_load_db.py (ON CONFLICT DO NOTHING ne met pas à jour)
-□ Étape 7 : streamlit run 07_query_rag_ui.py → pipeline RRF + FlashRank + Claude + multi-turn conversationnel
+□         ⚠️ Si relance metadata : la table documents est TRUNCATE automatiquement par 06b (ON CONFLICT DO UPDATE)
+□ Étape 7 : streamlit run 07_query_rag_ui.py → pré-filtrage document + pipeline RRF + FlashRank + Claude + multi-turn conversationnel
 □         ⚡ Mode Démo (toggle sidebar) : Haiku + streaming + chunks réduits (~15-20s vs ~90s)
 □         🏠 Liens 3D : configurer URL_SP_demo.txt (MOT_CLE : URL, un par ligne)
-□         🔍 Diagnostic : python diag_db_inventory.py "COPRO" → santé de la base
+□         🔍 Diagnostic : python diag_db_inventory.py "COPRO" → santé de la base (chunks + documents)
 □         🔍 Diagnostic : python diag_retrieval.py "requête" "COPRO" → trace pipeline étape par étape
 □         🔍 Simulation : python sim_retrieval.py "requête" "COPRO" → comparaison avant/après corrections
+□ Étape 8 : Configurer COPRO_FILTERS dans 08_airtable_sync.py (formules Airtable par copropriété)
+□          python 08_airtable_sync.py → UPSERT des sinistres dans la table dossiers
+□          Vérifier : SELECT COUNT(*), copropriete FROM dossiers GROUP BY copropriete;
+□          Relancer à chaque mise à jour Airtable (idempotent)
 ```
 
 ---
@@ -2206,6 +3004,14 @@ Voici des requêtes types qu'un gestionnaire de syndic poserait :
 - "Détaille le rapport d'expertise du dégât des eaux bâtiment B"
 - "Explique la résolution n°7 du PV d'AG 2023"
 
+**Requêtes factuelles avec pré-filtrage document (v3 — metadata-first) :**
+- "Quel est le contrat d'assurance MRI en cours ?" → pré-filtre : `CONTRAT + sous_type=MRI + statut=actif` → 1-2 docs
+- "Quel était le budget prévisionnel 2022 ?" → pré-filtre : `BUDGET + annee=2022` → 1-3 docs
+- "Liste les sinistres clos depuis 2020" → pré-filtre : `SINISTRE + statut=cloture + annee>=2020` → N docs
+- "Quel montant pour le devis ravalement ?" → pré-filtre : `DEVIS + sous_type=RAVALEMENT` → 1-3 docs
+- "Quand expire le contrat ascenseur ?" → pré-filtre : `CONTRAT + sous_type=ASCENSEUR + statut=actif` → 1 doc
+- "Compare les charges de chauffage entre 2021 et 2023" → pré-filtre : `BUDGET,COMPTABILITE + annee IN (2021,2023)` → 4-6 docs
+
 **Requêtes multi-turn (v2 — query expansion automatique) :**
 - Tour 1 : "Quels sinistres ont été déclarés cette année ?"
 - Tour 2 : "Et en 2023 ?" → enrichi automatiquement en "Quels sinistres ont été déclarés cette année ? — Et en 2023 ?"
@@ -2218,10 +3024,310 @@ Voici des requêtes types qu'un gestionnaire de syndic poserait :
 
 1. **Centraliser la configuration** — Créer un `config.py` partagé avec variables d'environnement pour basculer local→cloud facilement (chemins en dur dans 02-07, DB credentials, modèles Bedrock). Priorité haute avant migration cloud.
 2. **Passage à Claude Opus 4.6 Thinking** — Remplacer Sonnet par Opus 4.6 avec adaptive thinking pour les réponses de production. Coût estimé ~×2.5 à ×3.5 par requête (~$95-120/mois vs ~$35-40 pour Sonnet). Paramètre `effort` = "medium" par défaut, "high" pour inventaires. Nécessite de vérifier la disponibilité en Bedrock EU et d'adapter le payload avec le paramètre `thinking`.
-3. **Corrections retrieval sinistres** — Résultats du diagnostic `sim_retrieval.py` à valider, puis implémenter : bypass du seuil vec_similarity pour les doc_type matchés (point 2 corrigé), RERANK_CANDIDATES=200 en inventaire (point 3), doc_type_boost=0.05 (point 4), quota minimum SINISTRE (point 5).
-4. **Reranker API (Cohere)** — Remplacer FlashRank local par le reranker Cohere `rerank-v3.5` (API multilingue, plus précis sur le français juridique, ~$0.001/requête)
-5. **Feedback loop** — Logger les requêtes et noter si les réponses sont satisfaisantes pour affiner les poids RRF et le seuil de similarité
-6. **Multi-tenant** — Structurer la base pour que chaque syndic n'accède qu'à ses copros
-7. **Mise à jour incrémentale** — Ajouter un nouveau document sans tout réindexer
-8. **Query adapter** — Entraîner un adaptateur de requête (comme RAGLite) pour améliorer la recherche vectorielle sur le domaine copropriété
-9. **Traitement email** — Use case prioritaire NCG : triage/catégorisation intelligente des emails entrants (non encore implémenté)
+3. **Corrections retrieval sinistres** — ✅ **Résolu** (A+B+D) — Détail complet en section « Problèmes connus » ci-dessous et Section 9.1.
+4. **⭐ Pipeline adaptatif (Modes 1/2/4 + Query Decomposition + Synthetic Questions)** — Architecture conçue et documentée en **Section 9** ci-dessous. Implémentation à venir : questions synthétiques (ingestion), routeur Haiku multi-mode, Mode 4 SQL exhaustif (Section 10).
+5. **Enrichissement metadata v2** — Extraction de métadonnées plus fines par Haiku sur le document entier (pas juste tête+queue) : clauses contractuelles clés, résolutions votées avec résultat du vote, montants détaillés par poste, croisement inter-documents pour le statut (ex: courrier de résiliation → marquer le contrat comme "résilié"). Permet des requêtes type "quelles résolutions ont été votées à l'unanimité ?".
+6. **Outil LLM `filtre_documents`** — Ajouter un outil Bedrock (tool use) permettant à Claude de requêter directement la table `documents` pendant la génération de réponse, pour des filtrages plus complexes que ce que le routeur Haiku pré-requête peut détecter.
+7. **Reranker API (Cohere)** — Remplacer FlashRank local par le reranker Cohere `rerank-v3.5` (API multilingue, plus précis sur le français juridique, ~$0.001/requête)
+8. **Feedback loop** — Logger les requêtes et noter si les réponses sont satisfaisantes pour affiner les poids RRF et le seuil de similarité
+9. **Multi-tenant** — Structurer la base pour que chaque syndic n'accède qu'à ses copros
+10. **Mise à jour incrémentale** — Ajouter un nouveau document sans tout réindexer
+11. **Traitement email** — Use case prioritaire NCG : triage/catégorisation intelligente des emails entrants (non encore implémenté)
+
+---
+
+## Problèmes connus et diagnostics
+
+### Sinistres OCR bruités (RÉSOLU par A+B+D)
+
+**Problème :** Les constats amiables manuscrits (DDE LEMEAU, ADICEBM, CRUET...) étaient dégradés par FlashRank. Le constat LEMEAU atteignait rang #3 RRF mais chutait à #68 post-FlashRank — le cross-encoder pénalise le texte OCR bruité.
+
+**Cause racine :** FlashRank est un cross-encoder qui évalue la qualité linguistique du passage. L'OCR manuscrit ("Examplaire pour deptine assuréte", "2 B's Ruc Herri Tarid") produit un signal de faible qualité → pénalisation.
+
+**Solution implémentée (A+B+D) :**
+- **(D)** Bypass FlashRank quand le pré-filtrage est actif → RRF pur, LEMEAU en rang #3
+- **(A)** Injection `[DOC_TYPE] nom_fichier_nettoyé` dans le texte FlashRank → signal propre avant le bruit OCR
+- **(B)** Score hybride `α×RRF + (1-α)×FlashRank` avec α=0.4 → empêche les chutes brutales
+
+**Validation :** `diag_avant_apres_flashrank.py` — gains de +4 à +71 rangs sur tous les sinistres surveillés. Top 20 en mode A+B = 100% SINISTRE (vs mix CONTRAT/PV_AG/COURRIER avant).
+
+### Résolutions AG à couverture incomplète (DIAGNOSTIC RÉALISÉ — FIX PLANIFIÉ via Mode 4, Section 10)
+
+**Problème :** "Liste toutes les résolutions votées en AG de 2010 à 2018" ne remonte que 15 résolutions sur 71 pour 2018, et manque des années entières.
+
+**Causes racines identifiées (via `diag_resolutions_ag.py`) :**
+1. **Cap de diversité trop restrictif** : `dynamic_cap = 80 / 14 groupes = 5`. Un PV de 17 résolutions ne peut en faire passer que 5. À cap=5, seulement 28/84 chunks 2018 passent. Il faut cap=15 pour 76/84.
+2. **Duplication massive** : 6 fichiers PV pour 2018 (3 paires de doublons PDF/DOCX/V1/V2), gaspillent des slots sur du contenu identique.
+3. **Scores faibles des résolutions techniques** : Les résolutions sur des sujets spécifiques (ravalement, ascenseur) ont un faible score vectoriel face à "liste des résolutions" — le gap sémantique entre le contenu métier et la requête d'inventaire.
+
+**Données clés :**
+- 30 fichiers PV_AG pour 2010-2018, 14 groupes uniques, mais seulement ~9 PV distincts (un par année)
+- L'AG 2018 contient ~17 résolutions uniques dont ~5 nominations de routine → **~12 résolutions de fond** à couvrir
+- Les 71 📋chunks du diagnostic incluent les doublons (6 fichiers × ~12 résolutions chacun)
+- Pré-filtrage s'active correctement (30 ≤ 50)
+- Impact du cap : cap=5 → ~5 résolutions de fond couvertes par fichier. Avec questions synthétiques : 8-10/12
+
+**Solution retenue : Paire A (Query Decomposition + Synthetic Questions)** — voir **Section 9** ci-dessous.
+
+
+---
+
+## Section 9 — Pipeline Adaptatif : Architecture Multi-Mode
+
+> Ce chapitre intègre les spécifications de l'évolution vers un pipeline adaptatif piloté par Haiku.
+> Il remplace le fichier séparé `specs-pipeline-adaptatif.md` (désormais supprimé).
+> Dernière mise à jour : 28 mars 2026
+
+### 9.1 Contexte et décisions actées
+
+#### Ce qui est déjà implémenté
+
+**Corrections FlashRank A+B+D** dans `07_query_rag_ui.py` :
+- **(D)** Bypass FlashRank quand `prefilter_active=True` → tri par RRF pur + cap dynamique par source
+- **(A)** Injection `[DOC_TYPE] nom_fichier_nettoyé` dans le texte passé à FlashRank
+- **(B)** Score hybride `α × rrf_norm + (1-α) × flashrank_norm` avec `RERANK_RRF_WEIGHT=0.4`
+
+**Intégration Airtable + persistance session** dans `streamlit_app.py` :
+- Étape 8 — `08_airtable_sync.py` : synchronisation Airtable → table `dossiers` PostgreSQL (UPSERT)
+- Chunk virtuel prioritaire (`dossier_to_virtual_chunk`) : Source 1 avec RRF=0.99 quand dossier sélectionné
+- Limites troncature textes libres (mars 2026) : `conclusion_expert` → 2000 chars, `circonstances`/`dommages_description`/`commentaire_assureur` → 1500 chars
+- Table `chat_sessions` : persistance UUID de session PostgreSQL, récupération après déconnexion mobile
+
+**Refactoring portabilité framework (29 mars 2026)** :
+- Toute intelligence applicative extraite de `streamlit_app.py` vers `dossiers_api.py` (module 09)
+- Fonctions exportées : `get_dossiers()`, `get_dossier_detail()`, `search_dossiers_for_query()`, `dossier_to_virtual_chunk()`, `enrich_query_with_dossier()`, `merge_with_airtable_chunks()`
+- `streamlit_app.py` réduit à des wrappers fins — aucune logique métier inline
+
+#### Problèmes résiduels identifiés
+
+1. **Cap de diversité** : `dynamic_cap ≈ 5` pour PV_AG → ~8-10/12 résolutions de fond couvertes avec questions synthétiques
+2. **Pas de couverture temporelle garantie** : années récentes (plus de chunks) dominent les requêtes pluriannuelles
+3. **Hard cap LLM = 80 chunks** : insuffisant pour inventaires exhaustifs pluriannuels
+
+### 9.2 Architecture cible : 3 modes de retrieval
+
+Le routeur Haiku (`detect_strategy_haiku`) choisit le mode :
+
+#### Mode 1 : Single-shot sémantique (requête ciblée)
+- **Déclencheur :** Question métier précise — "Quel est le contrat d'ascenseur en cours ?"
+- **Pipeline :** PgVector + BM25 → RRF → FlashRank A+B → Claude
+- **Budget :** 50 chunks, 3 chunks max par source
+- **Changement requis :** aucun (comportement actuel)
+
+#### Mode 2 : Single-shot pré-filtré (inventaire court, ≤ 2 ans)
+- **Déclencheur :** Inventaire sur périmètre restreint
+- **Pipeline :** Pré-filtrage SQL → PgVector + BM25 → RRF pur (bypass FlashRank D) → Claude
+- **Budget :** 80 chunks, cap dynamique par source
+- **Changement requis :** aucun (comportement A+B+D actuel)
+
+#### Mode 4 : Structurel Exhaustif (grand inventaire pluriannuel)
+- **Déclencheur :** Demande exhaustive sur documents structurés (PV_AG, RCP, Contrats)
+- **Pipeline :** Extraction JSON par Haiku → SQL pur (zéro vecteur) → Map-Reduce Haiku si > 30k tokens → Claude Sonnet
+- **Garantie :** Rappel 100%
+- **Détail complet :** voir **Section 10** ci-dessous
+
+*(Le Mode 3 "Map-Reduce vectoriel multi-requêtes" est abandonné au profit du Mode 4 SQL pur, plus rapide et plus fiable.)*
+
+### 9.3 Plan Phase 1 : Questions Synthétiques + Query Decomposition
+
+#### Chantier 1 : Synthetic Questions — ~2h (ingestion)
+
+**Fichiers :** `03_chunking.py`, `06b_load_db.py`, `06a_init_db.py`
+
+- Générer 1-3 questions hypothétiques par chunk pour PV_AG, RCP, CONTRAT (chunk_index > 0)
+- Ne PAS générer pour : préambules (chunk_index = 0), SINISTRE, DEVIS, FACTURE, COURRIER
+- Stocker dans colonne `synthetic_questions TEXT` — indexé dans `text_search` BM25
+
+Schéma DB :
+
+```sql
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS synthetic_questions TEXT;
+UPDATE chunks SET text_search = to_tsvector('french', text || ' ' || COALESCE(synthetic_questions, ''))
+WHERE synthetic_questions IS NOT NULL;
+```
+
+Prompt Haiku de génération :
+
+```
+Tu es un expert en gestion de copropriété. Génère 1 à 3 questions COURTES auxquelles
+cet extrait répond directement. Règles :
+- Chaque question doit avoir sa réponse COMPLÈTE dans le texte
+- Utilise le vocabulaire métier syndic/copro
+- Ne génère PAS de question dont la réponse n'est pas dans le texte
+- Format : une question par ligne, sans numérotation
+Extrait : {chunk_text}
+```
+
+Coût estimé : ~5000 chunks × ~$0.0001 = **~$0.50**
+
+#### Chantier 2 : Query Decomposition — ~2h (retrieval)
+
+Dans `detect_strategy_haiku()`, ajouter `decompose` au JSON de sortie.
+Si `strategie=inventaire` ET plage > 3 ans : `decompose = ["résolutions AG 2010", ..., "résolutions AG 2018"]`
+
+Avec parallélisation ThreadPoolExecutor : ~18-21s total vs ~105s actuel.
+Claude final reçoit des synthèses compactes (~4K tokens) au lieu de 80 chunks bruts (~120K tokens).
+
+### 9.4 Métriques de succès
+
+| Métrique | Baseline | Cible Phase 1 | Cible Phase 2 |
+|---|---|---|---|
+| Résolutions de fond 2018 couvertes | ~5/12 | 8-10/12 | 12/12 |
+| Couverture temporelle 2010-2018 | ~6/9 (67%) | 9/9 (100%) | 9/9 (100%) |
+| Latence inventaire large | ~110s | ~25-30s | ~20s |
+| Coût par requête inventaire | ~$0.03 | ~$0.035 | ~$0.04 |
+
+---
+
+## Section 10 — Mode 4 : Structurel Exhaustif (Self-Querying SQL)
+
+> Ce chapitre remplace le fichier séparé `specs-pipeline-mode4-exhaustif.md` (désormais supprimé).
+> Dernière mise à jour : 28 mars 2026
+
+### 10.1 Changement de paradigme
+
+Les requêtes d'inventaire exhaustif ("Toutes les résolutions AG 2010-2025") sont des problèmes **relationnels**, pas sémantiques. Le pipeline RAG classique échoue par :
+1. **Éclipse temporelle** : 2018 (dense en chunks) écrase 2010
+2. **Cap de diversité** : X chunks max par fichier → impossible d'extraire toutes les résolutions d'un PV
+3. **Plafond contextuel** : 80 chunks bruts ~120K chars → "Lost in the middle"
+
+**Solution Mode 4** : bypass total vectoriel/BM25. Haiku traduit la requête en filtres SQL exacts. Rappel = 100%.
+
+### 10.2 Routeur Haiku — Nouveau JSON de sortie
+
+```json
+{
+  "strategie": "inventaire_exhaustif",
+  "explication": "Demande exhaustive pluriannuelle — extraction de base de données",
+  "sql_filters": {
+    "doc_type": "PV_AG",
+    "annee_min": 2010,
+    "annee_max": 2025,
+    "require_chunk_index_gt_zero": true
+  }
+}
+```
+
+> **Règle métier :** Si `doc_type == "PV_AG"`, forcer `require_chunk_index_gt_zero = true` pour exclure les feuilles de présence et préambules.
+
+### 10.3 Fonction `search_exact_sql()`
+
+À créer dans `07_query_rag_ui.py`. Aucun calcul vectoriel ni BM25 — SQL pur.
+
+```sql
+SELECT chunk_id, file_name, chunk_index, text, annee, doc_type
+FROM chunks
+WHERE code_ncg = :copropriete
+  AND doc_type = :doc_type          -- si fourni
+  AND annee >= :annee_min           -- si fourni
+  AND annee <= :annee_max           -- si fourni
+  AND chunk_index > 0               -- si require_chunk_index_gt_zero
+ORDER BY annee DESC, file_name ASC, chunk_index ASC
+```
+
+Garantie : 100% des chunks correspondant aux filtres sont retournés.
+
+### 10.4 Filtre anti-bruit post-SQL
+
+Puisque 150-300 chunks peuvent être retournés (>100k tokens sur 15 ans d'AG), deux passes de filtrage :
+
+**Passe 1 — Heuristique regex (gratuit, ~30-40% de réduction)**
+
+Mots-clés d'exclusion : "désignation du président de séance", "scrutateur", "élection du conseil syndical", "approbation des comptes", "quitus au syndic"
+
+**Passe 2 — Map-Reduce Haiku (si > 30k tokens)**
+
+1. Grouper les chunks filtrés par année
+2. Envoyer chaque année en parallèle (ThreadPoolExecutor) à Haiku avec ce prompt :
+
+```
+Tu es un expert en copropriété. Voici les résolutions de l'année {annee}.
+L'utilisateur cherche : "{requete}".
+Extrais un résumé concis des résolutions MÉTIER pertinentes (travaux, litiges,
+sinistres, modifications RCP, contrats).
+IGNORE absolument les résolutions administratives de routine (élection de syndic,
+présidence de séance, approbation comptable, renouvellement du conseil) sauf si
+la requête porte explicitement sur la gouvernance.
+```
+
+3. Synthèses annuelles Haiku (~10% du volume original) → Claude Sonnet agrège en réponse finale
+
+### 10.5 Plan d'implémentation
+
+| Phase | Contenu | Durée |
+|---|---|---|
+| Phase 1 | Modifier routeur Haiku + créer `search_exact_sql()` + tests unitaires | ~2h |
+| Phase 2 | Groupeur Python par année + synthèse Haiku async + gestion budget tokens | ~3h |
+| Phase 3 | UI Streamlit (indicateur "Recherche exhaustive...") + adapter prompt système | ~1h |
+
+### 10.6 Métriques cibles
+
+| Métrique | Mode vectoriel actuel | Mode 4 SQL cible |
+|---|---|---|
+| Rappel résolutions 2018 | ~5/12 (42%) | **12/12 (100%)** |
+| Couverture temporelle 2010-2025 | Partielle (éclipse temporelle) | **100% des années disponibles** |
+| Latence | ~20-30s | **~15s** (1 appel SQL + Map-Reduce Haiku parallèle) |
+| Bruit chunks hors-sujet | Moyen | **Zéro** (chunk_index > 0 + filtre regex) |
+| Fiabilité perçue | Frustration sur les "oublis" | Exhaustivité de type ERP/base de données |
+
+---
+
+## Section 11 — UX Dossiers et Anti-contamination RAG (mise à jour 30 mars 2026)
+
+### 11.1 Messages contextuels utilisateur
+
+**Problème identifié :** L'utilisateur peut oublier qu'un filtre dossier est actif et poser des questions générales qui seront mal traitées. Inversement, une question mentionnant un dossier précis sans filtre activé produit des résultats moins précis.
+
+**Implémentation dans `streamlit_app.py` :**
+
+**Message 1 — Filtre actif** (bandeau persistent en haut du chat) :
+Quand `selected_dossier` est défini et `dossier_filter_active=True`, afficher un `st.info` avec le nom/ref du dossier filtré :
+
+> *"📋 Filtre dossier actif : **A2110292** — [Nom dossier]. Vos questions portent sur ce dossier uniquement. Pour une question générale sur les archives, décochez « 📋 Filtrer par ce dossier » dans le panneau latéral (☰ sur mobile)."*
+
+**Message 2 — Dossier auto-détecté** (dans la réponse, si aucun filtre actif) :
+Quand `merge_with_airtable_chunks()` injecte des chunks Airtable via matching textuel mais qu'aucun dossier n'est explicitement sélectionné, afficher :
+
+> *"💡 Dossier(s) Assynco trouvé(s) dans votre question : **[Nom]**. Pour concentrer la recherche sur ce dossier, sélectionnez-le dans le panneau latéral (☰ sur mobile) et activez 📋 Filtrer par ce dossier."*
+
+### 11.2 Anti-contamination du retrieval RAG — Double Retrieval avec provenance (30 mars 2026)
+
+**Problème initial :** Quand un dossier est sélectionné, `enrich_query_with_dossier()` injectait le `lese_nom` (ex: "MARROUNI") et les 50 premiers chars de `circonstances` dans la requête BM25/vectorielle. Ces termes génériques remontaient des chunks d'**autres dossiers** partageant le même lésé ou le même type de sinistre — Claude les traitait alors comme s'ils décrivaient le dossier principal.
+
+**Première correction (trop restrictive) :** Suppression totale de `lese_nom` et `circonstances` de la requête enrichie. Résultat : plus de pollution, mais perte des associations légitimes (sinistre antérieur du même lésé, travaux ayant causé le dommage en cascade, etc.).
+
+**Solution finale : Double Retrieval avec étiquetage de provenance**
+
+Deux requêtes SQL parallèles dans le bloc `search_decomposed()` :
+
+| Retrieval | Termes d'enrichissement | Budget | Fonction |
+|---|---|---|---|
+| **Strict** (`enrich_query_with_dossier`) | `ref_assynco` + `ref_cie` uniquement | MCL=3, CPS=1 | Documents *de* ce dossier |
+| **Contextuel** (`enrich_query_contextual`) | refs + `lese_nom` + `circonstances[:40]` | max=2, CPS=1 | Sinistres *connexes* |
+
+Les deux ensembles sont fusionnés (déduplication par `chunk_id`), puis étiquetés dans le contexte LLM :
+
+| Label dans le prompt | Signification |
+|---|---|
+| `[DOSSIER PRINCIPAL]` | Source 1 — chunk virtuel Airtable du dossier sélectionné |
+| `[DOCUMENT ASSOCIÉ AU DOSSIER]` | Chunk issu du retrieval strict (même dossier, archives) |
+| `[CONTEXTE CONNEXE]` | Chunk issu du retrieval contextuel (autre dossier potentiellement lié) |
+
+**System prompt dossier (instruction point 4) :**
+- Sources `[DOCUMENT ASSOCIÉ]` → compléter la Source 1 (constats, rapports, courriers)
+- Sources `[CONTEXTE CONNEXE]` → signaler le lien si pertinent (`"Note connexe : [nom source] — lié car [raison]"`) ; ne pas attribuer leurs données au dossier principal sans le mentionner ; ignorer si non pertinent
+
+**Fichiers modifiés :**
+- `dossiers_api.py` : ajout de `enrich_query_contextual()` ; `enrich_query_with_dossier()` reste strict (refs uniquement)
+- `streamlit_app.py` : double appel `search_decomposed()` dans le spinner ; `_strict_chunk_ids` transmis à `build_llm_payload()`→`generate_answer[_stream]()`; boucle de contexte utilise `dossier_strict_ids` pour les labels ; system prompt point 4 remplace "FOCUS EXCLUSIF" par la logique de provenance
+
+**Résultat attendu :** Sur MARROUNI DDE, les chunks du dossier sélectionné arrivent en `[DOCUMENT ASSOCIÉ]`, un éventuel sinistre antérieur du même lésé arrive en `[CONTEXTE CONNEXE]`. Claude peut signaler le lien sans confondre les deux dossiers.
+
+### 11.3 Mobile
+
+- `initial_sidebar_state="collapsed"` : sidebar fermée par défaut (UX mobile propre)
+- CSS POINT 1 : tous les labels sidebar en blanc `#e2e8f0` sur fond bleu marine
+- Session persistée PostgreSQL (`chat_sessions`) avec UUID dans `st.query_params["sid"]` : résiste aux déconnexions mobiles
+- Tous les messages contextuels (§11.1) incluent `(☰ sur mobile)` pour guider vers le menu hamburger
+
+---
