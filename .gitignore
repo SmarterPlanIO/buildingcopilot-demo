@@ -1,0 +1,48 @@
+# ─── Fichiers temporaires ───────────────────────────────────────────────────
+~$*
+desktop.ini
+*.tmp
+Thumbs.db
+
+# ─── IDE / Claude settings ──────────────────────────────────────────────────
+.claude/
+.vscode/
+.idea/
+
+# ─── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ─── Documents business (racine) ────────────────────────────────────────────
+# Exclure PDFs / PPTX / DOCX / images à la racine du repo
+/*.pdf
+/*.pptx
+/*.pptm
+/*.docx
+/*.docm
+/*.png
+/*.jpg
+/*.jpeg
+/Retouche/
+/"Données brutes"/
+
+# ─── Fichiers de log et sorties runtime ─────────────────────────────────────
+*.log
+Scripts/filtrage_rapport.json
+Scripts/inventaire_fichiers.csv
+Scripts/inventaire_stats.txt
+Scripts/metadata_cache.json
+
+# ─── Données lourdes (Résultats bruts) ──────────────────────────────────────
+"Résultats bruts/Archives_Extraites/"
+"Résultats bruts/Archives_Filtrees/"
+"Résultats bruts/RUN ON 6 COPROS/"
+Résultats bruts/*.jsonl
+Résultats bruts/*.csv
+
+# ─── Secrets locaux Streamlit ────────────────────────────────────────────────
+secrets.toml
+.env
+.env.local
