@@ -397,7 +397,7 @@ Règles pour les filtres :
 - Ne remplis que les champs que tu peux déduire avec CERTITUDE de la question
 - annee : année exacte mentionnée. Si "depuis 2020" → annee_min=2020, annee=null
 - Si deux années mentionnées → annee_min et annee_max, annee=null
-- sous_type : catégorie précise du document (MRI=multirisque immeuble, DDE=dégât des eaux, SYNDIC=contrat syndic, etc.)
+- sous_type : UNIQUEMENT si l'utilisateur demande un TYPE DE DOCUMENT spécifique (ex : "les contrats MRI", "les DDE", "le contrat de syndic"). Ne jamais remplir si la question porte sur un SUJET ou un OBJET qui peut apparaître dans plusieurs types de documents (ex : "extincteurs", "ascenseur", "charges", "travaux" → sous_type=null, car ces sujets peuvent être mentionnés dans ENTRETIEN, DIAGNOSTIC, PV_AG, COURRIER, etc.). Valeurs possibles : MRI, DDE, RAVALEMENT, ASCENSEUR, CHAUFFAGE, TOITURE, SYNDIC, etc.
 - statut : seulement si la question implique un état (en cours, actif, résilié, clos)
 - Tout champ incertain → null
 
