@@ -352,12 +352,12 @@ if _restored_session and _restored_session.get("pending_query"):
     st.info(f"↩️ Requête interrompue détectée : *{_pending[:120]}*")
     if st.button("🔄 Relancer cette requête", type="primary"):
         # La session restaurée contient déjà le message utilisateur dans l'historique.
-        # On le retire pour éviter le doublon quand le bloc de traitement l'ajoute à nouveau.
+        # Réassigner une nouvelle liste (plus fiable que pop() en place avec Streamlit).
         if (st.session_state.chat_history
                 and st.session_state.chat_history[-1]["role"] == "user"
                 and st.session_state.chat_history[-1]["content"] == _pending):
-            st.session_state.chat_history.pop()
-        st.session_state._resubmit = _pending
+            st.session_state.chat_history = st.session_state.chat_history[:-1]
+        st.session_state["_resubmit"] = _pending
         # Clear pending flag in DB
         _save_chat_session(_current_sid, st.session_state.chat_history,
                           st.session_state.selected_dossier, pending_query=None)
@@ -2014,8 +2014,9 @@ if st.session_state.get("selected_dossier") and st.session_state.get("dossier_fi
 # ── Saisie utilisateur (barre fixe en bas) ──
 user_input = st.chat_input("Posez votre question sur les archives de copropriété…")
 # Handle resubmit from interrupted query recovery
-if not user_input and st.session_state.get("_resubmit"):
-    user_input = st.session_state.pop("_resubmit")
+if not user_input and "_resubmit" in st.session_state:
+    user_input = st.session_state["_resubmit"]
+    del st.session_state["_resubmit"]
 
 # ── Afficher l'historique — toutes les réponses restent consultables et cliquables ──
 # Fix duplicate question: if user_input is set, the last user message was just appended
@@ -2060,8 +2061,14 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
                     st.caption(f"📎 {sc} sources analysées")
 
 if user_input:
-    # Ajouter à l'historique et afficher
-    st.session_state.chat_history.append({"role": "user", "content": user_input})
+    # Ajouter à l'historique (sauf si déjà présent en dernier — cas resubmit)
+    _last_already = (
+        st.session_state.chat_history
+        and st.session_state.chat_history[-1]["role"] == "user"
+        and st.session_state.chat_history[-1]["content"] == user_input
+    )
+    if not _last_already:
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
     # Persist with pending flag (in case of disconnect during LLM call)
     _save_chat_session(_current_sid, st.session_state.chat_history,
                       st.session_state.selected_dossier, pending_query=user_input)
