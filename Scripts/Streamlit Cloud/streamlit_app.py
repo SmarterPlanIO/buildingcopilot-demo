@@ -448,8 +448,11 @@ def detect_strategy_haiku(query, prev_query=None):
             if val is not None and val != "null":
                 prefilter[key] = val
 
-        # Activer prefilter seulement si au moins un signal structurel
-        if not any(prefilter.get(k) for k in ("annee", "annee_min", "sous_type", "statut")):
+        # Activer prefilter seulement si au moins un signal structurel TEMPOREL ou de STATUT.
+        # sous_type seul est exclu : trop spécifique, produit souvent 1 seul doc en préfiltre
+        # ce qui contredit le but d'une stratégie Inventaire (couverture large).
+        # sous_type reste dans le dict prefilter pour s'appliquer quand annee/statut est aussi présent.
+        if not any(prefilter.get(k) for k in ("annee", "annee_min", "statut")):
             prefilter = None
 
         # Suivi conversationnel
