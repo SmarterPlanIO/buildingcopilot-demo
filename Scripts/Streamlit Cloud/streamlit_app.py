@@ -2196,6 +2196,8 @@ if user_input:
             # Clear pending flag after response
             _save_chat_session(_current_sid, st.session_state.chat_history,
                               st.session_state.selected_dossier, pending_query=None)
+            # Rerun so the sidebar "Questions posées" reflects the updated chat_history
+            st.rerun()
         else:
             unique_sources = len(set(r[2] for r in results))
 
@@ -2280,3 +2282,5 @@ if user_input:
             # Clear pending flag after successful response
             _save_chat_session(_current_sid, st.session_state.chat_history,
                               st.session_state.selected_dossier, pending_query=None)
+            # Rerun so the sidebar "Questions posées" reflects the updated chat_history
+            st.rerun()
