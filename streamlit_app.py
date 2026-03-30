@@ -11,6 +11,15 @@ import boto3
 import psycopg2
 import streamlit as st
 import streamlit_mermaid as stmd
+from dossiers_api import (
+    get_dossiers as _get_dossiers,
+    get_dossier_detail as _get_dossier_detail,
+    search_dossiers_for_query as _search_dossiers_for_query,
+    dossier_to_virtual_chunk,
+    enrich_query_with_dossier,
+    enrich_query_contextual,
+    merge_with_airtable_chunks,
+)
 
 # =====================================================
 # CONFIGURATION — credentials via st.secrets (Streamlit Cloud)
@@ -210,7 +219,11 @@ def get_bedrock_client():
 def get_copros():
     conn = get_db_connection()
     with conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT code_ncg, COUNT(*) FROM chunks WHERE code_ncg IS NOT NULL GROUP BY code_ncg ORDER BY code_ncg;")
+        cur.execute("""
+            SELECT code_ncg, MAX(copropriete), COUNT(*)
+            FROM chunks WHERE code_ncg IS NOT NULL
+            GROUP BY code_ncg ORDER BY code_ncg;
+        """)
         return cur.fetchall()
 
 @st.cache_data(ttl=300)
@@ -223,336 +236,20 @@ def get_total_chunks():
 @st.cache_data(ttl=60)
 def get_dossiers(copropriete=None):
     """Fetch dossiers for sidebar display."""
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            if copropriete:
-                cur.execute("""
-                    SELECT dossier_id, nom_dossier, type_dossier, statut,
-                           date_ouverture, etapes, pieces_requises, pieces_fournies,
-                           lese_nom, expert_nom, assureur, montant_estime,
-                           ref_assynco, ref_cie
-                    FROM dossiers WHERE code_ncg = %s
-                    ORDER BY
-                        CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
-                        date_ouverture DESC
-                """, [copropriete])
-            else:
-                cur.execute("""
-                    SELECT dossier_id, nom_dossier, type_dossier, statut,
-                           date_ouverture, etapes, pieces_requises, pieces_fournies,
-                           lese_nom, expert_nom, assureur, montant_estime,
-                           ref_assynco, ref_cie
-                    FROM dossiers
-                    ORDER BY
-                        CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
-                        date_ouverture DESC
-                """)
-            return cur.fetchall()
-    except Exception:
-        return []
+    return _get_dossiers(get_db_connection(), copropriete)
 
 
 def get_dossier_detail(dossier_id):
-    """Fetch full dossier detail for prompt injection."""
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT dossier_id, copropriete, type_dossier, nom_dossier, statut,
-                       date_ouverture, date_cloture, lese_nom, lese_lot,
-                       responsable_nom, responsable_lot, expert_nom, assureur,
-                       etapes, pieces_requises, pieces_fournies,
-                       montant_estime, montant_reel, documents_lies, resume_ia
-                FROM dossiers WHERE dossier_id = %s
-            """, [dossier_id])
-            row = cur.fetchone()
-            if row:
-                cols = ["dossier_id", "copropriete", "type_dossier", "nom_dossier", "statut",
-                        "date_ouverture", "date_cloture", "lese_nom", "lese_lot",
-                        "responsable_nom", "responsable_lot", "expert_nom", "assureur",
-                        "etapes", "pieces_requises", "pieces_fournies",
-                        "montant_estime", "montant_reel", "documents_lies", "resume_ia"]
-                return dict(zip(cols, row))
-            return None
-    except Exception:
-        return None
+    """Fetch full dossier detail for prompt injection — all columns."""
+    return _get_dossier_detail(get_db_connection(), dossier_id)
 
 def search_dossiers_for_query(query, copropriete=None):
-    """Search dossiers table for records matching the user query.
-    Returns a list of dossier dicts that match by name, lese, ref, or keywords."""
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            # Build search: match on nom_dossier, lese_nom, ref_cie, ref_assynco, circonstances
-            where_parts = []
-            params = []
-            search_term = f"%{query}%"
-
-            # Extract potential identifiers from query (refs like A2110352, names, etc.)
-            import re as _re
-            # Ref patterns: A followed by digits, or Idigits
-            refs = _re.findall(r'\b[AI]\d{5,}[A-Z]*\b', query, _re.IGNORECASE)
-            # Name patterns: capitalized words
-            names = _re.findall(r'\b[A-Z][a-zéèêëàâùûôîïç]{2,}\b', query)
-
-            if refs:
-                for ref in refs:
-                    where_parts.append("(nom_dossier ILIKE %s OR ref_cie ILIKE %s OR ref_assynco ILIKE %s OR ref_sinistre_client ILIKE %s)")
-                    ref_pattern = f"%{ref}%"
-                    params.extend([ref_pattern, ref_pattern, ref_pattern, ref_pattern])
-
-            if names:
-                for name in names:
-                    where_parts.append("(lese_nom ILIKE %s OR nom_dossier ILIKE %s)")
-                    name_pattern = f"%{name}%"
-                    params.extend([name_pattern, name_pattern])
-
-            # Also do a general text search on nom_dossier
-            where_parts.append("nom_dossier ILIKE %s")
-            params.append(search_term)
-
-            where_sql = " OR ".join(where_parts)
-            copro_filter = ""
-            if copropriete:
-                copro_filter = " AND code_ncg = %s"
-                params.append(copropriete)
-
-            cur.execute(f"""
-                SELECT dossier_id, copropriete, type_dossier, nom_dossier, statut,
-                       date_ouverture, date_cloture, lese_nom, lese_tel, lese_email,
-                       appt_origine, ref_cie, ref_expert, ref_sinistre_client, ref_assynco,
-                       at_declaration, at_expertise, at_accord, at_reglement, at_mise_en_cause,
-                       at_situation, at_attente, cause, irsi, cause_identifiee, cause_reparee,
-                       garantie_impactee, montant_estime, montant_reel, franchise, provisions,
-                       reglement_realise, total_regle, honoraire_syndic,
-                       circonstances, dommages_description, conclusion_expert,
-                       commentaire_assureur, commentaire_assynco,
-                       elements_manquants, important, judiciaire, en_carence,
-                       expert_nom, assureur, resume_ia
-                FROM dossiers
-                WHERE ({where_sql}){copro_filter}
-                ORDER BY date_ouverture DESC NULLS LAST
-                LIMIT 5
-            """, params)
-
-            cols = [desc[0] for desc in cur.description]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
-    except Exception:
-        return []
+    """Search dossiers table for records matching the user query."""
+    return _search_dossiers_for_query(get_db_connection(), query, copropriete)
 
 
-def dossier_to_virtual_chunk(dossier, source_index):
-    """Convert an Airtable dossier dict into a rich text block formatted like a RAG chunk source.
-    Includes ALL non-null fields organized by section for maximum context to Sonnet."""
-    d = dossier
-    sections = []
-
-    # ── HEADER ──
-    sections.append("=== DOSSIER SINISTRE — BASE ASSYNCO/AIRTABLE (SOURCE PRIORITAIRE) ===")
-    sections.append(f"Nom du dossier : {d.get('nom_dossier', 'N/A')}")
-    sections.append(f"Type : {d.get('type_dossier', 'N/A')}")
-    sections.append(f"Statut : {d.get('at_situation') or d.get('statut', 'N/A')}")
-    if d.get('statut_detail'):
-        sections.append(f"Statut detail : {d['statut_detail']}")
-    if d.get('triage'):
-        sections.append(f"Priorite (triage) : {d['triage']}")
-
-    # ── ALERTES & FLAGS ──
-    flags = []
-    if d.get('important'):
-        flags.append("IMPORTANT")
-    if d.get('judiciaire'):
-        flags.append("JUDICIAIRE")
-    if d.get('en_carence'):
-        flags.append("EN CARENCE")
-    if d.get('a_relancer') and str(d['a_relancer']).lower() not in ('non', 'no', 'false'):
-        flags.append("A RELANCER")
-    if d.get('prescription_status') and str(d['prescription_status']).lower() not in ('no', 'non', 'false'):
-        flags.append(f"PRESCRIPTION: {d['prescription_status']}")
-    if flags:
-        sections.append(f"ALERTES : {' | '.join(flags)}")
-    if d.get('elements_manquants'):
-        els = d['elements_manquants'] if isinstance(d['elements_manquants'], list) else [d['elements_manquants']]
-        sections.append(f"Elements manquants : {', '.join(els)}")
-
-    # ── IDENTIFICATION DU SINISTRE ──
-    sections.append("")
-    sections.append("--- Identification ---")
-    if d.get('date_ouverture'):
-        sections.append(f"Date survenance : {d['date_ouverture']}")
-    if d.get('date_cloture'):
-        sections.append(f"Date cloture : {d['date_cloture']}")
-    if d.get('cause'):
-        sections.append(f"Cause : {d['cause']}")
-    if d.get('irsi') is not None:
-        sections.append(f"Convention IRSI : {'Oui' if d['irsi'] else 'Non'}")
-    if d.get('cause_identifiee') is not None:
-        sections.append(f"Cause identifiee : {'Oui' if d['cause_identifiee'] else 'Non'}")
-    if d.get('cause_reparee') is not None:
-        sections.append(f"Cause reparee : {'Oui' if d['cause_reparee'] else 'Non'}")
-    if d.get('garantie_impactee'):
-        g = d['garantie_impactee'] if isinstance(d['garantie_impactee'], list) else [d['garantie_impactee']]
-        sections.append(f"Garantie : {', '.join(g)}")
-    if d.get('dommage_copro') is not None:
-        sections.append(f"Dommage copropriete : {'Oui' if d['dommage_copro'] else 'Non'}")
-    if d.get('adresse_sinistre'):
-        sections.append(f"Adresse sinistre : {d['adresse_sinistre']}")
-    if d.get('adresse_copro'):
-        sections.append(f"Adresse copropriete : {d['adresse_copro']}")
-
-    # ── REFERENCES ──
-    refs = []
-    if d.get('ref_cie'):
-        refs.append(f"Ref Compagnie: {d['ref_cie']}")
-    if d.get('ref_expert'):
-        refs.append(f"Ref Expert: {d['ref_expert']}")
-    if d.get('ref_sinistre_client'):
-        refs.append(f"Ref Client: {d['ref_sinistre_client']}")
-    if d.get('ref_assynco'):
-        refs.append(f"Ref Assynco: {d['ref_assynco']}")
-    if d.get('ref_inch'):
-        refs.append(f"Ref Inch: {d['ref_inch']}")
-    if refs:
-        sections.append(f"References : {' | '.join(refs)}")
-    if d.get('airtable_url'):
-        sections.append(f"Lien dossier Airtable : {d['airtable_url']}")
-
-    # ── PARTIES PRENANTES ──
-    sections.append("")
-    sections.append("--- Parties prenantes ---")
-    if d.get('lese_nom'):
-        lese = f"Lese : {d['lese_nom']}"
-        if d.get('lese_tel'):
-            lese += f" | Tel: {d['lese_tel']}"
-        if d.get('lese_email'):
-            lese += f" | Email: {d['lese_email']}"
-        if d.get('appt_origine'):
-            lese += f" | Appt: {d['appt_origine']}"
-        sections.append(lese)
-    if d.get('expert_nom'):
-        sections.append(f"Expert : {d['expert_nom']}")
-    if d.get('etat_expert'):
-        sections.append(f"Etat expert : {d['etat_expert']}")
-    if d.get('assureur'):
-        sections.append(f"Assureur : {d['assureur']}")
-    if d.get('gestionnaire_syndic'):
-        sections.append(f"Gestionnaire syndic : {d['gestionnaire_syndic']}")
-    if d.get('email_gestionnaire'):
-        sections.append(f"Email gestionnaire syndic : {d['email_gestionnaire']}")
-    if d.get('tel_syndic'):
-        sections.append(f"Tel syndic : {d['tel_syndic']}")
-    if d.get('adresse_syndic'):
-        sections.append(f"Adresse syndic : {d['adresse_syndic']}")
-    if d.get('email_gestionnaire_sinistre'):
-        sections.append(f"Email gestionnaire sinistre (assureur) : {d['email_gestionnaire_sinistre']}")
-    if d.get('tel_gestionnaire_sinistre'):
-        sections.append(f"Tel gestionnaire sinistre (assureur) : {d['tel_gestionnaire_sinistre']}")
-
-    # ── PIPELINE / AVANCEMENT ──
-    sections.append("")
-    sections.append("--- Pipeline ---")
-    pipeline_fields = [
-        ('at_declaration', 'Declaration'),
-        ('at_expertise', 'Expertise'),
-        ('at_accord', 'Accord'),
-        ('at_reglement', 'Reglement'),
-        ('at_mise_en_cause', 'Mise en cause'),
-    ]
-    for key, label in pipeline_fields:
-        if d.get(key):
-            sections.append(f"  {label} : {d[key]}")
-    if d.get('at_attente'):
-        sections.append(f"En attente de : {d['at_attente']}")
-    if d.get('situation_sinistre'):
-        sections.append(f"Situation sinistre : {d['situation_sinistre']}")
-
-    # ── DATES CLES ──
-    date_fields = [
-        ('date_declaration', 'Declaration'),
-        ('date_mission_expert', 'Mission expert'),
-        ('date_invitation_expertise', 'Invitation expertise'),
-        ('date_premiere_visite', 'Premiere visite'),
-        ('date_pv', 'PV'),
-        ('date_lettre_acceptation', 'Lettre acceptation'),
-        ('date_depot_rapport', 'Depot rapport'),
-        ('date_reglement', 'Reglement'),
-        ('date_derniere_relance', 'Derniere relance'),
-        ('date_relance_expert', 'Relance expert'),
-        ('date_relance_compagnie', 'Relance compagnie'),
-        ('date_relance_client', 'Relance client'),
-        ('date_rappel', 'Rappel'),
-        ('date_prescription', 'Prescription'),
-        ('date_prescription_estimate', 'Prescription estimee'),
-    ]
-    dates_found = [(label, d[key]) for key, label in date_fields if d.get(key)]
-    if dates_found:
-        sections.append("")
-        sections.append("--- Dates cles ---")
-        for label, val in dates_found:
-            sections.append(f"  {label} : {val}")
-
-    # ── FINANCIER ──
-    fin_fields = [
-        ('montant_estime', 'Estimation'),
-        ('montant_reel', 'Cout assureur'),
-        ('franchise', 'Franchise'),
-        ('provisions', 'Provisions'),
-        ('reglement_realise', 'Reglement realise'),
-        ('reglement_frais', 'Reglement frais'),
-        ('recours_en_cours', 'Recours en cours'),
-        ('recours_realise', 'Recours realise'),
-        ('cout_client', 'Cout client'),
-        ('honoraire_syndic', 'Honoraire syndic'),
-        ('dommages', 'Dommages (montant)'),
-        ('indemnite_immediate', 'Indemnite immediate'),
-        ('indemnite_differee', 'Indemnite differee'),
-        ('total_regle', 'Total regle'),
-    ]
-    fins_found = [(label, d[key]) for key, label in fin_fields if d.get(key)]
-    if fins_found:
-        sections.append("")
-        sections.append("--- Financier ---")
-        for label, val in fins_found:
-            sections.append(f"  {label} : {val} EUR")
-
-    # ── TEXTES DESCRIPTIFS ──
-    text_fields = [
-        ('circonstances', 'Circonstances', 600),
-        ('dommages_description', 'Description des dommages', 600),
-        ('conclusion_expert', 'Conclusion de l expert', 600),
-        ('observations_declaration', 'Observations declaration', 400),
-        ('commentaire_assureur', 'Commentaire assureur', 400),
-        ('commentaire_assynco', 'Commentaire Assynco', 400),
-        ('motif_rappel', 'Motif rappel', 300),
-        ('commentaire_relance_expert', 'Commentaire relance expert', 300),
-        ('commentaire_relance_compagnie', 'Commentaire relance compagnie', 300),
-        ('commentaire_relance_client', 'Commentaire relance client', 300),
-    ]
-    texts_found = [(label, d[key][:maxlen]) for key, label, maxlen in text_fields if d.get(key)]
-    if texts_found:
-        sections.append("")
-        sections.append("--- Textes ---")
-        for label, val in texts_found:
-            sections.append(f"{label} : {val}")
-
-    text = "\n".join(sections)
-
-    # Return in the same tuple format as search_chunks results:
-    # (chunk_id, copro, source_file, nom_fichier, doc_type, text, vec_similarity, bm25, rrf, chunk_idx)
-    return (
-        f"airtable_{d['dossier_id']}",     # chunk_id
-        d.get('copropriete', ''),            # copro
-        "AIRTABLE_ASSYNCO",                  # source_file
-        f"Dossier Assynco: {d.get('nom_dossier', 'N/A')[:60]}",  # nom_fichier
-        "SINISTRE_AIRTABLE",                 # doc_type
-        text,                                # text
-        1.0,                                 # vec_similarity (max, since it's a direct match)
-        1.0,                                 # bm25
-        0.99,                                # rrf (high but below 1.0)
-        0,                                   # chunk_idx
-    )
-
+# dossier_to_virtual_chunk, enrich_query_with_dossier, merge_with_airtable_chunks
+# imported from dossiers_api (see import at top of file)
 
 # Pré-chauffage Bedrock
 if "bedrock_warm" not in st.session_state:
@@ -567,11 +264,98 @@ if "bedrock_warm" not in st.session_state:
     except Exception:
         st.session_state["bedrock_warm"] = False
 
-# Session state — multi-turn
+# ── Session persistence (résilience mobile/tab switch) ──
+def _save_chat_session(sid, chat_history, selected_dossier=None, pending_query=None):
+    """Persist chat session to PostgreSQL for mobile resilience."""
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO chat_sessions (session_id, chat_history, selected_dossier, pending_query, updated_at)
+                VALUES (%s, %s::jsonb, %s, %s, NOW())
+                ON CONFLICT (session_id) DO UPDATE SET
+                    chat_history = EXCLUDED.chat_history,
+                    selected_dossier = EXCLUDED.selected_dossier,
+                    pending_query = EXCLUDED.pending_query,
+                    updated_at = NOW()
+            """, (sid, json.dumps(chat_history), selected_dossier, pending_query))
+        conn.commit()
+    except Exception:
+        pass  # Non-blocking — session persistence is best-effort
+
+def _load_chat_session(sid):
+    """Load chat session from PostgreSQL. Returns dict or None."""
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT chat_history, selected_dossier, pending_query
+                FROM chat_sessions WHERE session_id = %s AND updated_at > NOW() - INTERVAL '24 hours'
+            """, (sid,))
+            row = cur.fetchone()
+            if row:
+                return {
+                    "chat_history": row[0] if isinstance(row[0], list) else json.loads(row[0]) if row[0] else [],
+                    "selected_dossier": row[1],
+                    "pending_query": row[2],
+                }
+    except Exception:
+        pass
+    return None
+
+def _delete_chat_session(sid):
+    """Delete a chat session from PostgreSQL."""
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM chat_sessions WHERE session_id = %s", (sid,))
+        conn.commit()
+    except Exception:
+        pass
+
+# Session state — multi-turn with persistence
+import uuid as _uuid
+
+# Step 1: Get or create session ID (survives page refresh via query params)
+_qp = st.query_params
+_sid_from_url = _qp.get("sid")
+
+if "_palim_session_id" not in st.session_state:
+    if _sid_from_url:
+        st.session_state._palim_session_id = _sid_from_url
+    else:
+        st.session_state._palim_session_id = str(_uuid.uuid4())[:12]
+
+# Sync session ID to URL (survives browser refresh)
+if _qp.get("sid") != st.session_state._palim_session_id:
+    st.query_params["sid"] = st.session_state._palim_session_id
+
+_current_sid = st.session_state._palim_session_id
+
+# Step 2: Initialize or restore session
+_restored_session = None
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+    # Try to restore from DB
+    _restored_session = _load_chat_session(_current_sid)
+    if _restored_session and _restored_session["chat_history"]:
+        st.session_state.chat_history = _restored_session["chat_history"]
+        st.session_state.selected_dossier = _restored_session.get("selected_dossier")
+    else:
+        st.session_state.chat_history = []
+
 if "selected_dossier" not in st.session_state:
     st.session_state.selected_dossier = None
+
+# Step 3: Show recovery UI if a query was interrupted
+if _restored_session and _restored_session.get("pending_query"):
+    _pending = _restored_session["pending_query"]
+    st.warning(f"⚠️ Votre requête précédente a été interrompue : *{_pending[:120]}*")
+    if st.button("🔄 Relancer cette requête"):
+        st.session_state._resubmit = _pending
+        # Clear pending flag in DB
+        _save_chat_session(_current_sid, st.session_state.chat_history,
+                          st.session_state.selected_dossier, pending_query=None)
+        st.rerun()
 
 
 # =====================================================
@@ -1045,15 +829,34 @@ def build_history_messages(chat_history):
 # =====================================================
 # LLM — POINTS 8 + 9 : concision + multi-turn
 # =====================================================
-def build_llm_payload(query, search_results, doc_type_hint, chat_history=None, diagramme=False):
-    """Construit system prompt, liste de messages, max_tokens."""
+def build_llm_payload(query, search_results, doc_type_hint, chat_history=None, diagramme=False,
+                      dossier_strict_ids=None):
+    """Construit system prompt, liste de messages, max_tokens.
+
+    Args:
+        dossier_strict_ids: set de chunk_ids issus du retrieval strict (refs uniquement).
+            Quand fourni, les chunks sont étiquetés avec leur provenance :
+            - AIRTABLE_ASSYNCO → [DOSSIER PRINCIPAL]
+            - chunk_id in dossier_strict_ids → [DOCUMENT ASSOCIÉ AU DOSSIER]
+            - autres → [CONTEXTE CONNEXE]
+            Quand None (mode normal sans dossier sélectionné), on utilise [PRIMAIRE]/[CONTEXTUEL].
+    """
     # Contexte RAG
     context_parts = []
     for i, result in enumerate(search_results):
         chunk_id, copro, source, filename, doc_type, text, *_ = result
-        source_type = "PRIMAIRE" if doc_type in PRIMARY_DOC_TYPES else "CONTEXTUEL"
+        if dossier_strict_ids is not None:
+            # Mode dossier sélectionné : provenance explicite
+            if source == "AIRTABLE_ASSYNCO":
+                prov_label = "DOSSIER PRINCIPAL"
+            elif chunk_id in dossier_strict_ids:
+                prov_label = "DOCUMENT ASSOCIÉ AU DOSSIER"
+            else:
+                prov_label = "CONTEXTE CONNEXE"
+        else:
+            prov_label = "PRIMAIRE" if doc_type in PRIMARY_DOC_TYPES else "CONTEXTUEL"
         context_parts.append(
-            f"[Source {i+1}] [{source_type}] Copropriété: {copro} | Fichier: {filename} | "
+            f"[Source {i+1}] [{prov_label}] Copropriété: {copro} | Fichier: {filename} | "
             f"Type: {doc_type}\n{text}"
         )
     context = "\n\n---\n\n".join(context_parts)
@@ -1119,18 +922,19 @@ CONTEXTE CONVERSATIONNEL :
     hints_text = "\n".join(context_hints) if context_hints else "Aucun filtre spécifique"
 
     # ── Dossier context: injected as virtual chunk in search_results (Fix A), not in system prompt ──
-    # If a dossier is selected, add a hint to the system prompt to use it
+    # If a dossier is selected, inject provenance-aware instructions
     _sel_dossier_id = st.session_state.get("selected_dossier")
     if _sel_dossier_id:
         _sel_d = get_dossier_detail(_sel_dossier_id) or {}
         _ref_a = _sel_d.get("ref_assynco", "")
+        _nom_d = _sel_d.get("nom_dossier", "dossier sélectionné")
         system_prompt += f"""
 
-INSTRUCTIONS IMPÉRATIVES — DOSSIER SÉLECTIONNÉ (Réf. Assynco : {_ref_a}) :
+INSTRUCTIONS — DOSSIER SÉLECTIONNÉ : {_ref_a} — {_nom_d}
 
-1. FOCUS EXCLUSIF : L'utilisateur a cliqué sur un dossier spécifique. Ta réponse DOIT se concentrer EXCLUSIVEMENT sur ce dossier ({_ref_a}). NE LISTE PAS et NE MENTIONNE PAS les autres sinistres sauf si l'utilisateur le demande explicitement.
+1. DOSSIER PRINCIPAL : L'utilisateur a sélectionné ce dossier ({_ref_a}). Ta réponse principale porte sur CE dossier. Ne substitue PAS les informations d'un autre dossier à celles du dossier principal.
 
-2. SOURCE PRIORITAIRE : La Source 1 (marquée "DOSSIER SINISTRE — BASE ASSYNCO/AIRTABLE") contient les données structurées officielles de ce dossier. C'est ta source PRINCIPALE — cite les montants, dates, références, contacts, conclusion expert EXACTEMENT comme indiqués.
+2. SOURCE PRIORITAIRE : La Source 1 (marquée [DOSSIER PRINCIPAL]) contient les données structurées officielles. Cite les montants, dates, références, contacts et conclusion expert EXACTEMENT comme indiqués.
 
 3. STRUCTURE DE RÉPONSE :
    - Titre avec la réf. Assynco ({_ref_a}) et le nom du lésé
@@ -1141,7 +945,13 @@ INSTRUCTIONS IMPÉRATIVES — DOSSIER SÉLECTIONNÉ (Réf. Assynco : {_ref_a}) :
    - Alertes et actions à mener
    - Conclusion expert (si disponible)
 
-4. ENRICHISSEMENT RAG : Les autres sources ne servent qu'à COMPLÉTER le dossier Airtable avec des détails documentaires (constats, convocations, rapports). Si un document RAG contredit le dossier Airtable, SIGNALE la divergence.
+4. DOCUMENTS ET CONTEXTE CONNEXE :
+   - Sources [DOCUMENT ASSOCIÉ AU DOSSIER] : archives directement liées à ce dossier. Utilise-les pour compléter la Source 1 (constats, rapports d'expertise, courriers).
+   - Sources [CONTEXTE CONNEXE] : peuvent provenir d'autres dossiers (même lésé sur un autre sinistre, même type de dommage dans l'immeuble, travaux connexes).
+     → Si tu identifies un lien pertinent avec le dossier {_ref_a} (ex : sinistre antérieur du même lésé, travaux ayant causé le dommage), signale-le explicitement : "Note connexe : [nom source] — potentiellement lié car [raison brève]."
+     → N'attribue PAS les données de ces sources au dossier {_ref_a} sans l'indiquer clairement.
+     → Si non pertinent pour la question posée, ignore la source.
+   - Si un document RAG contredit la Source 1 (Airtable), SIGNALE la divergence.
 
 5. ACTIONS CONCRÈTES : Propose des actions spécifiques au gestionnaire (relancer expert, fournir pièce manquante, vérifier prescription, etc.)."""
 
@@ -1180,11 +990,13 @@ Si la question demande une liste exhaustive, cite TOUTES les occurrences trouvé
 
 
 def generate_answer(query, search_results, doc_type_hint,
-                    model_id=LLM_MODEL, chat_history=None, diagramme=False):
+                    model_id=LLM_MODEL, chat_history=None, diagramme=False,
+                    dossier_strict_ids=None):
     """Synchrone (non-streaming)."""
     bedrock = get_bedrock_client()
     system_prompt, messages, max_tokens = build_llm_payload(
-        query, search_results, doc_type_hint, chat_history, diagramme=diagramme
+        query, search_results, doc_type_hint, chat_history, diagramme=diagramme,
+        dossier_strict_ids=dossier_strict_ids,
     )
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
@@ -1200,11 +1012,13 @@ def generate_answer(query, search_results, doc_type_hint,
 
 
 def generate_answer_stream(query, search_results, doc_type_hint,
-                           model_id, placeholder, chat_history=None, diagramme=False):
+                           model_id, placeholder, chat_history=None, diagramme=False,
+                           dossier_strict_ids=None):
     """Streaming : écrit progressivement dans un placeholder Streamlit."""
     bedrock = get_bedrock_client()
     system_prompt, messages, max_tokens = build_llm_payload(
-        query, search_results, doc_type_hint, chat_history, diagramme=diagramme
+        query, search_results, doc_type_hint, chat_history, diagramme=diagramme,
+        dossier_strict_ids=dossier_strict_ids,
     )
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
@@ -1491,7 +1305,7 @@ def render_answer_segments(segments):
                 '"edgeLabelBackground": "#334155", '
                 '"clusterBkg": "#1e293b", "clusterBorder": "#475569"'
                 '}, "flowchart": {"curve": "basis", "padding": 16, '
-                '"nodeSpacing": 50, "rankSpacing": 60, "htmlLabels": true}}}%%'
+                '"nodeSpacing": 50, "rankSpacing": 60, "htmlLabels": true}}%%'
             )
             # Auto-style nodes ONLY for flowchart/graph diagrams
             # timeline, sequenceDiagram, erDiagram, gantt, pie do NOT support style directives
@@ -1552,9 +1366,6 @@ def render_answer_segments(segments):
             themed_code = theme_directive + '\n' + clean_code
             if style_lines and _supports_style:
                 themed_code += '\n' + '\n'.join(style_lines)
-            # Debug: show exact code sent to st_mermaid
-            with st.expander(f"Debug Mermaid v10 — {themed_code.count(chr(10))+1} lignes", expanded=False):
-                st.code(themed_code, language="text")
             try:
                 stmd.st_mermaid(themed_code, height="auto")
             except Exception as e:
@@ -1958,7 +1769,7 @@ with st.sidebar:
     _user_questions = [
         (idx, msg["content"])
         for idx, msg in enumerate(st.session_state.chat_history)
-        if msg["role"] == "user"
+        if msg["role"] == "user" and msg.get("content")
     ]
     if _user_questions:
         st.markdown("##### 💬 Questions posées")
@@ -1985,10 +1796,18 @@ with st.sidebar:
     st.markdown("---")
     # code_ncg values from DB; display as code_ncg in dropdown
     copro_codes = ["Toutes les copropriétés"] + [c[0] for c in copros]
+    # Build display labels: "5390 - 2-6 BIS HENRI TARIEL" (use copropriete field which already has full name)
+    _copro_labels = {"Toutes les copropriétés": "Toutes les copropriétés"}
+    _copro_labels.update({c[0]: (c[1][:180] if c[1] else c[0]) for c in copros})
     default_idx = 1 if len(copros) == 1 else 0
-    selected_copro = st.selectbox("📁 Filtrer par copropriété (code NCG)", copro_codes, index=default_idx)
+    selected_copro = st.selectbox(
+        "📁 Copropriété",
+        copro_codes,
+        index=default_idx,
+        format_func=lambda x: _copro_labels.get(x, x),
+    )
     if selected_copro != "Toutes les copropriétés":
-        copro_count = next((c[1] for c in copros if c[0] == selected_copro), 0)
+        copro_count = next((c[2] for c in copros if c[0] == selected_copro), 0)
         st.caption(f"{copro_count} chunks disponibles")
 
     # ── Mes dossiers (Module Gestion de Projet) ──
@@ -2043,16 +1862,12 @@ with st.sidebar:
                 _pieces_manq = len(_pieces_req) - len(_pieces_four)
 
                 _is_selected = st.session_state.selected_dossier == _did
-                # Display ref_assynco as primary identifier + lésé name
-                _short_ref = _d_ref_assynco or _dname[:30]
-                _label = f"{_badge} **{_short_ref}**"
-                if _d_lese:
-                    _label += f" — {_d_lese}"
-                if _d_ref_cie:
-                    _label += f"\nRéf. cie: {_d_ref_cie}"
+                # Display nom_dossier as label, ref_assynco as subtitle
+                _label = f"{_badge} {_dname}"
                 if _pieces_manq > 0:
-                    _label += f" · {_pieces_manq} pièce(s) manquante(s)"
-                _label += f" · {_etapes_done}/{len(_d_etapes)} étapes"
+                    _label += f"\n{_pieces_manq} pièce(s) manquante(s) · {_etapes_done}/{len(_d_etapes)} étapes"
+                else:
+                    _label += f"\n{_etapes_done}/{len(_d_etapes)} étapes"
 
                 if st.button(_label, key=f"dos_{_did}", use_container_width=True,
                              type="primary" if _is_selected else "secondary"):
@@ -2065,11 +1880,53 @@ with st.sidebar:
         if st.session_state.selected_dossier:
             _sel = get_dossier_detail(st.session_state.selected_dossier)
             if _sel:
-                _sel_ref = _sel.get('ref_assynco') or _sel.get('nom_dossier', '')[:30]
+                _sel_nom = _sel.get('nom_dossier', '')
+                _sel_ref = _sel.get('ref_assynco', '')
                 _sel_lese = _sel.get('lese_nom', '')
-                st.info(f"📋 Dossier actif : **{_sel_ref}** — {_sel_lese}")
+                _sel_statut = _sel.get('statut', '')
+                # Full name display (no truncation)
+                _display_parts = []
+                if _sel_ref:
+                    _display_parts.append(f"**{_sel_ref}**")
+                if _sel_lese:
+                    _display_parts.append(f"Lésé: {_sel_lese}")
+                if _sel_statut:
+                    _display_parts.append(f"[{_sel_statut}]")
+                _display_line1 = " — ".join(_display_parts) if _display_parts else _sel_nom
+
+                # Checkbox to activate/deactivate the dossier filter
+                if "dossier_filter_active" not in st.session_state:
+                    st.session_state.dossier_filter_active = True
+
+                _filter_active = st.checkbox(
+                    "📋 Filtrer par ce dossier",
+                    value=st.session_state.dossier_filter_active,
+                    key="dossier_filter_checkbox",
+                )
+                st.session_state.dossier_filter_active = _filter_active
+
+                if _filter_active:
+                    st.markdown(
+                        f'<div style="background:#1e3a5f;border:1px solid #3b82f6;border-radius:8px;'
+                        f'padding:8px 12px;margin:4px 0;font-size:0.82rem;color:#e2e8f0;'
+                        f'line-height:1.4;word-wrap:break-word">'
+                        f'{_display_line1}<br>'
+                        f'<span style="color:#94a3b8;font-size:0.75rem">{_sel_nom}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f'<div style="background:#1e293b;border:1px solid #475569;border-radius:8px;'
+                        f'padding:8px 12px;margin:4px 0;font-size:0.82rem;color:#64748b;'
+                        f'line-height:1.4;word-wrap:break-word;opacity:0.6">'
+                        f'{_display_line1}<br>'
+                        f'<span style="font-size:0.75rem">{_sel_nom}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
     else:
-        st.caption("Aucun dossier actif")
+        st.caption("Aucun dossier sélectionné")
 
     st.markdown("---")
     demo_mode = st.toggle("⚡ Mode Démo", value=False,
@@ -2098,6 +1955,10 @@ with st.sidebar:
     # POINT 3 : bouton nouvelle conversation
     if st.button("🗑️ Nouvelle conversation", use_container_width=True):
         st.session_state.chat_history = []
+        # Delete old session from DB and create new session ID
+        _delete_chat_session(_current_sid)
+        st.session_state._palim_session_id = str(_uuid.uuid4())[:12]
+        st.query_params["sid"] = st.session_state._palim_session_id
         st.rerun()
 
     st.markdown("---")
@@ -2137,8 +1998,25 @@ _ = st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# ── Bandeau contextuel : filtre dossier actif ──
+if st.session_state.get("selected_dossier") and st.session_state.get("dossier_filter_active", True):
+    _filt = get_dossier_detail(st.session_state.selected_dossier)
+    if _filt:
+        _filt_ref = _filt.get('ref_assynco', '')
+        _filt_nom = _filt.get('nom_dossier', 'dossier sélectionné')
+        _filt_label = f"**{_filt_ref}** — {_filt_nom}" if _filt_ref else f"**{_filt_nom}**"
+        st.info(
+            f"📋 Filtre dossier actif : {_filt_label}  \n"
+            f"Vos questions portent sur ce dossier uniquement. "
+            f"Pour une question générale sur les archives, décochez « 📋 Filtrer par ce dossier » "
+            f"dans le panneau latéral (☰ sur mobile)."
+        )
+
 # ── Saisie utilisateur (barre fixe en bas) ──
 user_input = st.chat_input("Posez votre question sur les archives de copropriété…")
+# Handle resubmit from interrupted query recovery
+if not user_input and st.session_state.get("_resubmit"):
+    user_input = st.session_state.pop("_resubmit")
 
 # ── Afficher l'historique — toutes les réponses restent consultables et cliquables ──
 # Fix duplicate question: if user_input is set, the last user message was just appended
@@ -2162,7 +2040,7 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
         else:
             n_disp = msg.get("n_displayed", 0)
             apfx = f"m{msg_idx}"
-            render_answer_segments(linkify_sources(msg["content"], n_disp, anchor_prefix=apfx))
+            _ = render_answer_segments(linkify_sources(msg["content"], n_disp, anchor_prefix=apfx))
 
             # Render ALL sources in a single collapsed expander
             if msg.get("sources"):
@@ -2172,11 +2050,11 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
                     if st.session_state.chat_history[_pi]["role"] == "user":
                         _prev_q = st.session_state.chat_history[_pi]["content"]
                         break
-                render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}", question=_prev_q)
+                _ = render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}", question=_prev_q)
                 all_msg_sources = msg["sources"][:TOP_K_EXTRA]
-                render_sources(all_msg_sources, display_k=len(all_msg_sources),
-                               key_prefix=f"h-{msg_idx}", anchor_prefix=apfx,
-                               collapsed=True)
+                _ = render_sources(all_msg_sources, display_k=len(all_msg_sources),
+                                   key_prefix=f"h-{msg_idx}", anchor_prefix=apfx,
+                                   collapsed=True)
             else:
                 sc = msg.get("source_count", 0)
                 if sc:
@@ -2185,6 +2063,9 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
 if user_input:
     # Ajouter à l'historique et afficher
     st.session_state.chat_history.append({"role": "user", "content": user_input})
+    # Persist with pending flag (in case of disconnect during LLM call)
+    _save_chat_session(_current_sid, st.session_state.chat_history,
+                      st.session_state.selected_dossier, pending_query=user_input)
     _new_msg_idx = len(st.session_state.chat_history) - 1
     with st.chat_message("user"):
         st.markdown(f'<div id="q-anchor-{_new_msg_idx}"></div>', unsafe_allow_html=True)
@@ -2222,43 +2103,22 @@ if user_input:
 
     # ── Fix B : enrichir la requête avec le dossier sélectionné ──
     _sel_dossier_id = st.session_state.get("selected_dossier")
+    _dossier_filter_on = st.session_state.get("dossier_filter_active", True)
     _sel_dossier_data = None
-    if _sel_dossier_id:
+    _strict_chunk_ids = None  # chunk_ids du retrieval strict (refs uniquement)
+    if _sel_dossier_id and _dossier_filter_on:
         _sel_dossier_data = get_dossier_detail(_sel_dossier_id)
         if _sel_dossier_data:
-            # Forcer stratégie ciblée quand un dossier est sélectionné
             _strategie_override = "cible"
-            # Enrichir la requête avec ref_assynco + lésé (pas le nom_dossier complet qui est trop large)
-            _d = _sel_dossier_data
-            _enrichment_parts = [query_for_retrieval]
-            # Extraire ref_assynco du nom_dossier si pas dans un champ dédié
-            _ref_assynco = _d.get("ref_assynco") or ""
-            if not _ref_assynco and _d.get("nom_dossier"):
-                import re as _re
-                _m = _re.search(r'Ref:\s*(\w+)', _d["nom_dossier"])
-                if _m:
-                    _ref_assynco = _m.group(1)
-            if _ref_assynco:
-                _enrichment_parts.append(_ref_assynco)
-            if _d.get("lese_nom"):
-                _enrichment_parts.append(_d["lese_nom"])
-            if _d.get("ref_cie"):
-                _enrichment_parts.append(_d["ref_cie"])
-            if _d.get("circonstances"):
-                # Add first 50 chars of circumstances for better semantic matching
-                _enrichment_parts.append(_d["circonstances"][:50])
-            query_for_retrieval = " ".join(_enrichment_parts)
-            # Override strategy AND parameters — dossier context = focused search
-            # The Airtable virtual chunk is the PRIMARY source; RAG chunks are supplementary
+            query_for_retrieval, _overrides = enrich_query_with_dossier(query_for_retrieval, _sel_dossier_data)
             strategy_label = "Ciblé (dossier)"
-            MCL_ACTUAL = min(MCL_ACTUAL, 5)  # Max 5 RAG chunks — Airtable chunk dominates
-            CPS_ACTUAL = min(CPS_ACTUAL, 1)   # Max 1 per source file — only the best per doc
-            # Force doc_type if dossier is a sinistre
-            if _d.get("type_dossier") and "SINISTRE" in (_d["type_dossier"] or "").upper():
-                doc_type_hint = "SINISTRE"
+            MCL_ACTUAL = min(MCL_ACTUAL, _overrides["MCL"])
+            CPS_ACTUAL = min(CPS_ACTUAL, _overrides["CPS"])
+            if _overrides.get("doc_type"):
+                doc_type_hint = _overrides["doc_type"]
                 if prefilter is None:
                     prefilter = {}
-                prefilter["doc_type"] = "SINISTRE"
+                prefilter["doc_type"] = _overrides["doc_type"]
 
     # ── Recherche (Phase 1b : décomposition temporelle si inventaire) ──
     _strategie = "inventaire" if "Inventaire" in strategy_label else (
@@ -2273,26 +2133,50 @@ if user_input:
             strategie=_strategie,
         )
 
+        # ── Double retrieval contextuel (Option 1) ──
+        # Quand un dossier est sélectionné, on effectue une 2e requête avec des
+        # termes plus larges (lese_nom + circonstances) pour retrouver des
+        # documents connexes (même lésé sur d'autres sinistres, même type de
+        # dommage dans l'immeuble). Les chunks sont étiquetés [CONTEXTE CONNEXE]
+        # dans le prompt LLM pour que Claude sache distinguer.
+        if _sel_dossier_data:
+            _strict_chunk_ids = {r[0] for r in results}
+            _query_contextual = enrich_query_contextual(
+                expanded_query if was_expanded and expanded_query else user_input,
+                _sel_dossier_data,
+            )
+            _results_ctx, _, _ = search_decomposed(
+                _query_contextual, copro_filter,
+                max_chunks=2, sim_threshold=SIM_ACTUAL,
+                chunks_per_source=1, doc_type_boost=DTB_ACTUAL,
+                prefilter=None, doc_type_hint=None,
+                strategie="cible",
+            )
+            # N'ajouter que les chunks pas déjà présents dans le retrieval strict
+            _new_ctx = [r for r in _results_ctx if r[0] not in _strict_chunk_ids]
+            if _new_ctx:
+                results = list(results) + _new_ctx
+
     # ── Fix A : injection chunk virtuel Airtable ──
-    # 1. Toujours injecter le dossier sélectionné (priorité max)
-    _airtable_chunks = []
-    if _sel_dossier_data:
-        _vc = dossier_to_virtual_chunk(_sel_dossier_data, 1)
-        _airtable_chunks.append(_vc)
-
-    # 2. Aussi chercher des dossiers par matching textuel (pour les requêtes sans sélection)
     _text_query = expanded_query if was_expanded and expanded_query else user_input
-    _text_dossiers = search_dossiers_for_query(_text_query, copropriete=copro_filter)
-    for _ad in _text_dossiers:
-        # Éviter les doublons avec le dossier déjà sélectionné
-        if _sel_dossier_data and _ad.get("dossier_id") == _sel_dossier_data.get("dossier_id"):
-            continue
-        _vc = dossier_to_virtual_chunk(_ad, len(results) + len(_airtable_chunks) + 1)
-        _airtable_chunks.append(_vc)
+    results = merge_with_airtable_chunks(results, _text_query, _sel_dossier_data, copro_filter, get_db_connection())
 
-    if _airtable_chunks:
-        # Prepend Airtable chunks (highest priority — structured data from Assynco)
-        results = _airtable_chunks + list(results)
+    # ── Hint : dossier(s) Assynco auto-détecté(s) dans la requête ──
+    if not _sel_dossier_data:
+        _auto_at = [r for r in results if r[2] == "AIRTABLE_ASSYNCO"]
+        if _auto_at:
+            _hint_names = []
+            for _ar in _auto_at[:2]:
+                _n = str(_ar[3]).replace("Dossier Assynco: ", "").strip()
+                if _n:
+                    _hint_names.append(f"**{_n[:60]}**")
+            _hint_list = " / ".join(_hint_names) if _hint_names else "un dossier Assynco"
+            st.info(
+                f"💡 Dossier(s) Assynco trouvé(s) dans votre question : {_hint_list}  \n"
+                f"Pour concentrer la recherche sur un dossier précis et éviter les résultats "
+                f"hors-sujet, sélectionnez-le dans le panneau latéral (☰ sur mobile) "
+                f"et activez **📋 Filtrer par ce dossier**."
+            )
 
     # ── Réponse ──
     with st.chat_message("assistant"):
@@ -2303,6 +2187,9 @@ if user_input:
                 "role": "assistant", "content": answer,
                 "source_count": 0, "n_displayed": 0,
             })
+            # Clear pending flag after response
+            _save_chat_session(_current_sid, st.session_state.chat_history,
+                              st.session_state.selected_dossier, pending_query=None)
         else:
             unique_sources = len(set(r[2] for r in results))
 
@@ -2346,28 +2233,28 @@ if user_input:
                 answer = generate_answer_stream(
                     user_input, results, doc_type_hint,
                     active_model, answer_placeholder, chat_history=history_for_llm,
-                    diagramme=_diagramme,
+                    diagramme=_diagramme, dossier_strict_ids=_strict_chunk_ids,
                 )
                 answer_placeholder.empty()
-                render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
+                _ = render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
             else:
                 with st.spinner("🤖 Génération de la réponse…"):
                     answer = generate_answer(
                         user_input, results, doc_type_hint,
                         model_id=active_model, chat_history=history_for_llm,
-                        diagramme=_diagramme,
+                        diagramme=_diagramme, dossier_strict_ids=_strict_chunk_ids,
                     )
-                render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
+                _ = render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
 
             # Boutons copier / sauvegarder (POINT 2)
-            render_action_buttons(answer, key_suffix="current", question=user_input)
+            _ = render_action_buttons(answer, key_suffix="current", question=user_input)
 
             # Sources unifiées (toutes les sources dans un seul expander replié)
             all_sources = results[:TOP_K_EXTRA]
             if all_sources:
-                render_sources(all_sources, display_k=len(all_sources),
-                               key_prefix="current", anchor_prefix=cur_apfx,
-                               collapsed=True)
+                _ = render_sources(all_sources, display_k=len(all_sources),
+                                   key_prefix="current", anchor_prefix=cur_apfx,
+                                   collapsed=True)
 
             # ── Sauvegarder dans l'historique ──
             # Keep sources for all messages so they can be displayed in collapsed expanders
@@ -2384,3 +2271,6 @@ if user_input:
                     "prefilter_used": prefilter_used,
                 },
             })
+            # Clear pending flag after successful response
+            _save_chat_session(_current_sid, st.session_state.chat_history,
+                              st.session_state.selected_dossier, pending_query=None)
