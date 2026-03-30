@@ -1762,8 +1762,8 @@ def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0,
 # SIDEBAR
 # =====================================================
 with st.sidebar:
-    st.markdown("## 🏢 PALIM")
-    st.markdown("---")
+    _ = st.markdown("## 🏢 PALIM")
+    _ = st.markdown("---")
 
     # Clickable question titles — scroll to the corresponding message
     _user_questions = [
@@ -1793,7 +1793,7 @@ with st.sidebar:
     <div class="stat-card"><div class="number">{len(copros)}</div><div class="label">copropriété(s)</div></div>
     """, unsafe_allow_html=True)
 
-    st.markdown("---")
+    _ = st.markdown("---")
     # code_ncg values from DB; display as code_ncg in dropdown
     copro_codes = ["Toutes les copropriétés"] + [c[0] for c in copros]
     # Build display labels: "5390 - 2-6 BIS HENRI TARIEL" (use copropriete field which already has full name)
@@ -1811,7 +1811,7 @@ with st.sidebar:
         st.caption(f"{copro_count} chunks disponibles")
 
     # ── Mes dossiers (Module Gestion de Projet) ──
-    st.markdown("---")
+    _ = st.markdown("---")
     try:
         _copro_for_dossiers = selected_copro if selected_copro and "Toutes" not in selected_copro else None
         _dossiers = get_dossiers(_copro_for_dossiers)
@@ -1928,7 +1928,7 @@ with st.sidebar:
     else:
         st.caption("Aucun dossier sélectionné")
 
-    st.markdown("---")
+    _ = st.markdown("---")
     demo_mode = st.toggle("⚡ Mode Démo", value=False,
                            help="Haiku 4.5 + streaming + chunks réduits. ~15-20s au lieu de ~90s.")
     if demo_mode:
@@ -1950,7 +1950,7 @@ with st.sidebar:
         display_k = st.slider("Sources affichées", 5, 30, TOP_K_DISPLAY)
         sim_threshold = st.slider("Seuil de similarité", 0.0, 1.0, SIMILARITY_THRESHOLD, 0.05)
 
-    st.markdown("---")
+    _ = st.markdown("---")
 
     # POINT 3 : bouton nouvelle conversation
     if st.button("🗑️ Nouvelle conversation", use_container_width=True):
@@ -1961,8 +1961,8 @@ with st.sidebar:
         st.query_params["sid"] = st.session_state._palim_session_id
         st.rerun()
 
-    st.markdown("---")
-    st.markdown("""
+    _ = st.markdown("---")
+    _ = st.markdown("""
     **Exemples de questions :**
     - Quel est le règlement de copropriété ?
     - Quels travaux ont été votés ?
