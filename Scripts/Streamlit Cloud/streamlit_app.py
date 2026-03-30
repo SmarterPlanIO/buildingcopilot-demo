@@ -346,11 +346,17 @@ if "chat_history" not in st.session_state:
 if "selected_dossier" not in st.session_state:
     st.session_state.selected_dossier = None
 
-# Step 3: Show recovery UI if a query was interrupted
+# Step 3: Show recovery UI if a query was interrupted (F5 / reconnexion)
 if _restored_session and _restored_session.get("pending_query"):
     _pending = _restored_session["pending_query"]
-    st.warning(f"⚠️ Votre requête précédente a été interrompue : *{_pending[:120]}*")
-    if st.button("🔄 Relancer cette requête"):
+    st.info(f"↩️ Requête interrompue détectée : *{_pending[:120]}*")
+    if st.button("🔄 Relancer cette requête", type="primary"):
+        # La session restaurée contient déjà le message utilisateur dans l'historique.
+        # On le retire pour éviter le doublon quand le bloc de traitement l'ajoute à nouveau.
+        if (st.session_state.chat_history
+                and st.session_state.chat_history[-1]["role"] == "user"
+                and st.session_state.chat_history[-1]["content"] == _pending):
+            st.session_state.chat_history.pop()
         st.session_state._resubmit = _pending
         # Clear pending flag in DB
         _save_chat_session(_current_sid, st.session_state.chat_history,
@@ -1784,7 +1790,6 @@ with st.sidebar:
                 f'<span style="color:#f59e0b;font-weight:500;">{_qi+1}.</span> {_truncated}</a>'
             )
         st.markdown(_links_html, unsafe_allow_html=True)
-        st.markdown("---")
 
     copros = get_copros()
     _ = st.markdown("---")
