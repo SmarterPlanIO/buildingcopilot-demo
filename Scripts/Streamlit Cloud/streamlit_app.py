@@ -1992,7 +1992,7 @@ _ = st.markdown(f"""
 <div class="main-header" style="display:flex;align-items:center;justify-content:space-between;">
     <div>
         <h1 style="color:white;margin:0 0 0.3rem 0;font-size:1.8rem;font-weight:700;">🏢 PALIM</h1>
-        <p style="color:#a0aec0;margin:0;font-size:0.95rem;">Interrogez notre IA sur vos archives de copropriété &amp; prolongez votre conversation pour affiner vos études</p>
+        <p style="color:#a0aec0;margin:0;font-size:0.95rem;">Interrogez notre IA sur vos archives de copropriété - Prolongez votre conversation pour affiner votre recherche</p>
     </div>
     {_logo_html}
 </div>
