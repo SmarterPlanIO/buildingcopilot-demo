@@ -1787,12 +1787,6 @@ with st.sidebar:
         st.markdown("---")
 
     copros = get_copros()
-    total = get_total_chunks()
-    _ = st.markdown(f"""
-    <div class="stat-card"><div class="number">{total:,}</div><div class="label">chunks indexés</div></div>
-    <div class="stat-card"><div class="number">{len(copros)}</div><div class="label">copropriété(s)</div></div>
-    """, unsafe_allow_html=True)
-
     _ = st.markdown("---")
     # code_ncg values from DB; display as code_ncg in dropdown
     copro_codes = ["Toutes les copropriétés"] + [c[0] for c in copros]
@@ -1801,7 +1795,7 @@ with st.sidebar:
     _copro_labels.update({c[0]: (c[1][:180] if c[1] else c[0]) for c in copros})
     default_idx = 1 if len(copros) == 1 else 0
     selected_copro = st.selectbox(
-        "📁 Copropriété",
+        f"📁 Copropriété ({len(copros)})",
         copro_codes,
         index=default_idx,
         format_func=lambda x: _copro_labels.get(x, x),
