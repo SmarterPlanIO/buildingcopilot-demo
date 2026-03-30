@@ -92,27 +92,6 @@ st.set_page_config(
 )
 
 # =====================================================
-# 🔧 DIAGNOSTIC TEMPORAIRE v3 — à retirer après vérification
-# =====================================================
-import streamlit.config as _stconfig
-
-_diag_version = st.__version__
-_diag_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".streamlit", "config.toml")
-_diag_config_exists = os.path.exists(_diag_config_path)
-try:
-    _diag_magic = _stconfig.get_option("runner.magicEnabled")
-except Exception as _e:
-    _diag_magic = f"ERREUR: {_e}"
-
-# Bannière rouge en haut de page — impossible à rater
-st.error(
-    f"🔧 **DIAGNOSTIC ACTIF** — commit 03a2ce2+  |  "
-    f"Streamlit `{_diag_version}`  |  "
-    f"`magicEnabled={_diag_magic}`  |  "
-    f"config.toml présent: `{_diag_config_exists}`"
-)
-# =====================================================
-# =====================================================
 # CSS — POINT 1 : sidebar lisible en mobile
 # =====================================================
 _ = st.markdown("""
