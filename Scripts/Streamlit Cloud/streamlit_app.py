@@ -266,9 +266,20 @@ if "bedrock_warm" not in st.session_state:
 
 # ── Session persistence (résilience mobile/tab switch) ──
 def _save_chat_session(sid, chat_history, selected_dossier=None, pending_query=None):
-    """Persist chat session to PostgreSQL for mobile resilience."""
+    """Persist chat session to PostgreSQL for mobile resilience.
+    Les sources (chunks bruts, ~100 KB par réponse) sont exclues du payload DB
+    pour éviter que le JSON soit trop volumineux et que la sauvegarde échoue silencieusement.
+    Après F5, les réponses restent lisibles via content + source_count/n_displayed.
+    """
     try:
         conn = get_db_connection()
+        # Alléger le payload : retirer les sources brutes des messages assistant
+        _slim_history = []
+        for _msg in chat_history:
+            if _msg.get("role") == "assistant" and "sources" in _msg:
+                _slim_history.append({k: v for k, v in _msg.items() if k != "sources"})
+            else:
+                _slim_history.append(_msg)
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO chat_sessions (session_id, chat_history, selected_dossier, pending_query, updated_at)
@@ -278,7 +289,7 @@ def _save_chat_session(sid, chat_history, selected_dossier=None, pending_query=N
                     selected_dossier = EXCLUDED.selected_dossier,
                     pending_query = EXCLUDED.pending_query,
                     updated_at = NOW()
-            """, (sid, json.dumps(chat_history), selected_dossier, pending_query))
+            """, (sid, json.dumps(_slim_history), selected_dossier, pending_query))
         conn.commit()
     except Exception:
         pass  # Non-blocking — session persistence is best-effort
