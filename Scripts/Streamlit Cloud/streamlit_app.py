@@ -1772,27 +1772,8 @@ def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0,
 # =====================================================
 with st.sidebar:
     _ = st.markdown("## 🏢 PALIM")
-    _ = st.markdown("---")
-
-    # Clickable question titles — scroll to the corresponding message
-    _user_questions = [
-        (idx, msg["content"])
-        for idx, msg in enumerate(st.session_state.chat_history)
-        if msg["role"] == "user" and msg.get("content")
-    ]
-    if _user_questions:
-        st.markdown("##### 💬 Questions posées")
-        _links_html = ""
-        for _qi, (_msg_idx, _q) in enumerate(_user_questions):
-            _truncated = (_q[:50] + "...") if len(_q) > 50 else _q
-            _anchor_id = f"q-anchor-{_msg_idx}"
-            _links_html += (
-                f'<a href="#{_anchor_id}" style="display:block;font-size:0.82rem;padding:4px 8px;margin:2px 0;'
-                f'color:#a0aec0;text-decoration:none;border-radius:6px;transition:background 0.15s;'
-                f'font-family:Inter,sans-serif;">'
-                f'<span style="color:#f59e0b;font-weight:500;">{_qi+1}.</span> {_truncated}</a>'
-            )
-        st.markdown(_links_html, unsafe_allow_html=True)
+    # Placeholder rempli en fin de script avec l'historique à jour (évite le double st.rerun())
+    _questions_placeholder = st.empty()
 
     copros = get_copros()
     _ = st.markdown("---")
@@ -2199,8 +2180,6 @@ if user_input:
             # Clear pending flag after response
             _save_chat_session(_current_sid, st.session_state.chat_history,
                               st.session_state.selected_dossier, pending_query=None)
-            # Rerun so the sidebar "Questions posées" reflects the updated chat_history
-            st.rerun()
         else:
             unique_sources = len(set(r[2] for r in results))
 
@@ -2285,5 +2264,27 @@ if user_input:
             # Clear pending flag after successful response
             _save_chat_session(_current_sid, st.session_state.chat_history,
                               st.session_state.selected_dossier, pending_query=None)
-            # Rerun so the sidebar "Questions posées" reflects the updated chat_history
-            st.rerun()
+
+# ── Remplir le placeholder "Questions posées" avec l'historique final ──
+# Exécuté en toute fin de script → chat_history inclut la réponse qui vient d'être ajoutée.
+# Pas de st.rerun() nécessaire — le placeholder est une référence vivante dans le sidebar.
+_final_questions = [
+    (idx, msg["content"])
+    for idx, msg in enumerate(st.session_state.chat_history)
+    if msg["role"] == "user" and msg.get("content")
+]
+if _final_questions:
+    with _questions_placeholder.container():
+        _ = st.markdown("---")
+        st.markdown("##### 💬 Questions posées")
+        _links_html = ""
+        for _qi, (_msg_idx, _q) in enumerate(_final_questions):
+            _truncated = (_q[:50] + "...") if len(_q) > 50 else _q
+            _anchor_id = f"q-anchor-{_msg_idx}"
+            _links_html += (
+                f'<a href="#{_anchor_id}" style="display:block;font-size:0.82rem;padding:4px 8px;margin:2px 0;'
+                f'color:#a0aec0;text-decoration:none;border-radius:6px;transition:background 0.15s;'
+                f'font-family:Inter,sans-serif;">'
+                f'<span style="color:#f59e0b;font-weight:500;">{_qi+1}.</span> {_truncated}</a>'
+            )
+        st.markdown(_links_html, unsafe_allow_html=True)
