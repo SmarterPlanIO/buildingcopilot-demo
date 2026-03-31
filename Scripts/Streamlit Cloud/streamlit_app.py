@@ -344,13 +344,17 @@ if _qp.get("sid") != st.session_state._palim_session_id:
 _current_sid = st.session_state._palim_session_id
 
 # Step 2: Initialize or restore session
-_restored_session = None
 if "chat_history" not in st.session_state:
-    # Try to restore from DB
+    # Try to restore from DB (first load only — F5 / fresh session)
     _restored_session = _load_chat_session(_current_sid)
     if _restored_session and _restored_session["chat_history"]:
         st.session_state.chat_history = _restored_session["chat_history"]
         st.session_state.selected_dossier = _restored_session.get("selected_dossier")
+        # Persister pending_query dans session_state pour qu'il survive au rerun
+        # du clic bouton (sur le rerun, chat_history est déjà là donc on n'entre
+        # plus dans ce bloc — sans ça, le bouton n'est jamais re-rendu et le clic est perdu)
+        if _restored_session.get("pending_query"):
+            st.session_state["_pending_query"] = _restored_session["pending_query"]
     else:
         st.session_state.chat_history = []
 
@@ -358,17 +362,18 @@ if "selected_dossier" not in st.session_state:
     st.session_state.selected_dossier = None
 
 # Step 3: Show recovery UI if a query was interrupted (F5 / reconnexion)
-if _restored_session and _restored_session.get("pending_query"):
-    _pending = _restored_session["pending_query"]
+# Lit depuis session_state (et non _restored_session) pour survivre au rerun du clic bouton.
+_pending = st.session_state.get("_pending_query")
+if _pending:
     st.info(f"↩️ Requête interrompue détectée : *{_pending[:120]}*")
     if st.button("🔄 Relancer cette requête", type="primary"):
-        # La session restaurée contient déjà le message utilisateur dans l'historique.
-        # Réassigner une nouvelle liste (plus fiable que pop() en place avec Streamlit).
+        # Retirer le message utilisateur en attente de l'historique s'il y est déjà
         if (st.session_state.chat_history
                 and st.session_state.chat_history[-1]["role"] == "user"
                 and st.session_state.chat_history[-1]["content"] == _pending):
             st.session_state.chat_history = st.session_state.chat_history[:-1]
         st.session_state["_resubmit"] = _pending
+        del st.session_state["_pending_query"]  # Effacer le flag pour ne pas reboucler
         # Clear pending flag in DB
         _save_chat_session(_current_sid, st.session_state.chat_history,
                           st.session_state.selected_dossier, pending_query=None)
