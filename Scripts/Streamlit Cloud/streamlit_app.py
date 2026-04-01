@@ -2037,7 +2037,15 @@ def render_sources(results, display_k=TOP_K_DISPLAY, key_prefix="", offset=0,
 # SIDEBAR
 # =====================================================
 with st.sidebar:
-    _ = st.markdown("## 🏢 PALIM")
+    # Lire la version depuis le fichier VERSION
+    _version_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
+    _app_version = "?"
+    try:
+        with open(_version_file, "r") as _vf:
+            _app_version = _vf.read().strip()
+    except Exception:
+        pass
+    _ = st.markdown(f"## 🏢 PALIM  <sup style='color:#64748b;font-size:0.55em;font-weight:400'>v{_app_version}</sup>", unsafe_allow_html=True)
     # Placeholder rempli en fin de script avec l'historique à jour (évite le double st.rerun())
     _questions_placeholder = st.empty()
 
