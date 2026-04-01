@@ -68,30 +68,9 @@ LEGAL_DOC_TYPES = {"PV_AG", "RCP", "CONTRAT", "ASSURANCE"}
 # =====================================================
 # LANGFUSE — Observabilité et tracing
 # =====================================================
-# DEBUG Langfuse — diagnostic temporaire (à retirer après résolution)
-_lf_debug = []
 _lf_public = None
 _lf_secret = None
 _lf_host = "https://cloud.langfuse.com"
-
-# Lister toutes les clés visibles dans st.secrets
-try:
-    _lf_debug.append(f"secrets_keys={list(st.secrets.keys())}")
-except Exception as e:
-    _lf_debug.append(f"secrets.keys() failed: {type(e).__name__}: {e}")
-
-# Tenter chaque méthode d'accès
-for _method, _fn in [
-    ("secrets['langfuse']['LANGFUSE_PUBLIC_KEY']", lambda: st.secrets["langfuse"]["LANGFUSE_PUBLIC_KEY"]),
-    ("secrets['LANGFUSE_PUBLIC_KEY']", lambda: st.secrets["LANGFUSE_PUBLIC_KEY"]),
-]:
-    try:
-        _val = _fn()
-        _lf_debug.append(f"{_method} = {str(_val)[:15]}...")
-    except Exception as e:
-        _lf_debug.append(f"{_method} -> {type(e).__name__}: {e}")
-
-# Accès réel
 try:
     _lf_public = st.secrets["langfuse"]["LANGFUSE_PUBLIC_KEY"]
     _lf_secret = st.secrets["langfuse"]["LANGFUSE_SECRET_KEY"]
@@ -112,9 +91,6 @@ if not _lf_public:
     except Exception:
         pass
 
-_lf_debug.append(f"public={'set' if _lf_public else 'None'}, secret={'set' if _lf_secret else 'None'}")
-print(f"[LANGFUSE DEBUG] {' | '.join(_lf_debug)}")
-
 _langfuse_enabled = bool(_lf_public and _lf_secret)
 langfuse_client = None
 if _langfuse_enabled:
@@ -125,7 +101,6 @@ if _langfuse_enabled:
             host=_lf_host,
         )
     except Exception as _lf_err:
-        _lf_debug.append(f"INIT FAILED: {type(_lf_err).__name__}: {_lf_err}")
         print(f"⚠️ Langfuse init failed: {_lf_err}")
         _langfuse_enabled = False
 
@@ -2111,10 +2086,6 @@ with st.sidebar:
         index=default_idx,
         format_func=lambda x: _copro_labels.get(x, x),
     )
-    if selected_copro != "Toutes les copropriétés":
-        copro_count = next((c[2] for c in copros if c[0] == selected_copro), 0)
-        st.caption(f"{copro_count} chunks disponibles")
-
     # ── Mes dossiers (Module Gestion de Projet) ──
     _ = st.markdown("---")
     try:
@@ -2279,9 +2250,6 @@ with st.sidebar:
     _ = st.markdown("---")
     _lf_status = "📊 Langfuse ON" if langfuse_client else "📊 Langfuse OFF"
     st.caption(f"👤 **{st.session_state.authenticated_user}** · {_lf_status}")
-    # DEBUG temporaire — à retirer après diagnostic
-    if _lf_debug:
-        st.caption(f"🔍 {' | '.join(_lf_debug)}")
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.authenticated_user = None
         st.session_state.chat_history = []
