@@ -75,14 +75,15 @@ _lf_host = "https://cloud.langfuse.com"
 try:
     # Essayer d'abord une section [langfuse]
     if "langfuse" in st.secrets:
-        _lf_public = st.secrets["langfuse"].get("LANGFUSE_PUBLIC_KEY") or st.secrets["langfuse"].get("public_key")
-        _lf_secret = st.secrets["langfuse"].get("LANGFUSE_SECRET_KEY") or st.secrets["langfuse"].get("secret_key")
-        _lf_host = st.secrets["langfuse"].get("LANGFUSE_HOST") or st.secrets["langfuse"].get("host") or _lf_host
+        _lfs = st.secrets["langfuse"]
+        _lf_public = _lfs.get("LANGFUSE_PUBLIC_KEY") or _lfs.get("public_key")
+        _lf_secret = _lfs.get("LANGFUSE_SECRET_KEY") or _lfs.get("secret_key")
+        _lf_host = _lfs.get("LANGFUSE_HOST") or _lfs.get("LANGFUSE_BASE_URL") or _lfs.get("host") or _lf_host
     # Sinon, clés à la racine
     if not _lf_public:
         _lf_public = st.secrets.get("LANGFUSE_PUBLIC_KEY")
         _lf_secret = st.secrets.get("LANGFUSE_SECRET_KEY")
-        _lf_host = st.secrets.get("LANGFUSE_HOST", _lf_host)
+        _lf_host = st.secrets.get("LANGFUSE_HOST") or st.secrets.get("LANGFUSE_BASE_URL") or _lf_host
 except Exception:
     pass
 
@@ -110,7 +111,6 @@ else:
         "Quentin": "palim-quentin-2026",
         "Johan": "palim-johan-2026",
         "Christophe": "palim-christophe-2026",
-        "SmarterPlan": "palim-smarterplan-2026",
     }
 
 # Liens 3D démo
