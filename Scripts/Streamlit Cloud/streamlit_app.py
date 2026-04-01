@@ -658,7 +658,8 @@ def filter_resolution_categories(results, query, strategie):
 
 def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                   sim_threshold=SIMILARITY_THRESHOLD, chunks_per_source=MAX_CHUNKS_PER_SOURCE,
-                  doc_type_boost=0.01, prefilter=None, doc_type_hint=None):
+                  doc_type_boost=0.01, prefilter=None, doc_type_hint=None,
+                  exclude_categories=None):
     """
     Pipeline hybride 5 étapes : pré-filtrage document (conditionnel) + RRF + diversité + rerank + quota RCP.
     doc_type_hint vient de Haiku (detect_strategy_haiku), plus de détection par mots-clés.
@@ -740,6 +741,13 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
             placeholders = ",".join(["%s"] * len(prefilter_files))
             where_clauses.append(f"c.source_file IN ({placeholders})")
             params_before.extend(prefilter_files)
+
+        # Exclure les catégories de résolution directement en SQL
+        # pour ne pas gaspiller de slots dynamic_cap sur des chunks filtrés ensuite
+        if exclude_categories:
+            cat_placeholders = ",".join(["%s"] * len(exclude_categories))
+            where_clauses.append(f"(c.resolution_category IS NULL OR c.resolution_category NOT IN ({cat_placeholders}))")
+            params_before.extend(list(exclude_categories))
 
         where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
         doc_type_for_boost = doc_type_hint if doc_type_hint else "__NONE__"
@@ -855,13 +863,21 @@ def search_decomposed(query, copropriete, max_chunks, sim_threshold,
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    # Déterminer les catégories à exclure en SQL (mode inventaire, sauf si query cible les élections)
+    _excl_cats = None
+    if strategie == "inventaire" and not query_targets_elections(query):
+        _excl_cats = ("PROCEDURE_AG", "ELECTION_CS")
+
     sub_queries = decompose_temporal_query(query, prefilter)
     if not sub_queries:
         # Pas de décomposition → recherche classique
         results, dt_hint, pf_active = search_chunks(
             query, copropriete, max_chunks, sim_threshold,
-            chunks_per_source, doc_type_boost, prefilter, doc_type_hint
+            chunks_per_source, doc_type_boost, prefilter, doc_type_hint,
+            exclude_categories=_excl_cats
         )
+        # filter_resolution_categories n'est plus nécessaire si exclu en SQL,
+        # mais on le garde en filet de sécurité pour les chunks sans catégorie
         results = filter_resolution_categories(results, query, strategie)
         return results, dt_hint, pf_active
 
@@ -877,7 +893,8 @@ def search_decomposed(query, copropriete, max_chunks, sim_threshold,
     def _run_sub(sub_query, sub_pf):
         return search_chunks(
             sub_query, copropriete, per_year_budget, sim_threshold,
-            chunks_per_source, doc_type_boost, sub_pf, doc_type_hint
+            chunks_per_source, doc_type_boost, sub_pf, doc_type_hint,
+            exclude_categories=_excl_cats
         )
 
     with ThreadPoolExecutor(max_workers=min(len(sub_queries), 8)) as executor:
