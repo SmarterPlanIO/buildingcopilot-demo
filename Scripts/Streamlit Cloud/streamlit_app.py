@@ -68,14 +68,32 @@ LEGAL_DOC_TYPES = {"PV_AG", "RCP", "CONTRAT", "ASSURANCE"}
 # =====================================================
 # LANGFUSE — Observabilité et tracing
 # =====================================================
-_langfuse_enabled = st.secrets.get("LANGFUSE_PUBLIC_KEY") is not None
+# Supporte les clés à la racine ou sous une section [langfuse] dans secrets.toml
+_lf_public = None
+_lf_secret = None
+_lf_host = "https://cloud.langfuse.com"
+try:
+    # Essayer d'abord une section [langfuse]
+    if "langfuse" in st.secrets:
+        _lf_public = st.secrets["langfuse"].get("LANGFUSE_PUBLIC_KEY") or st.secrets["langfuse"].get("public_key")
+        _lf_secret = st.secrets["langfuse"].get("LANGFUSE_SECRET_KEY") or st.secrets["langfuse"].get("secret_key")
+        _lf_host = st.secrets["langfuse"].get("LANGFUSE_HOST") or st.secrets["langfuse"].get("host") or _lf_host
+    # Sinon, clés à la racine
+    if not _lf_public:
+        _lf_public = st.secrets.get("LANGFUSE_PUBLIC_KEY")
+        _lf_secret = st.secrets.get("LANGFUSE_SECRET_KEY")
+        _lf_host = st.secrets.get("LANGFUSE_HOST", _lf_host)
+except Exception:
+    pass
+
+_langfuse_enabled = bool(_lf_public and _lf_secret)
 langfuse_client = None
 if _langfuse_enabled:
     try:
         langfuse_client = Langfuse(
-            public_key=st.secrets["LANGFUSE_PUBLIC_KEY"],
-            secret_key=st.secrets["LANGFUSE_SECRET_KEY"],
-            host=st.secrets.get("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+            public_key=_lf_public,
+            secret_key=_lf_secret,
+            host=_lf_host,
             enabled=True,
         )
     except Exception as _lf_err:
@@ -2231,7 +2249,8 @@ with st.sidebar:
 
     # ── Déconnexion ──
     _ = st.markdown("---")
-    st.caption(f"👤 Connecté : **{st.session_state.authenticated_user}**")
+    _lf_status = "📊 Langfuse ON" if langfuse_client else "📊 Langfuse OFF"
+    st.caption(f"👤 **{st.session_state.authenticated_user}** · {_lf_status}")
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.authenticated_user = None
         st.session_state.chat_history = []
