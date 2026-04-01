@@ -584,23 +584,10 @@ def detect_retrieval_strategy(query, demo_mode=False, prev_query=None):
         strategie, prefilter, doc_type_hint, is_followup, expanded_query, diagramme = haiku_result
 
         if strategie == "inventaire":
-            # Détecter plage temporelle large pour augmenter le budget chunks
-            _span = 0
-            if prefilter:
-                _amin = prefilter.get("annee_min")
-                _amax = prefilter.get("annee_max")
-                if _amin is not None and _amax is not None:
-                    try:
-                        _span = int(_amax) - int(_amin)
-                    except (ValueError, TypeError):
-                        pass
-            if _span >= 5:
-                mcl = 60 if demo_mode else MAX_CHUNKS_LLM_TEMPORAL
-                cps = 4  # Plus de chunks/source pour couvrir chaque PV d'AG
-            else:
-                mcl = 40 if demo_mode else MAX_CHUNKS_LLM_BROAD
-                cps = 2
-            print(f"[STRATEGY] inventaire span={_span} mcl={mcl} prefilter={prefilter}")
+            # Tout inventaire utilise le cap élevé (120 chunks)
+            mcl = 60 if demo_mode else MAX_CHUNKS_LLM_TEMPORAL
+            cps = 4
+            print(f"[STRATEGY] inventaire mcl={mcl} prefilter={prefilter}")
             return cps, 0.03, mcl, "🔎 Inventaire", prefilter, doc_type_hint, is_followup, expanded_query, diagramme
         elif strategie == "cible":
             mcl = 30 if demo_mode else 50
