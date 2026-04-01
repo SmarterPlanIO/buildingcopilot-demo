@@ -293,13 +293,10 @@ def detect_doc_type(filepath, filename, text="", source_file=""):
     if re.search(r'\bappel\b.*\bexcept', filename_lower):
         return "BUDGET"
 
-    # ODJ / Convocations → COURRIER (pas PV_AG)
-    # Intercepter AVANT le pattern PV pour éviter que "convoc + PV" dans le même dossier
-    # soit classé PV_AG. Un ODJ contient des projets de résolution mais pas de votes.
-    if re.search(r'\bordre\s*du\s*jour\b|\bodj\b|\bconvoc', filename_lower):
-        return "COURRIER"
-
     # PV d'AG — uniquement si le nom contient explicitement PV ou procès-verbal
+    # Note : les ODJ/convocations dans un dossier AG sont aussi classés PV_AG ici,
+    # mais la vérification Haiku (_verify_pvag) les reclassifiera en COURRIER
+    # en analysant le contenu (présence/absence de résultats de vote).
     # Match : "PV AG", "PV 2018", "PVAG", "PV AGO", "PV signe", "PV D AG", "proces verbal"
     # Exclut : PV_AR (accusé réception), PV_SIMPLES (envoi), PV_DESTINATAIRES (déjà filtré plus haut)
     if re.search(r'\bpvag\b|\bpv\b|\bproc[eè]s[\-_\s]?verbal', filename_lower):
@@ -855,6 +852,23 @@ def _build_smart_excerpt(text, max_chars=2000):
     )
     return excerpt
 
+
+def _build_pvag_excerpt(text, max_chars=2000):
+    """Extrait optimisé pour distinguer PV d'AG vs ODJ/convocation.
+    Prend le DÉBUT (en-tête, titre) + la FIN (verdicts adoptée/rejetée).
+    C'est plus discriminant que l'extrait générique car :
+    - Le début dit "PROCÈS VERBAL" ou "ORDRE DU JOUR"
+    - La fin contient les verdicts (adoptée/rejetée) dans un PV, absents d'un ODJ
+    """
+    n = len(text)
+    if n <= max_chars:
+        return text.strip()
+
+    half = max_chars // 2
+    debut = text[:half].strip()
+    fin = text[-(half):].strip()
+    return debut + "\n[...]\n" + fin
+
 for json_path in tqdm(json_files, desc="Pré-scan"):
     with open(json_path, "r", encoding="utf-8") as f:
         doc = json.load(f)
@@ -883,7 +897,8 @@ for json_path in tqdm(json_files, desc="Pré-scan"):
             _verify_stats["reclassified"] = _verify_stats.get("reclassified", 0) + 1
             continue
         # Tous les PV_AG passent par la vérification Haiku (plus de bypass "obvious")
-        files_needing_verify.append((source_file, _build_smart_excerpt(text)))
+        # On envoie le texte complet — _verify_pvag construit l'extrait optimisé (début+fin)
+        files_needing_verify.append((source_file, text))
 
 # Compter les reclassifications par pré-filtre regex (pas de vote = pas un PV)
 regex_reclassified = sum(1 for sf in _doc_type_llm_cache.values() if sf == "COURRIER")
@@ -951,29 +966,41 @@ Extrait :
                 return source_file, "AUTRE", "classify"
         return source_file, "AUTRE", "classify"
     
-    def _verify_pvag(source_file, excerpt):
+    def _verify_pvag(source_file, text_full):
         """Vérifie qu'un doc classé PV_AG est bien un PV et pas un OJ/convocation. Thread-safe."""
+        excerpt = _build_pvag_excerpt(text_full)
         prompt = f"""Ce document a été trouvé dans un dossier d'assemblée générale et classé PV_AG.
-Vérifie si c'est correct en analysant le CONTENU du texte.
+Analyse le CONTENU pour déterminer son type réel.
 
-Un vrai PV_AG contient obligatoirement :
-- Des résultats de votes : "Votent pour : X copropriétaires totalisant Y tantièmes"
-- Des mentions "résolution adoptée/rejetée"
-- Des décomptes pour/contre/abstention
+CRITÈRE DÉCISIF — PV_AG vs COURRIER :
 
-Mais un dossier AG contient souvent d'AUTRES types de documents :
-- Ordre du jour, convocation, feuille de présence, pouvoir, VPC → COURRIER
-- Contrat de syndic, mandat, convention → CONTRAT
-- Devis de travaux, chiffrage → DEVIS
+Un VRAI PV_AG (procès-verbal) contient OBLIGATOIREMENT :
+- Des RÉSULTATS de votes avec décomptes PRÉCIS : "Votent pour : 35 copropriétaires totalisant 5082 tantièmes"
+- Des VERDICTS FORMELS : "En vertu de quoi, cette résolution est adoptée/rejetée"
+- La mention "résolution adoptée" ou "résolution rejetée" au moins une fois
+
+Un ORDRE DU JOUR ou CONVOCATION (= COURRIER) contient :
+- Des PROJETS de résolution sans résultats : "Il est proposé à l'AG de..."
+- "L'Assemblée Générale est invitée à délibérer..."
+- Des articles de majorité SANS décompte de votes
+- AUCUNE mention "adoptée" ou "rejetée"
+- Souvent : "Madame, Monsieur", formule de convocation, date/lieu de l'AG
+
+ATTENTION : un document qui contient le mot "tantièmes" ou "résolution" n'est PAS forcément un PV.
+Un ODJ contient aussi ces mots dans les projets de résolution. Le critère clé est la PRÉSENCE
+ou l'ABSENCE de résultats de vote effectifs et de verdicts formels.
+
+Autres types possibles dans un dossier AG :
+- Contrat de syndic, mandat → CONTRAT
+- Devis de travaux → DEVIS
 - Annexes comptables, comptes, charges, budget → COMPTABILITE
-- Rapport du conseil syndical, présentation, fiche info → AUTRE
-- Certificat d'envoi, accusé de réception, bordereau LRE → COURRIER
 - Diagnostic, tableau d'anomalies → DIAGNOSTIC
 - Police ou attestation d'assurance → ASSURANCE
+- Feuille de présence, pouvoir, VPC, LRE, accusé réception → COURRIER
 
-Réponds UNIQUEMENT par le code du type correct parmi : PV_AG, COURRIER, CONTRAT, DEVIS, COMPTABILITE, DIAGNOSTIC, ASSURANCE, AUTRE.
+Réponds UNIQUEMENT par le code du type : PV_AG, COURRIER, CONTRAT, DEVIS, COMPTABILITE, DIAGNOSTIC, ASSURANCE, AUTRE.
 
-Extrait :
+Extrait (début et fin du document) :
 {excerpt}"""
         
         body = json.dumps({
