@@ -126,6 +126,7 @@ if _langfuse_enabled:
             enabled=True,
         )
     except Exception as _lf_err:
+        _lf_debug.append(f"INIT FAILED: {type(_lf_err).__name__}: {_lf_err}")
         print(f"⚠️ Langfuse init failed: {_lf_err}")
         _langfuse_enabled = False
 
