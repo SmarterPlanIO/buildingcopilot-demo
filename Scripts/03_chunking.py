@@ -293,6 +293,12 @@ def detect_doc_type(filepath, filename, text="", source_file=""):
     if re.search(r'\bappel\b.*\bexcept', filename_lower):
         return "BUDGET"
 
+    # ODJ / Convocations → COURRIER (pas PV_AG)
+    # Intercepter AVANT le pattern PV pour éviter que "convoc + PV" dans le même dossier
+    # soit classé PV_AG. Un ODJ contient des projets de résolution mais pas de votes.
+    if re.search(r'\bordre\s*du\s*jour\b|\bodj\b|\bconvoc', filename_lower):
+        return "COURRIER"
+
     # PV d'AG — uniquement si le nom contient explicitement PV ou procès-verbal
     # Match : "PV AG", "PV 2018", "PVAG", "PV AGO", "PV signe", "PV D AG", "proces verbal"
     # Exclut : PV_AR (accusé réception), PV_SIMPLES (envoi), PV_DESTINATAIRES (déjà filtré plus haut)
@@ -561,9 +567,14 @@ def chunk_by_resolutions(text):
         # Pattern 4 : "5- Approbation", "5 - Approbation" (format NCG typique des PV d'AG)
         r'(?=(?:^|\n)\s*\d{1,2}\s*[-–—]\s*[A-ZÉÈÀÊa-zéèàê])',
         
-        # Pattern 5 : numérotation simple "1)", "2)", "3)" 
+        # Pattern 5 : numérotation simple "1)", "2)", "3)"
         # (seulement si on trouve au moins 3 occurrences pour éviter les faux positifs)
         r'(?=(?:^|\n)\s*\d{1,2}\s*[)\.]\s+[A-ZÉÈÀÊ])',
+
+        # Pattern 6 : "1 ELECTION DU PRESIDENT", "18 PROJET D'INSTALLATION"
+        # (chiffre + espace + TITRE EN MAJUSCULES sans tiret — format NCG courant)
+        # Placé en dernier car plus large que les autres → priorité basse
+        r'(?=(?:^|\n)\s*\d{1,2}\s+[A-ZÉÈÀÊ]{3,})',
     ]
     
     best_chunks = []
@@ -590,13 +601,35 @@ def chunk_by_resolutions(text):
         return chunk_by_size(cleaned)
     
     # Post-traitement : respecter les limites de taille
+    # Quand une résolution est subdivisée, préserver le numéro et le verdict
     chunks = []
     for part in best_chunks:
         if len(part) <= CHUNK_MAX_SIZE:
             chunks.append(part)
         else:
-            chunks.extend(chunk_by_size(part))
-    
+            # Extraire le header (numéro + titre de la résolution)
+            header_match = re.match(
+                r'(\d{1,2}\s*[-–—]?\s*.{5,80}?)(?:\n|Type de vote)',
+                part
+            )
+            header = header_match.group(1).strip() if header_match else ""
+            # Extraire le verdict (dernière phrase "adoptée/rejetée")
+            verdict_match = re.search(
+                r'(En vertu de quoi.*?(?:adopt[ée]e|rejet[ée]e).*?\.)',
+                part, re.IGNORECASE
+            )
+            verdict = verdict_match.group(1).strip() if verdict_match else ""
+
+            sub_chunks = chunk_by_size(part)
+            for j, sc in enumerate(sub_chunks):
+                # Préfixer avec le header si pas déjà présent
+                if header and not sc.strip().startswith(header[:20]):
+                    sc = f"[Suite résolution {header}]\n{sc}"
+                # Suffixer le dernier sous-chunk avec le verdict si manquant
+                if j == len(sub_chunks) - 1 and verdict and verdict not in sc:
+                    sc = f"{sc}\n{verdict}"
+                chunks.append(sc)
+
     return enforce_max_size(chunks)
 
 def chunk_by_size(text):
@@ -662,7 +695,29 @@ def chunk_whole_document(text):
 # Classification des résolutions PV_AG (Phase 1a)
 # =====================================================
 _PROCEDURE_PATTERNS = [
+    # Résolutions de bureau (président, scrutateur, secrétaire de séance)
     re.compile(r"[Dd]ésignation\s+(?:du|des|de\s+la)\s+(?:Pr[ée]sident|Scrutateur|Secr[ée]taire)\s+de\s+s[ée]ance", re.IGNORECASE),
+    re.compile(r"[ée]lection\s+(?:du|des)\s+(?:Pr[ée]sident|Scrutateur|Secr[ée]taire)", re.IGNORECASE),
+    # Approbation des comptes
+    re.compile(r"[Aa]pprobation\s+des\s+comptes", re.IGNORECASE),
+    # Quitus au syndic
+    re.compile(r"[Qq]uitus.*[Ss]yndic|[Dd]onner\s+quitus", re.IGNORECASE),
+    # Désignation / renouvellement du syndic
+    re.compile(r"[Dd]ésignation.*[Ss]yndic.*qualit[ée]|[Rr]enouvellement.*mandat.*[Ss]yndic|[Dd]ésignation\s+à\s+nouveau.*[Ss]yndic", re.IGNORECASE),
+    re.compile(r"RENOUVELLEMENT\s+DU\s+MANDAT.*SYNDIC", re.IGNORECASE),
+    # Autorisation Police / Gendarmerie
+    re.compile(r"[Aa]utorisation.*[Pp]olice.*[Gg]endarmerie|p[ée]n[ée]trer\s+dans\s+les\s+parties\s+communes", re.IGNORECASE),
+    # Budget prévisionnel (approbation/ajustement récurrent)
+    re.compile(r"[Aa]pprobation\s+du\s+budget\s+pr[ée]visionnel|[Aa]justement\s+du\s+budget\s+pr[ée]visionnel", re.IGNORECASE),
+    # Honoraires syndic / contrat de mandat
+    re.compile(r"[Hh]onoraires.*[Ss]yndic|contrat\s+de\s+mandat", re.IGNORECASE),
+    # Modalités de contrôle/vérification des comptes
+    re.compile(r"modalit[ée]s.*contr[ôo]le\s+des\s+comptes|v[ée]rification\s+des\s+comptes", re.IGNORECASE),
+    # Fonds de travaux ALUR (cotisation annuelle obligatoire)
+    re.compile(r"cotisation\s+annuelle\s+obligatoire\s+du\s+fonds\s+de\s+travaux", re.IGNORECASE),
+    # Seuils consultation CS / mise en concurrence (récurrent)
+    re.compile(r"montant\s+des\s+march[ée]s.*consultation\s+du\s+conseil\s+syndical", re.IGNORECASE),
+    re.compile(r"montant\s+des\s+march[ée]s.*mise\s+en\s+concurrence.*obligatoire", re.IGNORECASE),
 ]
 _ELECTION_PATTERNS = [
     re.compile(r"(?:RENOUVELLEMENT|ELECTION|ÉLECTION).*MEMBRES?\s+(?:DU|DE)\s+CONSEIL\s+SYNDICAL", re.IGNORECASE),
@@ -972,6 +1027,73 @@ Extrait :
         for sf, new_dt in reclassed:
             print(f"    PV_AG → {new_dt} : {os.path.basename(sf)}")
 
+# =====================================================
+# Dédup par similarité de contenu (.docx/.pdf du même document)
+# =====================================================
+print("\n⏳ Dédup par similarité de contenu...")
+from difflib import SequenceMatcher
+from collections import defaultdict
+
+_dedup_excluded = set()  # source_file à exclure du chunking
+_dedup_stats = {"groups_checked": 0, "duplicates_found": 0}
+
+# Charger texte + métadonnées de chaque fichier JSON (lecture rapide)
+_dedup_index = []  # (json_path, source_file, nom_fichier, dossier_parent, text_start)
+for json_path in json_files:
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+        text = doc.get("texte", "")
+        if len(text.strip()) < 100:
+            continue
+        source_file = doc.get("source_file", "")
+        nom_fichier = doc.get("nom_fichier", "")
+        dossier_parent = doc.get("dossier_parent", "")
+        # Normaliser les 500 premiers chars pour la comparaison
+        text_norm = re.sub(r'\s+', ' ', text[:500].lower().strip())
+        _dedup_index.append((json_path, source_file, nom_fichier, dossier_parent, text_norm, len(text)))
+    except Exception:
+        continue
+
+# Grouper par dossier parent
+_by_folder = defaultdict(list)
+for item in _dedup_index:
+    _by_folder[item[3]].append(item)
+
+for folder, items in _by_folder.items():
+    if len(items) < 2:
+        continue
+    _dedup_stats["groups_checked"] += 1
+    # Comparer toutes les paires au sein du même dossier
+    for i in range(len(items)):
+        if items[i][1] in _dedup_excluded:
+            continue
+        for j in range(i + 1, len(items)):
+            if items[j][1] in _dedup_excluded:
+                continue
+            # Similarité sur les 500 premiers chars normalisés
+            ratio = SequenceMatcher(None, items[i][4], items[j][4]).ratio()
+            if ratio > 0.85:
+                # Choisir lequel garder — règles de priorité :
+                # a) Document signé → prioritaire (même si PDF)
+                # b) .docx/.doc → texte natif (meilleure qualité)
+                # c) Le plus long (plus de texte = extraction plus complète)
+                def _priority(item):
+                    sf, nf, text_len = item[1], item[2], item[5]
+                    nf_lower = nf.lower()
+                    is_signed = any(k in nf_lower for k in ("signé", "signe", "signed"))
+                    is_word = nf_lower.endswith((".docx", ".doc"))
+                    return (is_signed, is_word, text_len)
+
+                keep, drop = (items[i], items[j]) if _priority(items[i]) >= _priority(items[j]) else (items[j], items[i])
+                _dedup_excluded.add(drop[1])
+                _dedup_stats["duplicates_found"] += 1
+                print(f"  🔗 Doublon détecté (sim={ratio:.0%}) :")
+                print(f"     GARDÉ  : {keep[2]}")
+                print(f"     EXCLU  : {drop[2]}")
+
+print(f"  ✅ {_dedup_stats['duplicates_found']} doublons éliminés sur {_dedup_stats['groups_checked']} groupes vérifiés")
+
 total_chunks = 0
 doc_type_stats = {}
 
@@ -979,18 +1101,22 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
     for json_path in tqdm(json_files, desc="Chunking"):
         with open(json_path, "r", encoding="utf-8") as f:
             doc = json.load(f)
-        
+
         text = doc.get("texte", "")
         if len(text.strip()) < 30:
             continue
-        
+
         # Post-traitement OCR léger (patterns non-ambigus)
         text = clean_ocr_light(text)
-        
+
         # ── FILTRE CONTENU : vérifier que le texte est exploitable ──
         source_file = doc.get("source_file", "")
         nom_fichier = doc.get("nom_fichier", "")
         copropriete = doc.get("copropriete", "")
+
+        # ── DÉDUP : exclure les doublons détectés ──
+        if source_file in _dedup_excluded:
+            continue
         
         quality = analyze_file_quality(text, nom_fichier)
         
