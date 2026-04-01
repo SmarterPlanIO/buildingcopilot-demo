@@ -4,3 +4,4 @@ psycopg2-binary
 streamlit-mermaid>=0.2
 python-docx>=1.1
 requests
+langfuse>=3.0.0
