@@ -68,24 +68,25 @@ LEGAL_DOC_TYPES = {"PV_AG", "RCP", "CONTRAT", "ASSURANCE"}
 # =====================================================
 # LANGFUSE — Observabilité et tracing
 # =====================================================
-# Supporte les clés à la racine ou sous une section [langfuse] dans secrets.toml
+# Supporte les clés sous section [langfuse] ou à la racine dans secrets.toml
 _lf_public = None
 _lf_secret = None
 _lf_host = "https://cloud.langfuse.com"
+# Méthode 1 : section [langfuse]
 try:
-    # Essayer d'abord une section [langfuse]
-    if "langfuse" in st.secrets:
-        _lfs = st.secrets["langfuse"]
-        _lf_public = _lfs.get("LANGFUSE_PUBLIC_KEY") or _lfs.get("public_key")
-        _lf_secret = _lfs.get("LANGFUSE_SECRET_KEY") or _lfs.get("secret_key")
-        _lf_host = _lfs.get("LANGFUSE_HOST") or _lfs.get("LANGFUSE_BASE_URL") or _lfs.get("host") or _lf_host
-    # Sinon, clés à la racine
-    if not _lf_public:
-        _lf_public = st.secrets.get("LANGFUSE_PUBLIC_KEY")
-        _lf_secret = st.secrets.get("LANGFUSE_SECRET_KEY")
-        _lf_host = st.secrets.get("LANGFUSE_HOST") or st.secrets.get("LANGFUSE_BASE_URL") or _lf_host
-except Exception:
+    _lf_public = st.secrets["langfuse"]["LANGFUSE_PUBLIC_KEY"]
+    _lf_secret = st.secrets["langfuse"]["LANGFUSE_SECRET_KEY"]
+    _lf_host = st.secrets["langfuse"].get("LANGFUSE_BASE_URL", st.secrets["langfuse"].get("LANGFUSE_HOST", _lf_host))
+except (KeyError, TypeError):
     pass
+# Méthode 2 : racine
+if not _lf_public:
+    try:
+        _lf_public = st.secrets["LANGFUSE_PUBLIC_KEY"]
+        _lf_secret = st.secrets["LANGFUSE_SECRET_KEY"]
+        _lf_host = st.secrets.get("LANGFUSE_BASE_URL", st.secrets.get("LANGFUSE_HOST", _lf_host))
+    except (KeyError, TypeError):
+        pass
 
 _langfuse_enabled = bool(_lf_public and _lf_secret)
 langfuse_client = None
