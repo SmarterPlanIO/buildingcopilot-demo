@@ -72,21 +72,34 @@ LEGAL_DOC_TYPES = {"PV_AG", "RCP", "CONTRAT", "ASSURANCE"}
 _lf_public = None
 _lf_secret = None
 _lf_host = "https://cloud.langfuse.com"
-# Méthode 1 : section [langfuse]
+# Méthode 1 : section [langfuse] — accès direct par clé, jamais .get()
 try:
-    _lf_public = st.secrets["langfuse"]["LANGFUSE_PUBLIC_KEY"]
-    _lf_secret = st.secrets["langfuse"]["LANGFUSE_SECRET_KEY"]
-    _lf_host = st.secrets["langfuse"].get("LANGFUSE_BASE_URL", st.secrets["langfuse"].get("LANGFUSE_HOST", _lf_host))
-except (KeyError, TypeError):
+    _lf_section = st.secrets["langfuse"]
+    _lf_public = _lf_section["LANGFUSE_PUBLIC_KEY"]
+    _lf_secret = _lf_section["LANGFUSE_SECRET_KEY"]
+    try:
+        _lf_host = _lf_section["LANGFUSE_BASE_URL"]
+    except KeyError:
+        try:
+            _lf_host = _lf_section["LANGFUSE_HOST"]
+        except KeyError:
+            pass  # garder la valeur par défaut
+except (KeyError, TypeError, Exception):
     pass
 # Méthode 2 : racine
 if not _lf_public:
     try:
         _lf_public = st.secrets["LANGFUSE_PUBLIC_KEY"]
         _lf_secret = st.secrets["LANGFUSE_SECRET_KEY"]
-        _lf_host = st.secrets.get("LANGFUSE_BASE_URL", st.secrets.get("LANGFUSE_HOST", _lf_host))
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, Exception):
         pass
+    try:
+        _lf_host = st.secrets["LANGFUSE_BASE_URL"]
+    except (KeyError, TypeError, Exception):
+        try:
+            _lf_host = st.secrets["LANGFUSE_HOST"]
+        except (KeyError, TypeError, Exception):
+            pass
 
 _langfuse_enabled = bool(_lf_public and _lf_secret)
 langfuse_client = None
