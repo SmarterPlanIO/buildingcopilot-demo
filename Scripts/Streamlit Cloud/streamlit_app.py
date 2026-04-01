@@ -234,9 +234,11 @@ if st.session_state.authenticated_user is None:
         login_name = st.text_input("Prénom", placeholder="Ex: Johan")
         login_pwd = st.text_input("Mot de passe", type="password")
         if st.button("Se connecter", use_container_width=True):
-            expected = PILOT_USERS.get(login_name)
+            # Lookup insensible à la casse sur le prénom
+            _matched_name = next((k for k in PILOT_USERS if k.lower() == login_name.strip().lower()), None)
+            expected = PILOT_USERS.get(_matched_name) if _matched_name else None
             if expected and login_pwd == expected:
-                st.session_state.authenticated_user = login_name
+                st.session_state.authenticated_user = _matched_name
                 st.session_state["_langfuse_session_id"] = f"{login_name}-{int(_time.time())}"
                 st.rerun()
             else:

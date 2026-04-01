@@ -27,8 +27,9 @@ AIRTABLE_TABLE_ID = os.environ.get("AIRTABLE_TABLE_ID", "tblvvkhcHZjDyHLdp")  # 
 
 # Filtrer par copropriété TARIEL (ref NCG = 5390)
 # Pour ajouter d'autres copros, étendre cette liste
+# Clé = nom copro interne, valeur = (formule Airtable, code_ncg)
 COPRO_FILTERS = {
-    "SOURCE_ARCHIVES": 'OR(FIND("5390",{Name}),FIND("TIVOLI",{Name}))',
+    "SOURCE_ARCHIVES": ('OR(FIND("5390",{Name}),FIND("TIVOLI",{Name}))', "5390"),
 }
 
 DB_HOST = os.environ.get("DB_HOST", "")
@@ -99,7 +100,7 @@ def _first_or_none(val):
     return str(val)
 
 
-def map_airtable_to_dossier(record, copropriete):
+def map_airtable_to_dossier(record, copropriete, default_code_ncg=None):
     """Map an Airtable record to our dossiers table schema."""
     f = record["fields"]
 
@@ -154,9 +155,10 @@ def map_airtable_to_dossier(record, copropriete):
             return None
 
     # Extract code_ncg from Airtable Name field: "DDE-... @ ... TIVOLI(5390)" → "5390"
+    # Fallback sur le code_ncg de la copro si pas trouvé dans le Name
     _name = f.get("Name", "")
     _code_ncg_match = re.search(r'\((\d{4,6})\)', _name)
-    _code_ncg = _code_ncg_match.group(1) if _code_ncg_match else None
+    _code_ncg = _code_ncg_match.group(1) if _code_ncg_match else default_code_ncg
 
     # Extract ref_assynco from Name: "... Nos Ref: A1910058 ..."
     _ref_assynco_match = re.search(r'Nos\s+Ref[:\s]+([A-Z]\d+)', _name, re.IGNORECASE)
@@ -310,8 +312,8 @@ def main():
     total_created = 0
     total_updated = 0
 
-    for copro_name, formula in COPRO_FILTERS.items():
-        print(f"\n📡 Copropriété : {copro_name}")
+    for copro_name, (formula, copro_code_ncg) in COPRO_FILTERS.items():
+        print(f"\n📡 Copropriété : {copro_name} (code_ncg={copro_code_ncg})")
         print(f"   Formule Airtable : {formula}")
 
         # Fetch all records with pagination
@@ -339,7 +341,7 @@ def main():
 
         # Upsert each record
         for rec_idx, rec in enumerate(all_records):
-            dossier = map_airtable_to_dossier(rec, copro_name)
+            dossier = map_airtable_to_dossier(rec, copro_name, default_code_ncg=copro_code_ncg)
             is_new = rec["id"] not in existing_ids
             # Debug: print first record's new fields
             if rec_idx == 0:
