@@ -2235,8 +2235,7 @@ with st.sidebar:
 
     # ── Déconnexion ──
     _ = st.markdown("---")
-    _lf_status = "📊 Langfuse ON" if langfuse_client else "📊 Langfuse OFF"
-    st.caption(f"👤 **{st.session_state.authenticated_user}** · {_lf_status}")
+    st.caption(f"👤 **{st.session_state.authenticated_user}**")
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.authenticated_user = None
         st.session_state.chat_history = []
