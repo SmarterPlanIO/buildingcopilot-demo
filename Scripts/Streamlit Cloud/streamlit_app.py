@@ -44,8 +44,9 @@ LLM_MODEL_FAST = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 MAX_CHUNKS_LLM_DEFAULT = 50
 MAX_CHUNKS_LLM_BROAD = 80
+MAX_CHUNKS_LLM_TEMPORAL = 120  # Inventaires temporels larges (>= 5 ans)
 TOP_K_DISPLAY = 20            # Sources principales affichées
-TOP_K_EXTRA = 80              # Hard limit sources supplémentaires (chunks 21 à 80)
+TOP_K_EXTRA = 120             # Hard limit sources supplémentaires (chunks 21+)
 MAX_CHUNKS_PER_SOURCE = 3
 SIMILARITY_THRESHOLD = 0.15
 RRF_K = 60
@@ -496,8 +497,24 @@ def detect_retrieval_strategy(query, demo_mode=False, prev_query=None):
         strategie, prefilter, doc_type_hint, is_followup, expanded_query, diagramme = haiku_result
 
         if strategie == "inventaire":
-            mcl = 40 if demo_mode else 80
-            return 2, 0.03, mcl, "🔎 Inventaire", prefilter, doc_type_hint, is_followup, expanded_query, diagramme
+            # Détecter plage temporelle large pour augmenter le budget chunks
+            _span = 0
+            if prefilter:
+                _amin = prefilter.get("annee_min")
+                _amax = prefilter.get("annee_max")
+                if _amin is not None and _amax is not None:
+                    try:
+                        _span = int(_amax) - int(_amin)
+                    except (ValueError, TypeError):
+                        pass
+            if _span >= 5:
+                mcl = 60 if demo_mode else MAX_CHUNKS_LLM_TEMPORAL
+                cps = 4  # Plus de chunks/source pour couvrir chaque PV d'AG
+            else:
+                mcl = 40 if demo_mode else MAX_CHUNKS_LLM_BROAD
+                cps = 2
+            print(f"[STRATEGY] inventaire span={_span} mcl={mcl} prefilter={prefilter}")
+            return cps, 0.03, mcl, "🔎 Inventaire", prefilter, doc_type_hint, is_followup, expanded_query, diagramme
         elif strategie == "cible":
             mcl = 30 if demo_mode else 50
             return 8, 0.005, mcl, "🔬 Ciblé", prefilter, doc_type_hint, is_followup, expanded_query, diagramme
@@ -787,10 +804,15 @@ def search_decomposed(query, copropriete, max_chunks, sim_threshold,
         results = filter_resolution_categories(results, query, strategie)
         return results, dt_hint, pf_active
 
-    # Budget par sous-requête : répartir équitablement
-    per_year_budget = max(10, max_chunks // len(sub_queries))
+    # Budget par sous-requête : sur-échantillonner puis laisser le cap global élaguer
+    # On veut au moins 15 chunks/an pour ne pas rater de résolutions
+    per_year_budget = max(15, (max_chunks * 2) // len(sub_queries))
+    print(f"[DECOMPOSED] {len(sub_queries)} sub-queries, max_chunks={max_chunks}, per_year_budget={per_year_budget}, cps={chunks_per_source}")
 
     all_results = []
+    # Associer chaque résultat à son année pour la couverture round-robin
+    results_by_year = {}
+
     def _run_sub(sub_query, sub_pf):
         return search_chunks(
             sub_query, copropriete, per_year_budget, sim_threshold,
@@ -798,10 +820,13 @@ def search_decomposed(query, copropriete, max_chunks, sim_threshold,
         )
 
     with ThreadPoolExecutor(max_workers=min(len(sub_queries), 8)) as executor:
-        futures = {executor.submit(_run_sub, sq, spf): sq for sq, spf in sub_queries}
+        futures = {executor.submit(_run_sub, sq, spf): (sq, spf) for sq, spf in sub_queries}
         for future in as_completed(futures):
             try:
                 results, _, _ = future.result()
+                sq, spf = futures[future]
+                year = spf.get("annee", "?")
+                results_by_year.setdefault(year, []).extend(results)
                 all_results.extend(results)
             except Exception:
                 pass  # Sous-requête échouée → ignorer silencieusement
@@ -813,12 +838,44 @@ def search_decomposed(query, copropriete, max_chunks, sim_threshold,
         if cid not in best_by_id or float(r[8]) > float(best_by_id[cid][8]):
             best_by_id[cid] = r
 
-    merged = sorted(best_by_id.values(), key=lambda r: float(r[8]), reverse=True)
+    deduped = set(best_by_id.keys())
 
-    # Filtrage résolutions
-    merged = filter_resolution_categories(merged, query, strategie)
+    # Filtrage résolutions (sur les valeurs dédup)
+    filtered = filter_resolution_categories(list(best_by_id.values()), query, strategie)
+    filtered_ids = {r[0] for r in filtered}
 
-    # Cap global
+    # ── Couverture annuelle round-robin ──
+    # Garantir que chaque année a un quota minimum avant de remplir par score global
+    n_years = len(results_by_year)
+    min_per_year = max(5, max_chunks // (n_years * 2)) if n_years > 0 else max_chunks
+
+    selected_ids = set()
+    # Phase 1 : quota minimum par année
+    for year in sorted(results_by_year.keys()):
+        year_chunks = [r for r in results_by_year[year]
+                       if r[0] in filtered_ids and r[0] in deduped]
+        # Déduplier au sein de l'année
+        seen = set()
+        for r in sorted(year_chunks, key=lambda x: float(x[8]), reverse=True):
+            if r[0] not in seen and r[0] not in selected_ids:
+                selected_ids.add(r[0])
+                seen.add(r[0])
+            if len(seen) >= min_per_year:
+                break
+
+    # Phase 2 : compléter par score global jusqu'au cap
+    remaining = [r for r in filtered if r[0] not in selected_ids]
+    remaining.sort(key=lambda r: float(r[8]), reverse=True)
+    for r in remaining:
+        if len(selected_ids) >= max_chunks:
+            break
+        selected_ids.add(r[0])
+
+    # Assembler dans l'ordre RRF global
+    merged = [r for r in filtered if r[0] in selected_ids]
+    merged.sort(key=lambda r: float(r[8]), reverse=True)
+
+    # Cap global (sécurité)
     merged = merged[:max_chunks]
 
     return merged, doc_type_hint, True
@@ -1991,7 +2048,7 @@ _ = st.markdown(f"""
 <div class="main-header" style="display:flex;align-items:center;justify-content:space-between;">
     <div>
         <h1 style="color:white;margin:0 0 0.3rem 0;font-size:1.8rem;font-weight:700;">🏢 PALIM</h1>
-        <p style="color:#a0aec0;margin:0;font-size:0.95rem;">Interrogez notre IA sur vos archives de copropriété - Prolongez votre conversation pour affiner votre recherche</p>
+        <p style="color:#a0aec0;margin:0;font-size:0.95rem;">Interrogez notre IA sur vos archives de copropriété - Prolongez la conversation pour affiner vos recherches</p>
     </div>
     {_logo_html}
 </div>
@@ -2208,10 +2265,11 @@ if user_input:
 
             # Métadonnées compactes
             pf_tag = " · 📋 Pré-filtré" if prefilter_used else ""
+            _mcl_tag = f" · cap={MCL_ACTUAL}" if not _demo else ""
             if _demo:
                 st.caption(f"⚡ {len(results)} extraits · {unique_sources} docs · {model_label}{pf_tag}")
             else:
-                st.caption(f"{strategy_label} · {len(results)} chunks · {unique_sources} docs · {model_label}{pf_tag}")
+                st.caption(f"{strategy_label} · {len(results)} chunks · {unique_sources} docs · {model_label}{pf_tag}{_mcl_tag}")
 
             # Visite 3D (démo) — match uniquement sur le prompt utilisateur
             if _demo and DEMO_3D_LINKS:
