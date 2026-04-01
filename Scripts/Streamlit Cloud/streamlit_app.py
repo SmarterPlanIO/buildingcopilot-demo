@@ -68,38 +68,52 @@ LEGAL_DOC_TYPES = {"PV_AG", "RCP", "CONTRAT", "ASSURANCE"}
 # =====================================================
 # LANGFUSE — Observabilité et tracing
 # =====================================================
-# Supporte les clés sous section [langfuse] ou à la racine dans secrets.toml
+# DEBUG Langfuse — diagnostic temporaire (à retirer après résolution)
+_lf_debug = []
 _lf_public = None
 _lf_secret = None
 _lf_host = "https://cloud.langfuse.com"
-# Méthode 1 : section [langfuse] — accès direct par clé, jamais .get()
+
+# Lister toutes les clés visibles dans st.secrets
 try:
-    _lf_section = st.secrets["langfuse"]
-    _lf_public = _lf_section["LANGFUSE_PUBLIC_KEY"]
-    _lf_secret = _lf_section["LANGFUSE_SECRET_KEY"]
+    _lf_debug.append(f"secrets_keys={list(st.secrets.keys())}")
+except Exception as e:
+    _lf_debug.append(f"secrets.keys() failed: {type(e).__name__}: {e}")
+
+# Tenter chaque méthode d'accès
+for _method, _fn in [
+    ("secrets['langfuse']['LANGFUSE_PUBLIC_KEY']", lambda: st.secrets["langfuse"]["LANGFUSE_PUBLIC_KEY"]),
+    ("secrets['LANGFUSE_PUBLIC_KEY']", lambda: st.secrets["LANGFUSE_PUBLIC_KEY"]),
+]:
     try:
-        _lf_host = _lf_section["LANGFUSE_BASE_URL"]
+        _val = _fn()
+        _lf_debug.append(f"{_method} = {str(_val)[:15]}...")
+    except Exception as e:
+        _lf_debug.append(f"{_method} -> {type(e).__name__}: {e}")
+
+# Accès réel
+try:
+    _lf_public = st.secrets["langfuse"]["LANGFUSE_PUBLIC_KEY"]
+    _lf_secret = st.secrets["langfuse"]["LANGFUSE_SECRET_KEY"]
+    try:
+        _lf_host = st.secrets["langfuse"]["LANGFUSE_BASE_URL"]
     except KeyError:
-        try:
-            _lf_host = _lf_section["LANGFUSE_HOST"]
-        except KeyError:
-            pass  # garder la valeur par défaut
-except (KeyError, TypeError, Exception):
+        pass
+except Exception:
     pass
-# Méthode 2 : racine
 if not _lf_public:
     try:
         _lf_public = st.secrets["LANGFUSE_PUBLIC_KEY"]
         _lf_secret = st.secrets["LANGFUSE_SECRET_KEY"]
-    except (KeyError, TypeError, Exception):
+    except Exception:
         pass
     try:
         _lf_host = st.secrets["LANGFUSE_BASE_URL"]
-    except (KeyError, TypeError, Exception):
-        try:
-            _lf_host = st.secrets["LANGFUSE_HOST"]
-        except (KeyError, TypeError, Exception):
-            pass
+    except Exception:
+        pass
+
+_lf_debug.append(f"public={'set' if _lf_public else 'None'}, secret={'set' if _lf_secret else 'None'}")
+print(f"[LANGFUSE DEBUG] {' | '.join(_lf_debug)}")
 
 _langfuse_enabled = bool(_lf_public and _lf_secret)
 langfuse_client = None
@@ -2265,6 +2279,9 @@ with st.sidebar:
     _ = st.markdown("---")
     _lf_status = "📊 Langfuse ON" if langfuse_client else "📊 Langfuse OFF"
     st.caption(f"👤 **{st.session_state.authenticated_user}** · {_lf_status}")
+    # DEBUG temporaire — à retirer après diagnostic
+    if _lf_debug:
+        st.caption(f"🔍 {' | '.join(_lf_debug)}")
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.authenticated_user = None
         st.session_state.chat_history = []
