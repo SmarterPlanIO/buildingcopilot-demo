@@ -123,7 +123,6 @@ if _langfuse_enabled:
             public_key=_lf_public,
             secret_key=_lf_secret,
             host=_lf_host,
-            enabled=True,
         )
     except Exception as _lf_err:
         _lf_debug.append(f"INIT FAILED: {type(_lf_err).__name__}: {_lf_err}")
