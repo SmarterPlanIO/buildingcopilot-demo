@@ -62,6 +62,9 @@ MAX_HISTORY_CHARS = 16000     # ~4K tokens budget
 
 PRIMARY_DOC_TYPES = {"SINISTRE", "ENTRETIEN", "COMPTABILITE", "DEVIS", "FACTURE"}
 
+# Documents à valeur juridique — le LLM doit les traiter avec rigueur absolue
+LEGAL_DOC_TYPES = {"PV_AG", "RCP", "CONTRAT", "ASSURANCE"}
+
 # =====================================================
 # LANGFUSE — Observabilité et tracing
 # =====================================================
@@ -1003,6 +1006,7 @@ def build_llm_payload(query, search_results, doc_type_hint, chat_history=None, d
     """
     # Contexte RAG
     context_parts = []
+    has_legal_sources = False
     for i, result in enumerate(search_results):
         chunk_id, copro, source, filename, doc_type, text, *_ = result
         if dossier_strict_ids is not None:
@@ -1015,8 +1019,13 @@ def build_llm_payload(query, search_results, doc_type_hint, chat_history=None, d
                 prov_label = "CONTEXTE CONNEXE"
         else:
             prov_label = "PRIMAIRE" if doc_type in PRIMARY_DOC_TYPES else "CONTEXTUEL"
+        # Flag juridique sur les documents à valeur légale
+        is_legal = doc_type in LEGAL_DOC_TYPES
+        if is_legal:
+            has_legal_sources = True
+        legal_tag = " [JURIDIQUE]" if is_legal else ""
         context_parts.append(
-            f"[Source {i+1}] [{prov_label}] Copropriété: {copro} | Fichier: {filename} | "
+            f"[Source {i+1}] [{prov_label}]{legal_tag} Copropriété: {copro} | Fichier: {filename} | "
             f"Type: {doc_type}\n{text}"
         )
     context = "\n\n---\n\n".join(context_parts)
@@ -1064,6 +1073,19 @@ EXCLUSION DES RÉSOLUTIONS DE PROCÉDURE (PV d'AG) :
   fixation des modalités de contrôle des comptes, autorisation Police/Gendarmerie.
 - Inclure ces résolutions UNIQUEMENT si la question porte spécifiquement dessus
   (ex : "qui a été président de séance ?", "quitus refusé ?" , "qui a été élu au conseil syndical ?")."""
+
+    # ── Mode juriste : rigueur absolue sur les documents juridiques ──
+    if has_legal_sources:
+        system_prompt += """
+
+RIGUEUR JURIDIQUE (sources marquées [JURIDIQUE]) :
+Les sources marquées [JURIDIQUE] sont des documents à valeur légale (PV d'AG signés, règlements de copropriété, contrats, polices d'assurance). Tu dois les traiter avec une rigueur absolue de juriste :
+- RESTITUE EXACTEMENT ce qui est écrit. Ne paraphrase pas, n'interprète pas, ne nuance pas.
+- Si un PV d'AG indique "cette résolution est adoptée/rejetée", c'est un FAIT JURIDIQUE DÉFINITIF. Ne le qualifie jamais de "vote indicatif", "vote de tendance", "non comptabilisé" ou "reporté" sauf si le document le dit EXPLICITEMENT avec ces mots.
+- N'invente AUCUN contexte, intention ou conséquence qui ne figure pas mot pour mot dans le document.
+- En cas de doute entre deux interprétations, choisis la plus littérale.
+- Cite le passage exact du document qui fonde chaque affirmation.
+- Les mentions "En vertu de quoi, cette résolution est adoptée/rejetée dans les conditions de majorité de l'article X" sont des VERDICTS DÉFINITIFS, pas des avis ou recommandations."""
 
     # ── POINT 9 : instruction multi-turn ──
     has_history = bool(chat_history)
