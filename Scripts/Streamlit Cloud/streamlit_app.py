@@ -8,11 +8,29 @@ import json
 import re
 import os
 import time as _time
+
+# ── Boot timer ──
+_boot_t0 = _time.perf_counter()
+def _boot_mark(label):
+    elapsed = _time.perf_counter() - _boot_t0
+    print(f"[BOOT +{elapsed:6.2f}s] {label}")
+
+_boot_mark("imports: stdlib done")
+
 import boto3
+_boot_mark("imports: boto3")
+
 import psycopg2
+_boot_mark("imports: psycopg2")
+
 import streamlit as st
+_boot_mark("imports: streamlit")
+
 import streamlit_mermaid as stmd
+_boot_mark("imports: streamlit_mermaid")
+
 from langfuse import Langfuse
+_boot_mark("imports: langfuse")
 from dossiers_api import (
     get_dossiers as _get_dossiers,
     get_dossier_detail as _get_dossier_detail,
@@ -22,6 +40,7 @@ from dossiers_api import (
     enrich_query_contextual,
     merge_with_airtable_chunks,
 )
+_boot_mark("imports: dossiers_api")
 
 # =====================================================
 # CONFIGURATION — credentials via st.secrets (Streamlit Cloud)
@@ -93,16 +112,22 @@ if not _lf_public:
 
 _langfuse_enabled = bool(_lf_public and _lf_secret)
 langfuse_client = None
+print(f"🔍 Langfuse keys: public={'YES' if _lf_public else 'NO'}, secret={'YES' if _lf_secret else 'NO'}, host={_lf_host}")
 if _langfuse_enabled:
     try:
+        _boot_mark("langfuse init: start")
         langfuse_client = Langfuse(
             public_key=_lf_public,
             secret_key=_lf_secret,
             host=_lf_host,
         )
+        _boot_mark("langfuse init: done")
+        print(f"✅ Langfuse client initialized successfully")
     except Exception as _lf_err:
         print(f"⚠️ Langfuse init failed: {_lf_err}")
         _langfuse_enabled = False
+else:
+    print(f"❌ Langfuse DISABLED — missing keys")
 
 # =====================================================
 # AUTH — Utilisateurs pilotes
@@ -141,12 +166,14 @@ except Exception as _e:
 # =====================================================
 # Page config
 # =====================================================
+_boot_mark("st.set_page_config: start")
 st.set_page_config(
     page_title="PALIM",
     page_icon="🏢",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+_boot_mark("st.set_page_config: done")
 
 # =====================================================
 # CSS — POINT 1 : sidebar lisible en mobile
@@ -283,6 +310,7 @@ def get_db_connection():
                 conn.close()
             except Exception:
                 pass
+    _boot_mark("db connect: start (TCP to RDS)")
     conn = psycopg2.connect(
         host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
         user=DB_USER, password=DB_PASSWORD,
@@ -290,26 +318,31 @@ def get_db_connection():
     )
     conn.autocommit = True
     st.session_state["_db_conn"] = conn
+    _boot_mark("db connect: done")
     return conn
 
 @st.cache_resource
 def get_bedrock_client():
+    _boot_mark("bedrock client: start")
     from botocore.config import Config
-    return boto3.client(
+    _client = boto3.client(
         "bedrock-runtime",
         region_name=AWS_REGION,
         aws_access_key_id=AWS_ACCESS_KEY,
         aws_secret_access_key=AWS_SECRET_KEY,
         config=Config(read_timeout=300, retries={"max_attempts": 3})
     )
+    _boot_mark("bedrock client: done")
+    return _client
 
 @st.cache_data(ttl=300)
 def get_copros():
     conn = get_db_connection()
     with conn.cursor() as cur:
+        # Query documents (lightweight) instead of chunks (heavy, has embeddings)
         cur.execute("""
             SELECT code_ncg, MAX(copropriete), COUNT(*)
-            FROM chunks WHERE code_ncg IS NOT NULL
+            FROM documents WHERE code_ncg IS NOT NULL
             GROUP BY code_ncg ORDER BY code_ncg;
         """)
         return cur.fetchall()
@@ -321,7 +354,7 @@ def get_total_chunks():
         cur.execute("SELECT COUNT(*) FROM chunks;")
         return cur.fetchone()[0]
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def get_dossiers(copropriete=None):
     """Fetch dossiers for sidebar display."""
     return _get_dossiers(get_db_connection(), copropriete)
@@ -339,18 +372,9 @@ def search_dossiers_for_query(query, copropriete=None):
 # dossier_to_virtual_chunk, enrich_query_with_dossier, merge_with_airtable_chunks
 # imported from dossiers_api (see import at top of file)
 
-# Pré-chauffage Bedrock
-if "bedrock_warm" not in st.session_state:
-    try:
-        _client = get_bedrock_client()
-        _client.invoke_model(
-            modelId=EMBEDDING_MODEL,
-            body=json.dumps({"inputText": "warmup", "dimensions": 1024, "normalize": True}),
-            contentType="application/json", accept="application/json"
-        )
-        st.session_state["bedrock_warm"] = True
-    except Exception:
-        st.session_state["bedrock_warm"] = False
+# Bedrock warmup removed — the first actual query pays the cold-start cost,
+# but users won't notice 2s extra on a query they're already waiting for,
+# vs 2-4s staring at a blank screen on boot.
 
 # ── Session persistence (résilience mobile/tab switch) ──
 def _save_chat_session(sid, chat_history, selected_dossier=None, pending_query=None):
@@ -434,6 +458,7 @@ _current_sid = st.session_state._palim_session_id
 # Step 2: Initialize or restore session
 if "chat_history" not in st.session_state:
     # Try to restore from DB (first load only — F5 / fresh session)
+    _boot_mark("session restore: start")
     _restored_session = _load_chat_session(_current_sid)
     if _restored_session and _restored_session["chat_history"]:
         st.session_state.chat_history = _restored_session["chat_history"]
@@ -445,6 +470,7 @@ if "chat_history" not in st.session_state:
             st.session_state["_pending_query"] = _restored_session["pending_query"]
     else:
         st.session_state.chat_history = []
+    _boot_mark("session restore: done")
 
 if "selected_dossier" not in st.session_state:
     st.session_state.selected_dossier = None
@@ -2060,7 +2086,9 @@ with st.sidebar:
     # Placeholder rempli en fin de script avec l'historique à jour (évite le double st.rerun())
     _questions_placeholder = st.empty()
 
+    _boot_mark("sidebar: get_copros start")
     copros = get_copros()
+    _boot_mark(f"sidebar: get_copros done ({len(copros)} copros)")
     _ = st.markdown("---")
     # code_ncg values from DB; display as code_ncg in dropdown
     copro_codes = ["Toutes les copropriétés"] + [c[0] for c in copros]
@@ -2078,7 +2106,9 @@ with st.sidebar:
     _ = st.markdown("---")
     try:
         _copro_for_dossiers = selected_copro if selected_copro and "Toutes" not in selected_copro else None
+        _boot_mark("sidebar: get_dossiers start")
         _dossiers = get_dossiers(_copro_for_dossiers)
+        _boot_mark(f"sidebar: get_dossiers done ({len(_dossiers)} dossiers)")
     except Exception as _e:
         _dossiers = []
         st.caption(f"⚠️ Erreur dossiers: {_e}")
@@ -2136,9 +2166,13 @@ with st.sidebar:
                 if st.button(_label, key=f"dos_{_did}", use_container_width=True,
                              type="primary" if _is_selected else "secondary"):
                     if _is_selected:
+                        # Désélectionner le dossier → désactiver le filtre
                         st.session_state.selected_dossier = None
+                        st.session_state.dossier_filter_active = False
                     else:
+                        # Sélectionner un dossier → activer le filtre
                         st.session_state.selected_dossier = _did
+                        st.session_state.dossier_filter_active = True
                     st.rerun()
 
         if st.session_state.selected_dossier:
@@ -2167,6 +2201,11 @@ with st.sidebar:
                     value=st.session_state.dossier_filter_active,
                     key="dossier_filter_checkbox",
                 )
+                # Décocher le filtre → désélectionner le dossier
+                if not _filter_active and st.session_state.dossier_filter_active:
+                    st.session_state.dossier_filter_active = False
+                    st.session_state.selected_dossier = None
+                    st.rerun()
                 st.session_state.dossier_filter_active = _filter_active
 
                 if _filter_active:
@@ -2242,6 +2281,8 @@ with st.sidebar:
         st.session_state.chat_history = []
         st.rerun()
 
+
+_boot_mark("===== BOOT COMPLETE — rendering main zone =====")
 
 # =====================================================
 # ZONE PRINCIPALE — Multi-turn conversationnel
@@ -2380,7 +2421,9 @@ if user_input:
                 },
             )
             st.session_state["_current_trace_id"] = _trace.id
-        except Exception:
+            print(f"🔍 Langfuse trace created: {_trace.id}")
+        except Exception as _trace_err:
+            print(f"⚠️ Langfuse trace creation failed: {_trace_err}")
             _trace = None
 
     # ── Filtrage prompt hors-sujet ──
@@ -2478,12 +2521,16 @@ if user_input:
         )
 
         # ── Double retrieval contextuel (Option 1) ──
-        # Quand un dossier est sélectionné, on effectue une 2e requête avec des
-        # termes plus larges (lese_nom + circonstances) pour retrouver des
-        # documents connexes (même lésé sur d'autres sinistres, même type de
-        # dommage dans l'immeuble). Les chunks sont étiquetés [CONTEXTE CONNEXE]
-        # dans le prompt LLM pour que Claude sache distinguer.
-        if _sel_dossier_data:
+        # Quand un dossier est sélectionné ET le filtre actif, on effectue une
+        # 2e requête avec des termes plus larges (lese_nom + circonstances)
+        # pour retrouver des documents connexes (même lésé sur d'autres
+        # sinistres, même type de dommage dans l'immeuble).
+        # Les chunks sont étiquetés [CONTEXTE CONNEXE] dans le prompt LLM.
+        # Seuil vectoriel minimum (0.25) : évite de remonter des sinistres
+        # sans rapport réel qui matchent uniquement sur des termes BM25
+        # génériques ("sinistre", "DDE", "dégâts des eaux", etc.).
+        _CTX_VEC_MIN = 0.25
+        if _sel_dossier_data and _dossier_filter_on:
             _strict_chunk_ids = {r[0] for r in results}
             _query_contextual = enrich_query_contextual(
                 expanded_query if was_expanded and expanded_query else user_input,
@@ -2496,8 +2543,11 @@ if user_input:
                 prefilter=None, doc_type_hint=None,
                 strategie="cible",
             )
-            # N'ajouter que les chunks pas déjà présents dans le retrieval strict
-            _new_ctx = [r for r in _results_ctx if r[0] not in _strict_chunk_ids]
+            # N'ajouter que les chunks pas déjà présents et ayant un score
+            # vectoriel suffisant pour être réellement connexes au dossier
+            # Tuple: (chunk_id, copro, source, filename, doc_type, text, vec_sim, bm25, rrf, ...)
+            _new_ctx = [r for r in _results_ctx
+                        if r[0] not in _strict_chunk_ids and r[6] >= _CTX_VEC_MIN]
             if _new_ctx:
                 results = list(results) + _new_ctx
 
@@ -2658,8 +2708,9 @@ if user_input:
                         },
                     )
                     langfuse_client.flush()
-                except Exception:
-                    pass
+                    print(f"✅ Langfuse trace flushed: {_trace.id}")
+                except Exception as _flush_err:
+                    print(f"⚠️ Langfuse flush failed: {_flush_err}")
 
             # ── Sauvegarder dans l'historique ──
             # Keep sources for all messages so they can be displayed in collapsed expanders

@@ -117,6 +117,7 @@ def build_extraction_window(chunks, doc_type):
 METADATA_PROMPT = """Tu es un assistant spécialisé en gestion de copropriété.
 Extrais les métadonnées de ce document. Le type de document ACTUEL est : {doc_type}.
 Ce type a été déterminé automatiquement par le dossier parent, il peut être INCORRECT.
+ATTENTION : si doc_type=RCP et le document est un ACTE NOTARIÉ relatif au règlement de copropriété (état descriptif de division, acte modificatif/rectificatif du RCP), le type RCP est CORRECT — ne le changer en MUTATION que s'il s'agit réellement d'une vente ou mutation de lot.
 
 Réponds UNIQUEMENT par un objet JSON valide, sans commentaire ni markdown :
 {{
@@ -176,6 +177,7 @@ Règles pour doc_type_corrige — UNIQUEMENT une de ces valeurs exactes :
 - Un compte-rendu rédigé avec les résultats des votes → PV_AG
 - Un contrat (syndic, maintenance, assurance, prestation) → CONTRAT
 - Un règlement intérieur, règlement de copropriété → RCP
+- Un acte notarié qui ÉTABLIT ou MODIFIE un règlement de copropriété (état descriptif de division, acte modificatif, acte rectificatif) → RCP (PAS MUTATION)
 - Un état daté, pré-état daté, questionnaire acquisition, notification de vente → MUTATION
 - Un plan d'architecte, plan technique, DOE, schéma d'implantation → PLAN
 - Un guide pratique, liste de copropriétaires, annexe diverse → AUTRE

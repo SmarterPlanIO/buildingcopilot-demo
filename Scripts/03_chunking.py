@@ -59,6 +59,7 @@ def _get_bedrock():
 _doc_type_llm_cache = {}    # source_file → doc_type (évite appels redondants)
 _llm_stats = {"calls": 0, "hits_cache": 0, "errors": 0, "skipped_short": 0}
 _filter_stats = {"files_ok": 0, "files_placeholder": 0, "files_skipped": 0,
+                 "files_skipped_ar": 0,
                  "chunks_kept": 0, "chunks_filtered": 0, "filter_reasons": {}}
 
 DOC_TYPES_VALID = {
@@ -272,6 +273,11 @@ def detect_doc_type(filepath, filename, text="", source_file=""):
 
     # ── PASSE 2 : Nom du fichier (word boundaries pour éviter faux positifs) ──
     # Ordre : types spécifiques d'abord, types larges ensuite
+
+    # Bordereaux AR / accusés de réception postaux → exclure (zéro valeur RAG)
+    # Couvre : "bordereau", "bodereau" (typo), "accusé réception", "avis réception"
+    if re.search(r'\bbo[r]?dereau\b|\baccus[eé].*r[eé]ception\b|\bavis.*r[eé]ception\b', filename_lower):
+        return "SKIP_AR"
 
     # --- Fichiers dans un dossier ASSEMBLEE : seuls les vrais PV sont identifiés par nom ---
     # Tout le reste (convocations, ODJ, VPC, annexes, AR, etc.) tombe en AUTRE → Haiku classifie
@@ -1159,7 +1165,12 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
             source_file=source_file
         )
         doc_type_stats[doc_type] = doc_type_stats.get(doc_type, 0) + 1
-        
+
+        # Bordereaux AR / accusés de réception → exclure (zéro valeur RAG)
+        if doc_type == "SKIP_AR":
+            _filter_stats["files_skipped_ar"] += 1
+            continue
+
         if quality["verdict"] == "PLACEHOLDER":
             _filter_stats["files_placeholder"] += 1
             placeholder = make_placeholder_chunk(
@@ -1243,6 +1254,7 @@ print(f"\n--- Filtre contenu binaire ---")
 print(f"  Fichiers OK (chunkés)    : {_filter_stats['files_ok']}")
 print(f"  Fichiers → placeholder   : {_filter_stats['files_placeholder']}")
 print(f"  Fichiers ignorés (SKIP)  : {_filter_stats['files_skipped']}")
+print(f"  Bordereaux AR exclus     : {_filter_stats['files_skipped_ar']}")
 print(f"  Chunks gardés            : {_filter_stats['chunks_kept']}")
 print(f"  Chunks filtrés           : {_filter_stats['chunks_filtered']}")
 if _filter_stats['filter_reasons']:
