@@ -63,6 +63,21 @@ EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 LLM_MODEL = "eu.anthropic.claude-sonnet-4-6"
 LLM_MODEL_FAST = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 
+# Prix Bedrock eu-west-1 ($/M tokens) — mise à jour : 2026-04
+_MODEL_COSTS = {
+    LLM_MODEL:      {"input": 3.00, "output": 15.00},
+    LLM_MODEL_FAST: {"input": 0.80, "output": 4.00},
+}
+
+def _calc_cost(model_id, usage):
+    """Calcule le coût en $ à partir de l'usage tokens Bedrock."""
+    costs = _MODEL_COSTS.get(model_id)
+    if not costs or not usage:
+        return None
+    inp = usage.get("input_tokens", 0)
+    out = usage.get("output_tokens", 0)
+    return round(inp * costs["input"] / 1_000_000 + out * costs["output"] / 1_000_000, 6)
+
 MAX_CHUNKS_LLM_DEFAULT = 50
 MAX_CHUNKS_LLM_BROAD = 80
 MAX_CHUNKS_LLM_TEMPORAL = 120  # Inventaires temporels larges (>= 5 ans)
@@ -2712,19 +2727,33 @@ if user_input:
                                    collapsed=True)
 
             # ── Langfuse : finaliser la trace ──
+            _req_cost = _calc_cost(active_model, _llm_usage)
             if _trace:
                 try:
+                    # Tags pour filtrage dans le dashboard
+                    _tags = [strategy_label.split()[1] if " " in strategy_label else strategy_label]
+                    if _demo:
+                        _tags.append("demo")
+                    if _sel_dossier_data:
+                        _tags.append("dossier")
                     _trace.update(
                         output=answer[:500],
+                        tags=_tags,
                         metadata={
                             "strategy": strategy_label,
                             "model": model_label,
                             "doc_type_hint": doc_type_hint,
                             "total_latency_ms": int((_time.time() - _trace_start) * 1000),
+                            "n_chunks_retrieved": len(results),
+                            "n_chunks_displayed": n_displayed,
+                            "prefilter_active": prefilter_used if 'prefilter_used' in dir() else None,
+                            "cost_usd": _req_cost,
+                            "input_tokens": _llm_usage.get("input_tokens", 0),
+                            "output_tokens": _llm_usage.get("output_tokens", 0),
                         },
                     )
                     langfuse_client.flush()
-                    print(f"✅ Langfuse trace flushed: {_trace.id}")
+                    print(f"✅ Langfuse trace flushed: {_trace.id} | cost=${_req_cost}")
                 except Exception as _flush_err:
                     print(f"⚠️ Langfuse flush failed: {_flush_err}")
 
