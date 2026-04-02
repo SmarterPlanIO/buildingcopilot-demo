@@ -1982,7 +1982,8 @@ def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
 
     cols = st.columns([1, 1, 6])
     with cols[0]:
-        if st.button("👍", key=f"up_{fb_key}", disabled=existing is not None):
+        _up_label = "👍 ✓" if existing == "up" else "👍"
+        if st.button(_up_label, key=f"up_{fb_key}"):
             langfuse_client.score(
                 trace_id=trace_id,
                 name="user_feedback",
@@ -1993,7 +1994,8 @@ def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
             langfuse_client.flush()
             st.rerun()
     with cols[1]:
-        if st.button("👎", key=f"down_{fb_key}", disabled=existing is not None):
+        _down_label = "👎 ✓" if existing == "down" else "👎"
+        if st.button(_down_label, key=f"down_{fb_key}"):
             langfuse_client.score(
                 trace_id=trace_id,
                 name="user_feedback",
@@ -2004,32 +2006,26 @@ def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
             langfuse_client.flush()
             st.rerun()
 
-    if existing == "up":
-        st.caption("✅ Merci pour votre retour positif")
-    elif existing == "down":
-        st.caption("📝 Merci — votre retour nous aide à améliorer")
-
     # Commentaire libre
     comment_key = f"comment_{fb_key}"
-    if st.session_state.get(f"{comment_key}_sent"):
-        st.caption("💬 Commentaire envoyé")
-    else:
-        comment = st.text_input(
-            "💬 Un commentaire ? (optionnel)",
-            key=comment_key,
-            placeholder="Ex: La réponse ne couvre pas les sinistres de 2019",
-            label_visibility="collapsed",
+    _comment_sent = st.session_state.get(f"{comment_key}_sent")
+    comment = st.text_input(
+        "💬 Un commentaire ? (optionnel)",
+        key=comment_key,
+        placeholder="Ex: La réponse ne couvre pas les sinistres de 2019",
+        label_visibility="collapsed",
+        disabled=_comment_sent,
+    )
+    if not _comment_sent and comment and st.button("Envoyer", key=f"send_{comment_key}"):
+        langfuse_client.score(
+            trace_id=trace_id,
+            name="user_comment",
+            value=1,
+            comment=comment,
         )
-        if comment and st.button("Envoyer", key=f"send_{comment_key}"):
-            langfuse_client.score(
-                trace_id=trace_id,
-                name="user_comment",
-                value=1,
-                comment=comment,
-            )
-            st.session_state[f"{comment_key}_sent"] = True
-            langfuse_client.flush()
-            st.rerun()
+        st.session_state[f"{comment_key}_sent"] = True
+        langfuse_client.flush()
+        st.rerun()
 
 
 # =====================================================
