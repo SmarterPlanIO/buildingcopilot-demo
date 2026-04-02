@@ -2381,6 +2381,7 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
                 if sc:
                     st.caption(f"📎 {sc} sources analysées")
 
+print(f"🔍 DEBUG user_input={repr(user_input)[:80]} | langfuse_client={'YES' if langfuse_client else 'NO'}")
 if user_input:
     # Ajouter à l'historique (sauf si déjà présent en dernier — cas resubmit)
     _last_already = (
