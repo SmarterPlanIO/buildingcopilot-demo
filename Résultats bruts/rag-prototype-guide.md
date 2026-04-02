@@ -1,10 +1,11 @@
 # Guide complet — Prototype RAG pour archives de copropriété sur AWS
 
-**Projet :** Building Copilot — RAG multi-copropriétés  
-**Dernière mise à jour :** 30 mars 2026  
-**Volume :** 9 GO, 1 430 dossiers, 11 000 fichiers  
-**Profil :** Non-développeur, copier/coller dans VS Code ou Antigravity  
-**Stack :** Full AWS (Textract, Bedrock, RDS pgvector)
+**Projet :** PALIM — Building Copilot — RAG multi-copropriétés
+**Dernière mise à jour :** 2 avril 2026
+**Version :** v0.5.0
+**Volume :** 9 GO, 1 430 dossiers, 11 000 fichiers, 24 482 chunks
+**Profil :** Non-développeur, copier/coller dans VS Code ou Antigravity
+**Stack :** Full AWS (Textract, Bedrock, RDS pgvector) + Streamlit Cloud + Langfuse
 
 ---
 
@@ -15,12 +16,17 @@ Archives locales (9 GO)
   → Étape 0 : Inventaire & nettoyage
   → Étape 1 : Upload S3
   → Étape 2 : OCR via Textract
-  → Étape 3 : Parsing structurel + classification doc_type (3 passes dont LLM) + filtre contenu binaire
-  → Étape 4 : Extraction métadonnées document-level (date, sous-type, statut) via Haiku
+  → Étape 3 : Parsing structurel + classification doc_type (3 passes dont LLM) + filtre contenu binaire + BORDEREAU_AR
+  → Étape 4 : Extraction métadonnées document-level (date, sous-type, statut) via Haiku + protection RCP
   → Étape 5 : Embedding via Bedrock Titan (15 workers parallèles)
-  → Étape 6 : Stockage pgvector + tsvector BM25 + table documents (RDS Postgres)
-  → Étape 7 : Requête hybride (pré-filtrage document → RRF + source diversity + FlashRank rerank + Claude) + UI Streamlit multi-turn
+  → Étape 5b : Questions synthétiques Haiku (PV_AG, RCP, CONTRAT éligibles)
+  → Étape 6 : Stockage pgvector + tsvector BM25 (setweight A=texte, D=questions) + table documents (RDS Postgres)
+  → Étape 7 : Requête hybride (pré-filtrage document → RRF + source diversity + Claude) + UI Streamlit multi-turn
+            + Auth gate (login pilotes) + Langfuse tracing (tokens, coût, metadata) + Feedback 👍👎💬
+            + Mode juriste (rigueur absolue sur PV_AG, RCP, CONTRAT, ASSURANCE)
+            + Filtrage prompts hors-sujet (classification Haiku)
   → Étape 8 : Synchronisation Airtable Assynco → table dossiers PostgreSQL (UPSERT par copropriété)
+              ⚠️ OBLIGATOIRE après chaque Étape 6 (le TRUNCATE efface les chunks virtuels Airtable)
 ```
 
 **Coût estimé pour l'essai complet :** ~$50–$80 (dont ~$12 RDS, ~$15–$30 Textract, ~$5–$10 Bedrock)
@@ -1324,7 +1330,7 @@ Chaque fichier extrait doit être découpé en chunks exploitables par le RAG. L
 | Type document | Stratégie de chunking |
 |---|---|
 | RCP / Règlement | Par article (détection "Article XX") |
-| PV d'AG | Par résolution (détection "Résolution N°") |
+| PV d'AG | Par résolution (6 patterns regex + fallback Haiku) |
 | Contrats | Par clause/article |
 | Devis / Factures | Document entier (généralement court) |
 | Courriers | Document entier |
@@ -1345,10 +1351,15 @@ Le script `03_chunking.py` est maintenu séparément du guide (voir fichier `.py
   - **Impact mesuré** : sur l'exemple `5390 - FICHE VISITE 2-4-6BIS TARIEL - 28-09-2017.doc` (2422 chunks de garbage), le verdict est PLACEHOLDER → 1 seul chunk au lieu de 2422 chunks poubelle.
 - **Classification doc_type en 3 passes** :
   - **Passe 1 — Structure des dossiers** (gratuit, instantané) : match exact sur chaque composant du chemin (`ASSEMBLEE/`, `PV/`, `COMPTA/`, `SINISTRE/`, `ENTRETIEN/`...). Types spécifiques testés avant les types larges. PLAN en dernier (mot trop courant, source de faux positifs).
-  - **Passe 2 — Nom du fichier** (gratuit, instantané) : regex avec word boundaries (`\b`). Ordre : `\bcarnet\b.*\bentretien\b` → ENTRETIEN, `\bsinistres?\b|\banomalies?\b|\bconstat\b` → SINISTRE, `\bannexe\b|\bcompta\b` → COMPTABILITE, puis PV_AG avant RCP, PLAN en dernier.
+  - **Passe 2 — Nom du fichier** (gratuit, instantané) : regex avec word boundaries (`\b`). Ordre : `\bcarnet\b.*\bentretien\b` → ENTRETIEN, `\bsinistres?\b|\banomalies?\b|\bconstat\b` → SINISTRE, `\bannexe\b|\bcompta\b` → COMPTABILITE, puis PV_AG avant RCP, PLAN en dernier. **BORDEREAU_AR (v0.5.0)** : détecte les bordereaux d'accusé de réception (`bordereau`, `accus[eé].*réception`, `avis.*réception`, `_deposit.pdf`, `recipients.csv`).
   - **Passe 3 — Contenu via Claude Haiku** (uniquement si passes 1+2 retournent `AUTRE`) : envoie les 1500 premiers caractères à `eu.anthropic.claude-haiku-4-5-20251001-v1:0` pour classification. Prompt enrichi avec les 14 types et descriptions métier. Cache par fichier source. Texte minimum 200 chars, sinon classé `AUTRE` directement.
 - Chunking par articles pour les RCP et contrats — **robuste OCR** : tolère les artefacts Textract (mots cassés, accents perdus, retours à la ligne parasites)
-- Chunking par résolutions pour les PV d'AG — **robuste OCR** : gère les formats alternatifs (ordinal, "Point N°", numérotation simple)
+- Chunking par résolutions pour les PV d'AG — **robuste OCR** : gère les formats alternatifs (ordinal, "Point N°", numérotation simple, **"1 ELECTION DU PRESIDENT" sans tiret** — Pattern 6 ajouté v0.4.0)
+- **Résolutions subdivisées** : quand une résolution dépasse 5000 chars, les sous-chunks sont préfixés `[Suite résolution N — TITRE]` et le dernier reçoit le verdict (adoptée/rejetée)
+- **Vérification Haiku renforcée (v0.4.0)** : prompt PV_AG vs ODJ/convocation avec critères de distinction explicites (résultats de vote + verdicts = PV ; projets de résolution sans résultats = COURRIER). Extrait début+fin du document (en-tête + verdicts).
+- **Dédup par similarité de contenu (v0.4.0)** : détecte les .docx/.pdf du même document (SequenceMatcher > 85%). Priorité : document signé > .docx > plus long.
+- **Classification résolutions PV_AG enrichie (v0.4.0)** : 12 patterns PROCEDURE_AG (vs 1 avant) couvrant scrutateurs, approbation comptes, quitus, syndic, Police/Gendarmerie, budget, honoraires, contrôle comptes, fonds travaux ALUR, seuils CS.
+- **BORDEREAU_AR doc_type (v0.5.0)** : les bordereaux d'accusé de réception sont détectés en passe 2 (regex) et chunked via `chunk_whole_document`. Exclus par défaut du retrieval SQL (`c.doc_type != 'BORDEREAU_AR'`) sauf quand Haiku détecte une requête de traçabilité juridique (`include_bordereau_ar=True`).
 - Pré-nettoyage systématique du texte OCR (recollage des mots coupés par `\n`, normalisation des espaces multiples)
 - Garde-fou `CHUNK_HARD_MAX = 5000` caractères — aucun chunk ne dépasse cette limite (compatible Titan V2)
 - **`chunk_whole_document` (v4)** : les documents courts (FACTURE, DEVIS, BUDGET, COURRIER, COMPTABILITE, PLAN) sont gardés en un seul chunk jusqu'à `CHUNK_HARD_MAX` (5000 chars) au lieu d'être découpés à `CHUNK_TARGET_SIZE` (1500 chars). Évite que le content_filter supprime des chunks intermédiaires contenant des montants/mesures, et préserve l'intégrité du contexte.
@@ -1369,7 +1380,7 @@ Le script `03_chunking.py` est maintenu séparément du guide (voir fichier `.py
 L'étape 3 produit `chunks_copro.jsonl` avec `doc_type`, `source_file`, `copropriete`. Il manque des métadonnées structurées au niveau du **document** (pas du chunk) : date de signature, sous-type précis, statut actif/expiré, montant principal, parties concernées, rattachement à un dossier transversal. Ces métadonnées permettront un pré-filtrage SQL en amont du retrieval hybride (étape 7), éliminant le bruit sur les requêtes factuelles et temporelles.
 
 Le script tourne en **3 passes** :
-1. **Extraction parallèle** (10 workers) — Haiku extrait les métadonnées de chaque document (doc_type_corrige, date, sous_type, dossier_lie, statut, montant, parties, résumé).
+1. **Extraction parallèle** (10 workers) — Haiku extrait les métadonnées de chaque document (doc_type_corrige, date, sous_type, dossier_lie, statut, montant, parties, résumé). **Protection RCP (v0.5.0)** : les documents classés RCP par la structure des dossiers (passe 1) ne peuvent pas être reclassifiés par Haiku (`_TRUSTED_FOLDER_TYPES`). Empêche la perte de RCP contenant des actes notariés que Haiku reclassait en MUTATION.
 2. **Consolidation des sous_types** — Un second appel Haiku normalise les variantes synonymes (`DDE_CHAUDIERE` → `DDE`, `CONTRAT_SYNDIC` → `SYNDIC`, etc.) pour homogénéiser le vocabulaire sur l'ensemble du corpus.
 3. **Déduplication** — Un troisième appel Haiku identifie, au sein de chaque groupe `(copro, doc_type, année)`, les vrais doublons (PDF + DOCX, brouillon + final) des documents distincts. Chaque document reçoit `groupe_doc` (identifiant du groupe logique) et `est_reference` (true si c'est la version de référence).
 
@@ -1430,7 +1441,7 @@ Ce type a été déterminé automatiquement par le dossier parent, il peut être
 
 Réponds UNIQUEMENT par un objet JSON valide, sans commentaire ni markdown :
 {{
-  "doc_type_corrige": "Le vrai type basé sur le CONTENU parmi : RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, AUTRE",
+  "doc_type_corrige": "Le vrai type basé sur le CONTENU parmi : RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, BORDEREAU_AR, AUTRE",
   "date_document": "YYYY-MM-DD. Si seuls année+mois trouvés → YYYY-MM-01. Si seule année → YYYY-01-01. Si année introuvable → null. Ne JAMAIS inventer.",
   "annee": 2024 ou null,
   "sous_type": "Catégorie précise en UN MOT-CLÉ canonique, ou null — voir règles ci-dessous",
@@ -1442,13 +1453,14 @@ Réponds UNIQUEMENT par un objet JSON valide, sans commentaire ni markdown :
 }}
 
 Règles pour doc_type_corrige — UNIQUEMENT une de ces valeurs exactes :
-  RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, AUTRE
+  RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, BORDEREAU_AR, AUTRE
 - Un procès-verbal d'AG (compte-rendu de votes, résolutions) → PV_AG
 - Une convocation à l'AG, un ordre du jour, une feuille de présence → COURRIER
 - Un contrat (syndic, maintenance, assurance) → CONTRAT
 - Un règlement intérieur / de copropriété → RCP
 - Un état daté, pré-état daté, questionnaire acquisition → MUTATION
 - Un plan d'architecte, plan technique, DOE → PLAN
+- Un bordereau d'accusé de réception, liste de destinataires → BORDEREAU_AR
 - Un guide pratique, liste, annexe diverse → AUTRE
 
 Règles pour sous_type — CONVENTIONS DE NOMMAGE :
@@ -1602,7 +1614,7 @@ Ce type a été déterminé automatiquement par le dossier parent, il peut être
 
 Réponds UNIQUEMENT par un objet JSON valide, sans commentaire ni markdown :
 {{
-  "doc_type_corrige": "Le vrai type basé sur le CONTENU du document, parmi : RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, AUTRE. Exemples : une convocation → COURRIER, un contrat syndic → CONTRAT, un règlement intérieur → RCP, un ordre du jour seul → COURRIER, une liste de copropriétaires → AUTRE, un guide résidence → AUTRE, un état daté → MUTATION, un plan technique → PLAN",
+  "doc_type_corrige": "Le vrai type basé sur le CONTENU du document, parmi : RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, BORDEREAU_AR, AUTRE. Exemples : une convocation → COURRIER, un contrat syndic → CONTRAT, un règlement intérieur → RCP, un ordre du jour seul → COURRIER, une liste de copropriétaires → AUTRE, un guide résidence → AUTRE, un état daté → MUTATION, un plan technique → PLAN",
   "date_document": "YYYY-MM-DD. Si seuls l'année et le mois sont trouvés → YYYY-MM-01. Si seule l'année est trouvée → YYYY-01-01. Si l'année est introuvable ou incertaine → null. Ne JAMAIS inventer une date ou un jour absent du document.",
   "annee": 2024,
   "sous_type": "Catégorie précise en UN MOT-CLÉ canonique, ou null — voir règles ci-dessous",
@@ -1650,7 +1662,7 @@ Règles pour sous_type — CONVENTIONS DE NOMMAGE :
 - Si impossible à déterminer → null
 
 Règles pour doc_type_corrige — UNIQUEMENT une de ces valeurs exactes :
-  RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, AUTRE
+  RCP, PV_AG, CONTRAT, DEVIS, FACTURE, BUDGET, DIAGNOSTIC, COURRIER, SINISTRE, COMPTABILITE, ENTRETIEN, ASSURANCE, MUTATION, PLAN, BORDEREAU_AR, AUTRE
 - PV_AG = procès-verbal d'assemblée générale UNIQUEMENT. Un PV_AG contient obligatoirement les RÉSULTATS de votes (tantièmes pour/contre/abstention, "résolution adoptée/rejetée"). Sans résultats de votes → ce n'est PAS un PV_AG.
 - COURRIER = convocation à l'AG, ordre du jour, feuille de présence, procuration, projet de résolutions. ATTENTION : un ORDRE DU JOUR n'est JAMAIS un PV_AG même s'il liste des projets de résolutions — un OJ contient "il sera proposé de voter..." ou liste les résolutions SANS résultats de vote.
 - Un brouillon ou projet de PV ("projet PV", "baze PV") reste PV_AG s'il contient des résultats de votes, sinon → COURRIER.
@@ -2800,10 +2812,21 @@ C'est le script final qui permet de poser des questions et obtenir des réponses
      - **(B) Score hybride RRF × FlashRank** : au lieu d'un reranking pur (FlashRank remplace le RRF), le score final est `α × rrf_norm + (1-α) × flashrank_norm` avec `RERANK_RRF_WEIGHT=0.4`. Empêche les chutes brutales (un chunk rang #3 RRF ne peut plus tomber à #68 post-rerank). ~50-100ms de latence.
 - **Quota minimum RCP** : après reranking, si <3 chunks RCP dans le top, des chunks RCP sont remontés du pool inférieur en éjectant les derniers non-RCP.
 - **Sources PRIMAIRES vs CONTEXTUELLES** : chaque source envoyée à Claude est marquée `[PRIMAIRE]` (SINISTRE, ENTRETIEN, COMPTABILITE, DEVIS, FACTURE — événements distincts) ou `[CONTEXTUEL]` (PV_AG, RCP, CONTRAT). Le prompt exige de couvrir CHAQUE source primaire pour les inventaires.
-- **Fenêtre d'analyse dynamique** : `MAX_CHUNKS_LLM` = 80 en inventaire (couverture max), 50 en équilibré/ciblé (réduits à 40/30 en mode démo). `TOP_K_DISPLAY = 20` sources principales + `TOP_K_EXTRA = 50` sources supplémentaires (repliées par défaut).
+- **Fenêtre d'analyse dynamique** : `MAX_CHUNKS_LLM_TEMPORAL` = 120 pour tout inventaire, 50 en équilibré/ciblé (réduits à 60/30 en mode démo). `TOP_K_DISPLAY = 20` sources principales + `TOP_K_EXTRA = 120` sources supplémentaires (repliées par défaut).
+- **Filtrage résolutions en SQL (v0.4.0)** : les catégories PROCEDURE_AG et ELECTION_CS sont exclues directement dans la clause WHERE SQL (paramètre `exclude_categories`), AVANT le `dynamic_cap` par source. Évite de gaspiller des slots sur des chunks filtrés ensuite.
+- **Prefilter doc_type sans date (v0.4.0)** : le prefilter s'active aussi quand Haiku détecte un `doc_type` (ex: PV_AG) même sans filtre temporel. "Liste tous les travaux votés en AG" active le prefilter PV_AG et exclut COURRIER/RCP.
+- **Décomposition temporelle (v0.4.0)** : pour les plages >= 3 ans, la requête est décomposée en N sous-requêtes par année avec round-robin (quota minimum ~5 chunks/an garanti).
 - `max_tokens` adaptatif : 4096 si >30 chunks analysés, 2500 sinon
-- Timeout Bedrock augmenté à 300s (nécessaire pour 80 chunks ~120K chars)
+- Timeout Bedrock augmenté à 300s (nécessaire pour 120 chunks)
 - **System prompt concis** : instruction explicite de concision (~400 mots max sauf inventaires), pas de reformulation de la question, pas de formules de politesse.
+- **Mode juriste conditionnel (v0.4.0)** : quand les sources contiennent des documents juridiques (PV_AG, RCP, CONTRAT, ASSURANCE), un bloc "RIGUEUR JURIDIQUE" est ajouté au system prompt. Force le LLM à restituer les verdicts exactement tels qu'écrits, interdit les interprétations ("vote indicatif", "reporté") sauf mention explicite dans le document.
+- **Auth gate (v0.4.0)** : login simple avec utilisateurs pilotes (dictionnaire dans `st.secrets[pilot_users]`). Lookup insensible à la casse. `st.stop()` bloque tout le contenu tant que non authentifié.
+- **Langfuse tracing (v0.4.0, enrichi v0.5.0)** : une trace par Q/A avec spans `retrieval` et `generation`, user_id, session_id, latences. Feedback 👍👎💬 rattaché aux traces. Flush après chaque réponse. **(v0.5.0)** : tokens LLM (input/output), coût estimé par requête ($/requête basé sur tarifs Sonnet/Haiku), tags (copropriété, stratégie, mode), metadata enrichie (n_chunks_retrieved, n_docs_retrieved, dossier_id). Pinned `langfuse==2.60.4` (v3 casse `.trace()`).
+- **Filtrage prompts hors-sujet (v0.4.0)** : classification Haiku (~300ms) avant le retrieval. Si hors-sujet → message de redirection, trace taggée `filtered` dans Langfuse, pas de retrieval ni LLM.
+- **Numéro de version (v0.4.0)** : fichier `VERSION` lu au démarrage, affiché dans la sidebar à côté du titre PALIM.
+- **Sync sidebar dossier ↔ checkbox (v0.5.0)** : sélectionner un dossier coche automatiquement le filtre ; décocher le filtre désélectionne le dossier. Bidirectionnel.
+- **Double retrieval contextuel sécurisé (v0.5.0)** : quand un dossier est actif, le 2e retrieval sans filtre est gardé par `_dossier_filter_on` et un seuil vectoriel minimum (`_CTX_VEC_MIN=0.25`) pour éviter la pollution par des chunks non liés.
+- **Exclusion BORDEREAU_AR conditionnelle (v0.5.0)** : Haiku détecte si la requête nécessite des bordereaux AR (traçabilité juridique) via `include_bordereau_ar`. Par défaut exclus du SQL.
 - Sidebar avec sliders : "Chunks analysés par l'IA", "Sources affichées", stratégie auto/manuelle
 
 **Multi-turn conversationnel :**
@@ -2946,32 +2969,31 @@ COPRO_FILTERS = {
 ## Checklist d'exécution
 
 ```
-□ Installer Python, AWS CLI, pip packages (dont flashrank pour le reranker)
+□ Installer Python 3.12+, AWS CLI, pip packages (dont langfuse==2.60.4 — PAS v3+)
 □ Activer Textract, Bedrock (Titan + Claude Sonnet 4.6 + Claude Haiku 4.5), RDS dans la console AWS
 □ Étape 0 : python 00_inventaire.py → vérifier le rapport
 □ Étape 0 : python 01_filtrage.py → vérifier les décisions LLM dans le log
 □ Étape 1 : aws s3 sync → upload des fichiers filtrés
-□ Étape 2 : python 02_extraction_optimized.py → extraction de texte (30min-1h, architecture fire-all-then-collect)
+□ Étape 2 : PYTHONIOENCODING=utf-8 python 02_extraction_optimized.py → extraction de texte
 □ Étape 3 : copier content_filter.py dans le même dossier que 03_chunking.py
-□ Étape 3 : python 03_chunking.py → découpage intelligent + filtre binaire + classification doc_type 3 passes
-□          Vérifier le rapport de fin : fichiers placeholder, chunks filtrés, raisons
-□ Étape 4 : python 04_metadata_documents.py → extraction métadonnées (10 workers parallèles) + consolidation sous_types + déduplication (~$1.25)
-□          Vérifier le rapport : % docs avec date, reclassifications doc_type, répartition sous-types consolidés, copies/brouillons détectés
-□ Étape 5 : python 05_embedding.py → embeddings Titan parallèles (5-10min avec 15 workers)
-□ Étape 6 : Créer instance RDS + python 06a_init_db.py (crée tables chunks + documents + index)
-□          python 06b_load_db.py (charge chunks + peuple tsvector + charge table documents)
-□         ⚠️ Si relance après changement de doc_type : TRUNCATE TABLE chunks; avant 06b_load_db.py (ON CONFLICT DO NOTHING ne met pas à jour)
-□         ⚠️ Si relance metadata : la table documents est TRUNCATE automatiquement par 06b (ON CONFLICT DO UPDATE)
-□ Étape 7 : streamlit run 07_query_rag_ui.py → pré-filtrage document + pipeline RRF + FlashRank + Claude + multi-turn conversationnel
-□         ⚡ Mode Démo (toggle sidebar) : Haiku + streaming + chunks réduits (~15-20s vs ~90s)
-□         🏠 Liens 3D : configurer URL_SP_demo.txt (MOT_CLE : URL, un par ligne)
-□         🔍 Diagnostic : python diag_db_inventory.py "COPRO" → santé de la base (chunks + documents)
-□         🔍 Diagnostic : python diag_retrieval.py "requête" "COPRO" → trace pipeline étape par étape
-□         🔍 Simulation : python sim_retrieval.py "requête" "COPRO" → comparaison avant/après corrections
-□ Étape 8 : Configurer COPRO_FILTERS dans 08_airtable_sync.py (formules Airtable par copropriété)
-□          python 08_airtable_sync.py → UPSERT des sinistres dans la table dossiers
-□          Vérifier : SELECT COUNT(*), copropriete FROM dossiers GROUP BY copropriete;
-□          Relancer à chaque mise à jour Airtable (idempotent)
+□ Étape 3 : PYTHONIOENCODING=utf-8 python 03_chunking.py → découpage intelligent + dédup contenu + classification 3 passes + Haiku verification PV_AG
+□          Vérifier le rapport : fichiers placeholder, chunks filtrés, doublons éliminés, classification résolutions
+□ Étape 4 : python 04_metadata_documents.py → extraction métadonnées (10 workers parallèles)
+□ Étape 5 : ⚠️ SUPPRIMER chunks_avec_embeddings.jsonl et chunks_avec_embeddings_sq.jsonl AVANT re-run
+□          PYTHONIOENCODING=utf-8 python 05_embedding.py → embeddings Titan parallèles (~3min)
+□ Étape 5b: PYTHONIOENCODING=utf-8 python 05b_synthetic_questions.py → questions Haiku (PV_AG, RCP, CONTRAT)
+□ Étape 6 : python 06a_init_db.py (crée tables si nécessaire)
+□          PYTHONIOENCODING=utf-8 python 06b_load_db.py (TRUNCATE + INSERT chunks + documents + dossiers)
+□         ⚠️ 06b fait TRUNCATE global — efface TOUT y compris les chunks virtuels Airtable
+□ Étape 8 : ⚠️ OBLIGATOIRE après chaque Étape 6 :
+□          AIRTABLE_PAT="..." DB_HOST="..." DB_PASSWORD="..." python 08_airtable_sync.py
+□          → UPSERT des sinistres dans la table dossiers + restauration chunks Airtable
+□          Vérifier : SELECT COUNT(*), statut FROM dossiers GROUP BY statut;
+□ Streamlit Cloud : vérifier que le code est mergé dans main (seule branche déployée)
+□         Configurer st.secrets : [db], [aws], [langfuse], [pilot_users]
+□         Reboot app après chaque mise à jour des secrets
+□         🔍 Diagnostic : python diag_db_inventory.py "COPRO" → santé de la base
+□         🔍 Diagnostic : python diag_retrieval.py "requête" "COPRO" → trace pipeline
 ```
 
 ---
