@@ -2745,6 +2745,7 @@ if user_input:
                             "doc_type_hint": doc_type_hint,
                             "total_latency_ms": int((_time.time() - _trace_start) * 1000),
                             "n_chunks_retrieved": len(results),
+                            "n_docs_retrieved": len({r[2] for r in results}),
                             "n_chunks_displayed": n_displayed,
                             "prefilter_active": prefilter_used if 'prefilter_used' in dir() else None,
                             "cost_usd": _req_cost,
