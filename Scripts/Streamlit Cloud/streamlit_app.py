@@ -330,13 +330,14 @@ def get_db_connection():
         host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
         user=DB_USER, password=DB_PASSWORD,
         connect_timeout=10,
+        keepalives=1, keepalives_idle=300, keepalives_interval=30, keepalives_count=3,
     )
     conn.autocommit = True
     st.session_state["_db_conn"] = conn
     _boot_mark("db connect: done")
     return conn
 
-@st.cache_resource
+@st.cache_resource(ttl=1800)  # Recréer le client toutes les 30 min (évite sessions TCP expirées)
 def get_bedrock_client():
     _boot_mark("bedrock client: start")
     from botocore.config import Config
@@ -345,7 +346,12 @@ def get_bedrock_client():
         region_name=AWS_REGION,
         aws_access_key_id=AWS_ACCESS_KEY,
         aws_secret_access_key=AWS_SECRET_KEY,
-        config=Config(read_timeout=300, retries={"max_attempts": 3})
+        config=Config(
+            read_timeout=300,
+            connect_timeout=10,
+            retries={"max_attempts": 3},
+            tcp_keepalive=True,
+        )
     )
     _boot_mark("bedrock client: done")
     return _client
