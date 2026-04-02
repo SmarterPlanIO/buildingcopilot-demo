@@ -1211,7 +1211,7 @@ Si la question demande une liste exhaustive, cite TOUTES les occurrences trouvé
 def generate_answer(query, search_results, doc_type_hint,
                     model_id=LLM_MODEL, chat_history=None, diagramme=False,
                     dossier_strict_ids=None):
-    """Synchrone (non-streaming)."""
+    """Synchrone (non-streaming). Retourne (text, usage_dict)."""
     bedrock = get_bedrock_client()
     system_prompt, messages, max_tokens = build_llm_payload(
         query, search_results, doc_type_hint, chat_history, diagramme=diagramme,
@@ -1227,13 +1227,15 @@ def generate_answer(query, search_results, doc_type_hint,
         modelId=model_id, body=body,
         contentType="application/json", accept="application/json"
     )
-    return json.loads(response["body"].read())["content"][0]["text"]
+    result = json.loads(response["body"].read())
+    usage = result.get("usage", {})
+    return result["content"][0]["text"], usage
 
 
 def generate_answer_stream(query, search_results, doc_type_hint,
                            model_id, placeholder, chat_history=None, diagramme=False,
                            dossier_strict_ids=None):
-    """Streaming : écrit progressivement dans un placeholder Streamlit."""
+    """Streaming : écrit progressivement dans un placeholder Streamlit. Retourne (text, usage_dict)."""
     bedrock = get_bedrock_client()
     system_prompt, messages, max_tokens = build_llm_payload(
         query, search_results, doc_type_hint, chat_history, diagramme=diagramme,
@@ -1250,14 +1252,21 @@ def generate_answer_stream(query, search_results, doc_type_hint,
         contentType="application/json", accept="application/json"
     )
     full_text = ""
+    usage = {}
     for event in response["body"]:
         chunk = json.loads(event["chunk"]["bytes"])
         if chunk.get("type") == "content_block_delta":
             delta = chunk.get("delta", {}).get("text", "")
             full_text += delta
             placeholder.markdown(full_text + "▌")
+        elif chunk.get("type") == "message_delta":
+            usage = chunk.get("usage", {})
+        elif chunk.get("type") == "message_start":
+            msg = chunk.get("message", {})
+            if msg.get("usage"):
+                usage["input_tokens"] = msg["usage"].get("input_tokens", 0)
     placeholder.markdown(full_text)
-    return full_text
+    return full_text, usage
 
 
 def _md_tables_to_html(text):
@@ -2652,9 +2661,10 @@ if user_input:
             _gen_start = _time.time()
 
             # Génération
+            _llm_usage = {}
             if _demo:
                 answer_placeholder = st.empty()
-                answer = generate_answer_stream(
+                answer, _llm_usage = generate_answer_stream(
                     user_input, results, doc_type_hint,
                     active_model, answer_placeholder, chat_history=history_for_llm,
                     diagramme=_diagramme, dossier_strict_ids=_strict_chunk_ids,
@@ -2663,7 +2673,7 @@ if user_input:
                 _ = render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
             else:
                 with st.spinner("🤖 Génération de la réponse…"):
-                    answer = generate_answer(
+                    answer, _llm_usage = generate_answer(
                         user_input, results, doc_type_hint,
                         model_id=active_model, chat_history=history_for_llm,
                         diagramme=_diagramme, dossier_strict_ids=_strict_chunk_ids,
@@ -2675,6 +2685,10 @@ if user_input:
                 try:
                     _gen_span.end(
                         output=answer[:500],
+                        usage={
+                            "input": _llm_usage.get("input_tokens", 0),
+                            "output": _llm_usage.get("output_tokens", 0),
+                        },
                         metadata={"latency_ms": int((_time.time() - _gen_start) * 1000)},
                     )
                 except Exception:
