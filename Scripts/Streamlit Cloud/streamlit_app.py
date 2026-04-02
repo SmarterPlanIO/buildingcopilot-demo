@@ -1990,6 +1990,18 @@ def render_action_buttons(answer_text, key_suffix="", question=""):
 # =====================================================
 # FEEDBACK — Boutons 👍 👎 💬 → Langfuse scores
 # =====================================================
+def _send_feedback(fb_key, trace_id, value):
+    """Callback pour envoyer le feedback à Langfuse (exécuté avant le re-render)."""
+    langfuse_client.score(
+        trace_id=trace_id,
+        name="user_feedback",
+        value=value,
+        comment=f"by {st.session_state.authenticated_user}",
+    )
+    st.session_state[fb_key] = "up" if value == 1 else "down"
+    langfuse_client.flush()
+
+
 @st.fragment
 def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
     """Affiche 👍 👎 💬 et envoie le score à Langfuse."""
@@ -2002,28 +2014,12 @@ def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
     cols = st.columns([1, 1, 6])
     with cols[0]:
         _up_label = "👍 ✓" if existing == "up" else "👍"
-        if st.button(_up_label, key=f"up_{fb_key}"):
-            langfuse_client.score(
-                trace_id=trace_id,
-                name="user_feedback",
-                value=1,
-                comment=f"by {st.session_state.authenticated_user}",
-            )
-            st.session_state[fb_key] = "up"
-            langfuse_client.flush()
-            st.rerun(scope="fragment")
+        st.button(_up_label, key=f"up_{fb_key}",
+                  on_click=_send_feedback, args=(fb_key, trace_id, 1))
     with cols[1]:
         _down_label = "👎 ✓" if existing == "down" else "👎"
-        if st.button(_down_label, key=f"down_{fb_key}"):
-            langfuse_client.score(
-                trace_id=trace_id,
-                name="user_feedback",
-                value=0,
-                comment=f"by {st.session_state.authenticated_user}",
-            )
-            st.session_state[fb_key] = "down"
-            langfuse_client.flush()
-            st.rerun(scope="fragment")
+        st.button(_down_label, key=f"down_{fb_key}",
+                  on_click=_send_feedback, args=(fb_key, trace_id, 0))
 
     # Commentaire libre
     comment_key = f"comment_{fb_key}"
@@ -2035,16 +2031,18 @@ def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
         label_visibility="collapsed",
         disabled=_comment_sent,
     )
-    if not _comment_sent and comment and st.button("Envoyer", key=f"send_{comment_key}"):
+    def _send_comment():
         langfuse_client.score(
             trace_id=trace_id,
             name="user_comment",
             value=1,
-            comment=comment,
+            comment=st.session_state[comment_key],
         )
         st.session_state[f"{comment_key}_sent"] = True
         langfuse_client.flush()
-        st.rerun(scope="fragment")
+
+    if not _comment_sent and comment:
+        st.button("Envoyer", key=f"send_{comment_key}", on_click=_send_comment)
 
 
 # =====================================================
