@@ -541,9 +541,9 @@ Réponds UNIQUEMENT par un objet JSON valide, sans commentaire :
 }}
 
 Règles pour la stratégie :
-- "inventaire" : la question demande une LISTE exhaustive, un historique, une comparaison sur plusieurs années, un récapitulatif, ou utilise des mots comme "tous", "quels sont", "combien", "depuis", "évolution"
+- "inventaire" : la question demande EXPLICITEMENT une liste exhaustive sur plusieurs éléments ou plusieurs années. Signaux forts : "tous les", "liste complète", "depuis [année]", "historique", "combien de", "évolution depuis", "chaque année". NE PAS utiliser si la question porte sur un seul sujet sans demande d'exhaustivité.
 - "cible" : la question porte sur UN document précis, un article, une résolution, un détail spécifique, ou demande d'expliquer/détailler quelque chose
-- "equilibre" : entre les deux, question ouverte sans besoin d'exhaustivité ni de document précis. Inclut les demandes de diagramme, workflow, schéma, synthèse transversale, ou processus
+- "equilibre" : mode PAR DÉFAUT. Question ouverte, synthèse, état des lieux, recherche d'information générale. Inclut "quel est", "quels sont", "récapitulatif", les demandes de diagramme, workflow, schéma, ou processus. En cas de doute entre inventaire et équilibré, choisir équilibré.
 
 Règles pour les filtres :
 - Ne remplis que les champs que tu peux déduire avec CERTITUDE de la question
@@ -649,12 +649,12 @@ def detect_retrieval_strategy(query, demo_mode=False, prev_query=None):
             mcl = 30 if demo_mode else 50
             return 8, 0.005, mcl, "🔬 Ciblé", prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar
         else:
-            mcl = 30 if demo_mode else 50
-            return 3, 0.01, mcl, "⚖️ Équilibré", prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar
+            mcl = 40 if demo_mode else 80
+            return 5, 0.01, mcl, "⚖️ Équilibré", prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar
 
     # Fallback : mode équilibré sans pré-filtrage
-    mcl = 30 if demo_mode else 50
-    return 3, 0.01, mcl, "⚖️ Équilibré (fallback)", None, None, False, None, False, False
+    mcl = 40 if demo_mode else 80
+    return 5, 0.01, mcl, "⚖️ Équilibré (fallback)", None, None, False, None, False, False
 
 
 def get_embedding(text):
