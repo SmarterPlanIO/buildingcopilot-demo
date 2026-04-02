@@ -1978,6 +1978,7 @@ def render_action_buttons(answer_text, key_suffix="", question=""):
 # =====================================================
 # FEEDBACK — Boutons 👍 👎 💬 → Langfuse scores
 # =====================================================
+@st.fragment
 def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
     """Affiche 👍 👎 💬 et envoie le score à Langfuse."""
     if not trace_id or not langfuse_client:
