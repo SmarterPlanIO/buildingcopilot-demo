@@ -172,3 +172,17 @@ PYTHONIOENCODING=utf-8 AIRTABLE_PAT="patFfI...cfa15" DB_HOST="sp-rag-ncg-copros.
 
 - **Refactoring `streamlit_app.py`** : deplacer toute la logique retrieval/business dans des modules dedies (ex: `retrieval.py`, `strategy.py`). Actuellement le fichier est trop gros avec de la logique metier melee a l'UI.
 - **Web RAG** : plan concu pour interroger des sites juridiques whitelistes (Legifrance, Service-Public, ANIL). Module `web_search.py` + Google Custom Search API. Option A (scraping live) recommandee en premier.
+
+---
+
+## 8. Fichier guide a maintenir
+
+**Apres chaque session de travail significative**, proposer a Thai de mettre a jour le fichier guide :
+`Résultats bruts/rag-prototype-guide.md`
+
+Ce fichier sert de **memoire complete du pipeline** PALIM : architecture, decisions, bugs corriges, parametres, scripts. Il documente tout ce qui a ete construit et pourquoi. Sections cles a mettre a jour :
+- Version et date (en-tete)
+- Fonctionnalites du pipeline de retrieval (etape 7)
+- Parametres des modes (inventaire/equilibre/cible)
+- Problemes resolus / residuels
+- Section 9 (architecture multi-mode)

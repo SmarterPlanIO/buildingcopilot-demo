@@ -2000,7 +2000,7 @@ def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
             )
             st.session_state[fb_key] = "up"
             langfuse_client.flush()
-            st.rerun()
+            st.rerun(scope="fragment")
     with cols[1]:
         _down_label = "👎 ✓" if existing == "down" else "👎"
         if st.button(_down_label, key=f"down_{fb_key}"):
@@ -2012,7 +2012,7 @@ def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
             )
             st.session_state[fb_key] = "down"
             langfuse_client.flush()
-            st.rerun()
+            st.rerun(scope="fragment")
 
     # Commentaire libre
     comment_key = f"comment_{fb_key}"
@@ -2033,7 +2033,7 @@ def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
         )
         st.session_state[f"{comment_key}_sent"] = True
         langfuse_client.flush()
-        st.rerun()
+        st.rerun(scope="fragment")
 
 
 # =====================================================

@@ -1,8 +1,8 @@
 # Guide complet — Prototype RAG pour archives de copropriété sur AWS
 
 **Projet :** PALIM — Building Copilot — RAG multi-copropriétés
-**Dernière mise à jour :** 2 avril 2026
-**Version :** v0.5.0
+**Dernière mise à jour :** 3 avril 2026
+**Version :** v0.5.1
 **Volume :** 9 GO, 1 430 dossiers, 11 000 fichiers, 24 482 chunks
 **Profil :** Non-développeur, copier/coller dans VS Code ou Antigravity
 **Stack :** Full AWS (Textract, Bedrock, RDS pgvector) + Streamlit Cloud + Langfuse
@@ -2800,19 +2800,19 @@ C'est le script final qui permet de poser des questions et obtenir des réponses
 **Fonctionnalités du pipeline de retrieval :**
 - Interface web conversationnelle multi-turn avec `st.chat_input` / `st.chat_message`
 - **Routeur de requête Haiku (v4)** : un appel Haiku (~300ms, $0.0002/requête) classifie chaque requête et retourne en un seul JSON : la stratégie (inventaire/ciblé/équilibré), le `doc_type` pour le boost RRF, les filtres structurels (année, sous-type, statut), et la détection de suivi conversationnel. Remplace toutes les listes de mots-clés des versions précédentes.
-- **`doc_type` détecté = boost dynamique, pas filtre** : le `doc_type` retourné par Haiku est injecté comme bonus **dynamique** dans le score RRF : 0.03 en inventaire, 0.01 en mode équilibré, 0.005 en mode ciblé.
+- **`doc_type` détecté = boost dynamique, pas filtre** : le `doc_type` retourné par Haiku est injecté comme bonus **dynamique** dans le score RRF : 0.03 en inventaire, 0.01 en mode équilibré, 0.005 en mode ciblé. **(v0.5.1)** : Haiku ne remplit `doc_type` que si l'utilisateur demande un TYPE de document spécifique ("les PV d'AG", "les contrats"). Pour les sujets transversaux ("extincteurs", "fuite", "ascenseur"), `doc_type=null` → pas de pré-filtrage restrictif, recherche sur tout le corpus.
 - **Pipeline de retrieval hybride en 5 étapes** :
   0. **Pré-filtrage document** (conditionnel) : si Haiku détecte des contraintes factuelles (année, sous-type, statut), un CTE SQL pré-sélectionne les `source_file` éligibles via la table `documents` (utilise `COALESCE(doc_type_corrige, doc_type)` pour bénéficier des corrections Haiku). Si 0 ou >50 documents → fallback au pipeline complet. Zone idéale : 1 à 20 documents pré-sélectionnés. Protégé par `try/except` → si la table `documents` n'existe pas, fallback silencieux.
   1. **SQL** : similarité vectorielle (pgvector cosine) + BM25 (`ts_rank` français) → classements indépendants (avec `WHERE source_file IN (pre_filtre)` si activé)
   2. **SQL** : **Reciprocal Rank Fusion (RRF)** — fusionne par rang (pas par score). Formule : `score = 1/(60+vec_rank) + 1/(60+bm25_rank) + doc_type_boost`
-  3. **SQL** : **Diversité par source** (`PARTITION BY source_file`) — empêche un document volumineux de monopoliser les résultats. Hard cap dynamique par type de requête (inventaire=2/source, ciblé=8/source, défaut=3/source)
+  3. **SQL** : **Diversité par source** (`PARTITION BY source_file`) — empêche un document volumineux de monopoliser les résultats. Hard cap dynamique par type de requête (inventaire=4/source, ciblé=8/source, **équilibré=5/source** **(v0.5.1, était 3)**)
   4. **Python** : **FlashRank reranking adaptatif** (cross-encoder `ms-marco-MultiBERT-L-12`) — 3 améliorations pour protéger les chunks OCR bruités :
      - **(D) Bypass FlashRank si pré-filtrage actif** : quand Haiku pré-sélectionne les documents (inventaire sinistres, etc.), FlashRank est court-circuité. Le RRF suffit car les bons docs sont déjà sélectionnés, et FlashRank pénalise lourdement les formulaires manuscrits/scans dégradés. Cap dynamique par source appliqué sur l'ordre RRF.
      - **(A) Injection métadonnées** : quand FlashRank est actif, chaque passage reçoit un en-tête structuré `[DOC_TYPE] nom_fichier_nettoyé` avant le texte OCR. Le cross-encoder voit des termes propres ("Constat amiable", "SINISTRE", "LEMEAU") même quand le contenu est bruité.
      - **(B) Score hybride RRF × FlashRank** : au lieu d'un reranking pur (FlashRank remplace le RRF), le score final est `α × rrf_norm + (1-α) × flashrank_norm` avec `RERANK_RRF_WEIGHT=0.4`. Empêche les chutes brutales (un chunk rang #3 RRF ne peut plus tomber à #68 post-rerank). ~50-100ms de latence.
 - **Quota minimum RCP** : après reranking, si <3 chunks RCP dans le top, des chunks RCP sont remontés du pool inférieur en éjectant les derniers non-RCP.
 - **Sources PRIMAIRES vs CONTEXTUELLES** : chaque source envoyée à Claude est marquée `[PRIMAIRE]` (SINISTRE, ENTRETIEN, COMPTABILITE, DEVIS, FACTURE — événements distincts) ou `[CONTEXTUEL]` (PV_AG, RCP, CONTRAT). Le prompt exige de couvrir CHAQUE source primaire pour les inventaires.
-- **Fenêtre d'analyse dynamique** : `MAX_CHUNKS_LLM_TEMPORAL` = 120 pour tout inventaire, 50 en équilibré/ciblé (réduits à 60/30 en mode démo). `TOP_K_DISPLAY = 20` sources principales + `TOP_K_EXTRA = 120` sources supplémentaires (repliées par défaut).
+- **Fenêtre d'analyse dynamique** : `MAX_CHUNKS_LLM_TEMPORAL` = 120 pour inventaire, **80 en équilibré** **(v0.5.1, était 50)**, 50 en ciblé (réduits à 60/40/30 en mode démo). `TOP_K_DISPLAY = 20` sources principales + `TOP_K_EXTRA = 120` sources supplémentaires (repliées par défaut).
 - **Filtrage résolutions en SQL (v0.4.0)** : les catégories PROCEDURE_AG et ELECTION_CS sont exclues directement dans la clause WHERE SQL (paramètre `exclude_categories`), AVANT le `dynamic_cap` par source. Évite de gaspiller des slots sur des chunks filtrés ensuite.
 - **Prefilter doc_type sans date (v0.4.0)** : le prefilter s'active aussi quand Haiku détecte un `doc_type` (ex: PV_AG) même sans filtre temporel. "Liste tous les travaux votés en AG" active le prefilter PV_AG et exclut COURRIER/RCP.
 - **Décomposition temporelle (v0.4.0)** : pour les plages >= 3 ans, la requête est décomposée en N sous-requêtes par année avec round-robin (quota minimum ~5 chunks/an garanti).
@@ -2827,6 +2827,9 @@ C'est le script final qui permet de poser des questions et obtenir des réponses
 - **Sync sidebar dossier ↔ checkbox (v0.5.0)** : sélectionner un dossier coche automatiquement le filtre ; décocher le filtre désélectionne le dossier. Bidirectionnel.
 - **Double retrieval contextuel sécurisé (v0.5.0)** : quand un dossier est actif, le 2e retrieval sans filtre est gardé par `_dossier_filter_on` et un seuil vectoriel minimum (`_CTX_VEC_MIN=0.25`) pour éviter la pollution par des chunks non liés.
 - **Exclusion BORDEREAU_AR conditionnelle (v0.5.0)** : Haiku détecte si la requête nécessite des bordereaux AR (traçabilité juridique) via `include_bordereau_ar`. Par défaut exclus du SQL.
+- **Feedback isolé via `@st.fragment` (v0.5.1)** : les boutons 👍👎💬 sont décorés `@st.fragment` — le `st.rerun()` après un clic ne relance que le fragment feedback, pas toute l'app (sidebar, chat, etc.).
+- **Rééquilibrage stratégie inventaire/équilibré (v0.5.1)** : les critères d'inventaire sont resserrés (demande EXPLICITEMENT exhaustive : "tous les", "depuis [année]", "historique complet"). Le mode équilibré devient le mode par défaut pour les questions ouvertes, synthèses, "quel est", "quels sont". En cas de doute, Haiku choisit équilibré.
+- **Guard doc_type sur sujets transversaux (v0.5.1)** : le prompt strategy interdit à Haiku de fixer `doc_type` quand la question porte sur un sujet multi-doc-type (extincteurs, fuite, ascenseur, travaux). Empêche le pré-filtre de restreindre la recherche à un seul type de document.
 - Sidebar avec sliders : "Chunks analysés par l'IA", "Sources affichées", stratégie auto/manuelle
 
 **Multi-turn conversationnel :**
@@ -2843,7 +2846,7 @@ C'est le script final qui permet de poser des questions et obtenir des réponses
 - Les liens `linkify_sources` couvrent jusqu'à la Source 50, cliquables vers les ancres dans les deux sections.
 
 **Mode Démo et UX :**
-- **Mode Démo (toggle sidebar)** : bascule sur `Claude Haiku 4.5` + **streaming** (`invoke_model_with_response_stream`) + chunks réduits (40/30/30 au lieu de 80/50/50). Latence ~15-20s vs ~90s en mode Sonnet. UI allégée (pas d'affichage des thèmes/stratégie pour un rendu plus "produit fini").
+- **Mode Démo (toggle sidebar)** : bascule sur `Claude Haiku 4.5` + **streaming** (`invoke_model_with_response_stream`) + chunks réduits (60/40/30 au lieu de 120/80/50). Latence ~15-20s vs ~90s en mode Sonnet. UI allégée (pas d'affichage des thèmes/stratégie pour un rendu plus "produit fini").
 - **Liens 3D contextuels** : fichier externe `URL_SP_demo.txt` (format `MOT_CLE : URL`, un par ligne, lignes `#` ignorées). En mode démo, les mots-clés sont cherchés dans la requête, les noms de copro, les noms de fichiers ET les 200 premiers caractères des chunks. Si match, un bandeau avec lien 3D cliquable apparaît avant la réponse.
 - **Bouton 📋 Copier** (v2) : copie la réponse complète dans le presse-papier. Le texte est encodé en base64 côté Python pour éviter tout problème d'échappement HTML/JS (backticks, accolades, markdown dans la réponse LLM), puis décodé côté navigateur via `atob()` + `navigator.clipboard.writeText()`.
 - **Sidebar lisible en mobile** (v2) : CSS étendu forçant tous les labels, toggles, expanders, spans en blanc (`#e2e8f0 !important`) sur le fond bleu marine.
@@ -3016,7 +3019,7 @@ Voici des requêtes types qu'un gestionnaire de syndic poserait :
 - "Quelles copropriétés ont des diagnostics amiante positifs ?"
 - "Comparer les clés de répartition des charges d'ascenseur entre nos copros"
 
-**Requêtes exhaustives (stratégie auto → diversité, 2/source, boost 0.03, 80 chunks) :**
+**Requêtes exhaustives (stratégie auto → inventaire, 4/source, boost 0.03, 120 chunks) :**
 - "Liste tous les sinistres déclarés dans la copro X depuis 2010"
 - "Quels sont tous les travaux votés en AG depuis 5 ans ?"
 - "Liste tous les contrats en cours pour la copro X"
@@ -3124,7 +3127,9 @@ Voici des requêtes types qu'un gestionnaire de syndic poserait :
 
 1. **Cap de diversité** : `dynamic_cap ≈ 5` pour PV_AG → ~8-10/12 résolutions de fond couvertes avec questions synthétiques
 2. **Pas de couverture temporelle garantie** : années récentes (plus de chunks) dominent les requêtes pluriannuelles
-3. **Hard cap LLM = 80 chunks** : insuffisant pour inventaires exhaustifs pluriannuels
+3. ~~**Hard cap LLM = 80 chunks** : insuffisant pour inventaires exhaustifs pluriannuels~~ → **(v0.5.1)** cap inventaire = 120, équilibré = 80, ciblé = 50
+4. **(v0.5.1) Pré-filtrage doc_type sur sujets transversaux** : corrigé — Haiku ne fixe plus `doc_type` pour les sujets comme "extincteurs", "fuite", "ascenseur" qui traversent plusieurs types de documents
+5. **(v0.5.1) Sur-classification inventaire** : corrigé — les critères d'inventaire sont resserrés, équilibré est le mode par défaut
 
 ### 9.2 Architecture cible : 3 modes de retrieval
 
@@ -3133,14 +3138,20 @@ Le routeur Haiku (`detect_strategy_haiku`) choisit le mode :
 #### Mode 1 : Single-shot sémantique (requête ciblée)
 - **Déclencheur :** Question métier précise — "Quel est le contrat d'ascenseur en cours ?"
 - **Pipeline :** PgVector + BM25 → RRF → FlashRank A+B → Claude
-- **Budget :** 50 chunks, 3 chunks max par source
+- **Budget :** 50 chunks, 8 chunks max par source
 - **Changement requis :** aucun (comportement actuel)
 
-#### Mode 2 : Single-shot pré-filtré (inventaire court, ≤ 2 ans)
-- **Déclencheur :** Inventaire sur périmètre restreint
+#### Mode Équilibré (par défaut) — v0.5.1
+- **Déclencheur :** Mode par défaut. Question ouverte, synthèse, état des lieux, "quel est", "quels sont"
+- **Pipeline :** PgVector + BM25 → RRF → FlashRank A+B → Claude
+- **Budget :** 80 chunks, 5 chunks max par source
+- **Changement v0.5.1 :** était 50 chunks / 3 cps. Haiku choisit ce mode en cas de doute.
+
+#### Mode 2 : Single-shot pré-filtré (inventaire)
+- **Déclencheur :** Demande EXPLICITEMENT exhaustive ("tous les", "depuis [année]", "historique complet")
 - **Pipeline :** Pré-filtrage SQL → PgVector + BM25 → RRF pur (bypass FlashRank D) → Claude
-- **Budget :** 80 chunks, cap dynamique par source
-- **Changement requis :** aucun (comportement A+B+D actuel)
+- **Budget :** 120 chunks, cap dynamique par source (4 par défaut)
+- **Changement v0.5.1 :** critères resserrés — réservé aux vraies demandes d'exhaustivité
 
 #### Mode 4 : Structurel Exhaustif (grand inventaire pluriannuel)
 - **Déclencheur :** Demande exhaustive sur documents structurés (PV_AG, RCP, Contrats)
