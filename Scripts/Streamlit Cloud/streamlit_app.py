@@ -589,6 +589,7 @@ def detect_strategy_haiku(query, prev_query=None):
         result_text = re.sub(r"^```json?\s*", "", result_text)
         result_text = re.sub(r"\s*```$", "", result_text)
         parsed = json.loads(result_text)
+        print(f"[STRATEGY RAW] Haiku response: {parsed}")
 
         strategie = parsed.get("strategie", "equilibre")
         if strategie not in ("inventaire", "cible", "equilibre"):
