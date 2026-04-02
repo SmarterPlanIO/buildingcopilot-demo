@@ -2408,6 +2408,7 @@ if user_input:
     # ── Langfuse : début de trace ──
     _trace_start = _time.time()
     _trace = None
+    print(f"🔍 Langfuse client at query time: {type(langfuse_client).__name__ if langfuse_client else 'None'}")
     if langfuse_client:
         try:
             _trace = langfuse_client.trace(
