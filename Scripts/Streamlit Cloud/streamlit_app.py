@@ -2014,7 +2014,7 @@ def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
 
     # Commentaire libre
     comment_key = f"comment_{fb_key}"
-    _comment_sent = st.session_state.get(f"{comment_key}_sent")
+    _comment_sent = bool(st.session_state.get(f"{comment_key}_sent"))
     comment = st.text_input(
         "💬 Un commentaire ? (optionnel)",
         key=comment_key,
