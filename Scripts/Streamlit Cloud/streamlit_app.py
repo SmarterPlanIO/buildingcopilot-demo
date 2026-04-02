@@ -530,7 +530,8 @@ Réponds UNIQUEMENT par un objet JSON valide, sans commentaire :
   "statut": "actif|expire|resilie|cloture|en_cours|null",
   "is_followup": true ou false,
   "expanded_query": "version complète et autonome de la question si is_followup=true, sinon null",
-  "diagramme": true ou false
+  "diagramme": true ou false,
+  "include_bordereau_ar": true ou false
 }}
 
 Règles pour la stratégie :
@@ -550,7 +551,12 @@ Règles pour le suivi de conversation :
 - is_followup=true si la question actuelle est une continuation de la question précédente (trop courte ou ambiguë pour être comprise seule, fait référence implicite au contexte précédent)
 - Si is_followup=true, expanded_query DOIT être une reformulation complète et autonome combinant le contexte précédent et la question actuelle. Exemple : question précédente "liste des sinistres en 2023", question actuelle "et en 2024 ?" → expanded_query "liste des sinistres en 2024"
 - Si is_followup=false → expanded_query=null
-- "diagramme": true si la question demande explicitement ou implicitement un diagramme, un workflow, un schema, une chronologie, un processus a visualiser. false sinon."""
+- "diagramme": true si la question demande explicitement ou implicitement un diagramme, un workflow, un schema, une chronologie, un processus a visualiser. false sinon.
+
+Règles pour include_bordereau_ar :
+- Les bordereaux AR (accusés de réception de recommandé) sont exclus de la recherche par défaut car ils polluent les résultats avec du contenu à faible valeur.
+- include_bordereau_ar=true UNIQUEMENT si la question porte sur la traçabilité d'un envoi postal, la preuve d'un accusé de réception, le suivi d'une démarche juridique (mise en demeure, LRAR, notification officielle), ou si l'utilisateur mentionne explicitement "bordereau", "accusé de réception", "AR", "LRAR".
+- Sinon → false."""
 
 
 def detect_strategy_haiku(query, prev_query=None):
@@ -608,8 +614,9 @@ def detect_strategy_haiku(query, prev_query=None):
             expanded_query = None
 
         diagramme = bool(parsed.get("diagramme", False))
+        include_bordereau_ar = bool(parsed.get("include_bordereau_ar", False))
 
-        return strategie, prefilter, doc_type_hint, is_followup, expanded_query, diagramme
+        return strategie, prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar
 
     except Exception:
         return None
@@ -618,29 +625,29 @@ def detect_strategy_haiku(query, prev_query=None):
 def detect_retrieval_strategy(query, demo_mode=False, prev_query=None):
     """
     v4 : détection via Haiku avec fallback.
-    Retourne (chunks_per_source, doc_type_boost, max_chunks_llm, label, prefilter, doc_type_hint, is_followup, expanded_query, diagramme).
+    Retourne (chunks_per_source, doc_type_boost, max_chunks_llm, label, prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar).
     """
     haiku_result = detect_strategy_haiku(query, prev_query=prev_query)
 
     if haiku_result:
-        strategie, prefilter, doc_type_hint, is_followup, expanded_query, diagramme = haiku_result
+        strategie, prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar = haiku_result
 
         if strategie == "inventaire":
             # Tout inventaire utilise le cap élevé (120 chunks)
             mcl = 60 if demo_mode else MAX_CHUNKS_LLM_TEMPORAL
             cps = 4
             print(f"[STRATEGY] inventaire mcl={mcl} prefilter={prefilter}")
-            return cps, 0.03, mcl, "🔎 Inventaire", prefilter, doc_type_hint, is_followup, expanded_query, diagramme
+            return cps, 0.03, mcl, "🔎 Inventaire", prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar
         elif strategie == "cible":
             mcl = 30 if demo_mode else 50
-            return 8, 0.005, mcl, "🔬 Ciblé", prefilter, doc_type_hint, is_followup, expanded_query, diagramme
+            return 8, 0.005, mcl, "🔬 Ciblé", prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar
         else:
             mcl = 30 if demo_mode else 50
-            return 3, 0.01, mcl, "⚖️ Équilibré", prefilter, doc_type_hint, is_followup, expanded_query, diagramme
+            return 3, 0.01, mcl, "⚖️ Équilibré", prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar
 
     # Fallback : mode équilibré sans pré-filtrage
     mcl = 30 if demo_mode else 50
-    return 3, 0.01, mcl, "⚖️ Équilibré (fallback)", None, None, False, None, False
+    return 3, 0.01, mcl, "⚖️ Équilibré (fallback)", None, None, False, None, False, False
 
 
 def get_embedding(text):
@@ -714,7 +721,7 @@ def filter_resolution_categories(results, query, strategie):
 def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                   sim_threshold=SIMILARITY_THRESHOLD, chunks_per_source=MAX_CHUNKS_PER_SOURCE,
                   doc_type_boost=0.01, prefilter=None, doc_type_hint=None,
-                  exclude_categories=None):
+                  exclude_categories=None, include_bordereau_ar=False):
     """
     Pipeline hybride 5 étapes : pré-filtrage document (conditionnel) + RRF + diversité + rerank + quota RCP.
     doc_type_hint vient de Haiku (detect_strategy_haiku), plus de détection par mots-clés.
@@ -796,6 +803,10 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
             placeholders = ",".join(["%s"] * len(prefilter_files))
             where_clauses.append(f"c.source_file IN ({placeholders})")
             params_before.extend(prefilter_files)
+
+        # Exclure les bordereaux AR par défaut (sauf si Haiku a détecté un besoin de traçabilité)
+        if not include_bordereau_ar:
+            where_clauses.append("c.doc_type != 'BORDEREAU_AR'")
 
         # Exclure les catégories de résolution directement en SQL
         # pour ne pas gaspiller de slots dynamic_cap sur des chunks filtrés ensuite
@@ -910,7 +921,7 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
 
 def search_decomposed(query, copropriete, max_chunks, sim_threshold,
                       chunks_per_source, doc_type_boost, prefilter, doc_type_hint,
-                      strategie):
+                      strategie, include_bordereau_ar=False):
     """
     Phase 1b — Recherche décomposée par année pour les requêtes inventaire temporelles.
     Lance N sous-requêtes en parallèle, agrège et déduplique les résultats.
@@ -929,7 +940,7 @@ def search_decomposed(query, copropriete, max_chunks, sim_threshold,
         results, dt_hint, pf_active = search_chunks(
             query, copropriete, max_chunks, sim_threshold,
             chunks_per_source, doc_type_boost, prefilter, doc_type_hint,
-            exclude_categories=_excl_cats
+            exclude_categories=_excl_cats, include_bordereau_ar=include_bordereau_ar
         )
         # filter_resolution_categories n'est plus nécessaire si exclu en SQL,
         # mais on le garde en filet de sécurité pour les chunks sans catégorie
@@ -949,7 +960,7 @@ def search_decomposed(query, copropriete, max_chunks, sim_threshold,
         return search_chunks(
             sub_query, copropriete, per_year_budget, sim_threshold,
             chunks_per_source, doc_type_boost, sub_pf, doc_type_hint,
-            exclude_categories=_excl_cats
+            exclude_categories=_excl_cats, include_bordereau_ar=include_bordereau_ar
         )
 
     with ThreadPoolExecutor(max_workers=min(len(sub_queries), 8)) as executor:
@@ -2486,8 +2497,9 @@ if user_input:
     prev_queries = [h["content"] for h in st.session_state.chat_history[:-1] if h["role"] == "user"]
     prev_query = prev_queries[-1] if prev_queries else None
 
+    _include_bordereau_ar = False
     if _auto:
-        CPS_ACTUAL, DTB_ACTUAL, MCL_ACTUAL, strategy_label, prefilter, doc_type_hint, was_expanded, expanded_query, _diagramme = detect_retrieval_strategy(
+        CPS_ACTUAL, DTB_ACTUAL, MCL_ACTUAL, strategy_label, prefilter, doc_type_hint, was_expanded, expanded_query, _diagramme, _include_bordereau_ar = detect_retrieval_strategy(
             user_input, demo_mode=_demo, prev_query=prev_query
         )
         query_for_retrieval = expanded_query if was_expanded and expanded_query else user_input
@@ -2543,7 +2555,7 @@ if user_input:
             max_chunks=MCL_ACTUAL, sim_threshold=SIM_ACTUAL,
             chunks_per_source=CPS_ACTUAL, doc_type_boost=DTB_ACTUAL,
             prefilter=prefilter, doc_type_hint=doc_type_hint,
-            strategie=_strategie,
+            strategie=_strategie, include_bordereau_ar=_include_bordereau_ar,
         )
 
         # ── Double retrieval contextuel (Option 1) ──

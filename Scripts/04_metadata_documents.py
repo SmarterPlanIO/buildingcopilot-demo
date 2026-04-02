@@ -372,8 +372,19 @@ with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
     pbar = tqdm(total=len(futures), desc="Metadata")
     cache_save_counter = 0
 
+    # Types dont la classification par dossier (passe 1) est fiable —
+    # Haiku ne doit PAS les reclasser sauf vers un type plus spécifique du même domaine.
+    _TRUSTED_FOLDER_TYPES = {"RCP"}
+
     for future in as_completed(futures):
         sf, record = future.result()
+        # Protection : si le type original vient d'un dossier de confiance et que
+        # Haiku l'a reclassé vers un type sans rapport, restaurer l'original.
+        _orig = record.get("doc_type")
+        _corr = record.get("doc_type_corrige")
+        if _orig in _TRUSTED_FOLDER_TYPES and _corr and _corr != _orig:
+            print(f"  🛡️ Protection {_orig} : Haiku voulait reclasser en {_corr} → forcé {_orig} ({record['nom_fichier']})")
+            record["doc_type_corrige"] = _orig
         results[sf] = record
         pbar.update(1)
 

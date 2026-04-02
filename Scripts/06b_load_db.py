@@ -18,7 +18,7 @@ DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"  # ← MO
 DB_PORT = 5432
 DB_NAME = "postgres"
 DB_USER = "ragadmin"
-DB_PASSWORD = "SmarterRAG99!"  # ← MODIFIER
+DB_PASSWORD = "NokiumRAG99?"  # ← MODIFIER
 
 BATCH_SIZE = 100  # Insérer par lots de 100
 
@@ -118,7 +118,7 @@ if batch:
         (chunk_id, copropriete, source_file, nom_fichier, doc_type,
          chunk_index, total_chunks, themes, theme_scores,
          text, nb_caracteres, embedding,
-         resolution_category, synthetic_questions, dossier_id)
+         resolution_category, synthetic_questions, dossier_id, code_ncg)
         VALUES %s
         ON CONFLICT (chunk_id) DO NOTHING
     """, batch)
@@ -151,7 +151,8 @@ METADATA_FILE = os.path.join(os.path.dirname(INPUT_FILE), "documents_metadata.js
 # doc_type_corrige : valeurs valides (liste fermée dans le prompt Haiku)
 VALID_DOC_TYPES = {"RCP", "PV_AG", "CONTRAT", "DEVIS", "FACTURE", "BUDGET",
                    "DIAGNOSTIC", "COURRIER", "SINISTRE", "COMPTABILITE",
-                   "ENTRETIEN", "ASSURANCE", "AUTRE", "MUTATION", "PLAN"}
+                   "ENTRETIEN", "ASSURANCE", "AUTRE", "MUTATION", "PLAN",
+                   "BORDEREAU_AR"}
 
 if os.path.exists(METADATA_FILE):
     print("\n⏳ Chargement des métadonnées document-level...")
