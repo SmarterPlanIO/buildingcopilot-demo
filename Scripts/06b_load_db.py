@@ -58,8 +58,12 @@ def extract_code_ncg(text):
     m = re.search(r'\((\d{4,6})\)', text)
     if m:
         return m.group(1)
-    # Pattern 2: folder name — file path format "5390 - 2-6 BIS"
-    m = re.search(r'[\\/](\d{4,6})\s*-\s*', text)
+    # Pattern 2: after path separator — "...\5390 - " or ".../5390 - "
+    m = re.search(r'(?:[\\\\/])(\d{4,6})\s*-\s*', text)
+    if m:
+        return m.group(1)
+    # Pattern 3: standalone at word boundary — "5390 - 2-6 BIS"
+    m = re.search(r'(?:^|[^0-9])(\d{4,6})\s+-\s+', text)
     if m:
         return m.group(1)
     return None
@@ -284,7 +288,15 @@ if os.path.exists(DOSSIERS_FILE):
     with open(DOSSIERS_FILE, "r", encoding="utf-8") as f:
         for line in f:
             rec = json.loads(line)
+            # Try multiple sources for code_ncg: nom_dossier, documents_lies paths, dossier_id
             _dossier_code_ncg = extract_code_ncg(rec.get("nom_dossier", ""))
+            if not _dossier_code_ncg:
+                for _dl in (rec.get("documents_lies") or []):
+                    _dossier_code_ncg = extract_code_ncg(_dl)
+                    if _dossier_code_ncg:
+                        break
+            if not _dossier_code_ncg:
+                _dossier_code_ncg = extract_code_ncg(rec.get("dossier_id", ""))
             row = (
                 clean(rec["dossier_id"]),
                 clean(rec["copropriete"]),
