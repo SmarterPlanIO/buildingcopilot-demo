@@ -554,6 +554,17 @@ Règles pour les filtres :
 - statut : seulement si la question implique un état (en cours, actif, résilié, clos)
 - Tout champ incertain → null
 
+Exemples doc_type (IMPORTANT — suivre exactement cette logique) :
+- "quels sont les contrats de maintenance depuis 2010" → doc_type="CONTRAT", annee_min=2010
+- "les contrats d'ascenseur en cours" → doc_type="CONTRAT", sous_type="ASCENSEUR", statut="actif"
+- "les factures de ravalement" → doc_type="FACTURE"
+- "les PV d'AG depuis 2018" → doc_type="PV_AG", annee_min=2018
+- "les diagnostics amiante" → doc_type="DIAGNOSTIC"
+- "état des extincteurs" → doc_type=null (sujet transversal, pas un type de document)
+- "problèmes de fuite au sous-sol" → doc_type=null (sujet transversal)
+- "travaux de ravalement" → doc_type=null (sujet transversal)
+- "historique du chauffage" → doc_type=null (sujet transversal)
+
 Règles pour le suivi de conversation :
 - is_followup=true si la question actuelle est une continuation de la question précédente (trop courte ou ambiguë pour être comprise seule, fait référence implicite au contexte précédent)
 - Si is_followup=true, expanded_query DOIT être une reformulation complète et autonome combinant le contexte précédent et la question actuelle. Exemple : question précédente "liste des sinistres en 2023", question actuelle "et en 2024 ?" → expanded_query "liste des sinistres en 2024"
@@ -589,7 +600,6 @@ def detect_strategy_haiku(query, prev_query=None):
         result_text = re.sub(r"^```json?\s*", "", result_text)
         result_text = re.sub(r"\s*```$", "", result_text)
         parsed = json.loads(result_text)
-        print(f"[STRATEGY RAW] Haiku response: {parsed}")
 
         strategie = parsed.get("strategie", "equilibre")
         if strategie not in ("inventaire", "cible", "equilibre"):
