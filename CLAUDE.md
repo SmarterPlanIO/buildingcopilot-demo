@@ -83,11 +83,19 @@ taskkill //F //IM git.exe 2>/dev/null; sleep 2; rm -f ".git/index.lock"; git che
 
 Streamlit Cloud deploie **uniquement depuis `main`**. Apres chaque commit sur `PALIM_gestion_projet`, toujours merger et pusher vers main.
 
-### 3.4 PYTHONIOENCODING=utf-8 sur Windows
+### 3.4 Paths accentues — attention encodage
+
+Les chemins locaux contiennent des caracteres accentues (ex: `Déploiement`, `Résultats`, `Données`). Regles :
+- **Toujours utiliser le path exact avec accents** dans les commandes bash, `cd`, `Read`, `Edit`, etc. Ne jamais remplacer les accents par des versions ASCII (pas `Deploiement` mais `Déploiement`).
+- **Tester les paths en copiant depuis un `ls` ou `git status`** plutot que de les taper manuellement — un accent manque = commande qui echoue silencieusement.
+- **En Python** : utiliser `pathlib.Path` plutot que des strings brutes pour manipuler les chemins. Si `os.path` est utilise, s'assurer que l'encodage filesystem est UTF-8.
+- **En bash** : toujours entourer les paths de guillemets doubles (`"chemin/accentué"`).
+
+### 3.5 PYTHONIOENCODING=utf-8 sur Windows
 
 Toujours prefixer les commandes Python avec `PYTHONIOENCODING=utf-8` sur cette machine Windows. Les scripts utilisent des emojis dans les `print()` et la console Windows (cp1252) crashe sinon.
 
-### 3.5 st.secrets — acces par cle, jamais .get()
+### 3.6 st.secrets — acces par cle, jamais .get()
 
 Ne JAMAIS utiliser `st.secrets.get("KEY")` ou `st.secrets["section"].get("KEY")`. L'objet AttrDict de Streamlit ne se comporte pas comme un dict standard.
 
