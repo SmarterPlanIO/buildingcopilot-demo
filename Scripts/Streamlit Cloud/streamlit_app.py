@@ -541,7 +541,7 @@ Réponds UNIQUEMENT par un objet JSON valide, sans commentaire :
 }}
 
 Règles pour la stratégie :
-- "inventaire" : la question demande une liste ou un recensement. Signaux forts : "tous les", "liste complète", "depuis [année]", "historique", "combien de", "évolution depuis", "chaque année". Signaux implicites : question au PLURIEL qui attend naturellement plusieurs résultats ("quels travaux ont été votés ?", "quels sinistres ?", "quelles résolutions ?"). NE PAS utiliser UNIQUEMENT si la question porte clairement sur un seul élément précis.
+- "inventaire" : la question demande une liste ou un recensement SANS contrainte temporelle précise. Signaux forts : "tous les", "liste complète", "historique", "combien de", "évolution depuis", "chaque année". Signaux implicites : question au PLURIEL qui attend naturellement plusieurs résultats ("quels travaux ont été votés ?", "quels sinistres ?"). IMPORTANT : si la question contient une plage de dates précise (ex: "de 2014 à 2017", "entre 2020 et 2023") ou une seule année, préférer "equilibre" — le filtre temporel réduit déjà le scope. Réserver "inventaire" aux questions sans borne temporelle ou avec "depuis [année]" (borne ouverte).
 - "cible" : la question porte sur UN document précis, un article, une résolution, un détail spécifique, ou demande d'expliquer/détailler quelque chose
 - "equilibre" : mode PAR DÉFAUT. Question ouverte, synthèse, état des lieux, recherche d'information générale. Inclut "quel est", "quels sont", "récapitulatif", les demandes de diagramme, workflow, schéma, ou processus. En cas de doute entre inventaire et équilibré, choisir équilibré.
 
@@ -555,9 +555,11 @@ Règles pour les filtres :
 - Tout champ incertain → null
 
 Exemples stratégie (IMPORTANT) :
-- "quels travaux ont été votés ?" → strategie="inventaire" (pluriel, attend une liste)
-- "quels sinistres sont en cours ?" → strategie="inventaire" (pluriel, attend une liste)
-- "liste des résolutions depuis 2020" → strategie="inventaire" (demande explicite de liste)
+- "quels travaux ont été votés ?" → strategie="inventaire" (pluriel, pas de borne temporelle)
+- "quels sinistres sont en cours ?" → strategie="inventaire" (pluriel, pas de borne temporelle)
+- "liste des résolutions depuis 2020" → strategie="inventaire" (borne ouverte "depuis")
+- "quels travaux ont été votés de 2014 à 2017 ?" → strategie="equilibre" (plage de dates = scope réduit)
+- "quels sinistres en 2023 ?" → strategie="equilibre" (année précise = scope réduit)
 - "quel est le contrat de syndic actuel ?" → strategie="cible" (un seul document)
 - "que dit le RCP sur les parties communes ?" → strategie="cible" (un sujet précis)
 - "état des lieux de la copropriété" → strategie="equilibre" (synthèse générale)
