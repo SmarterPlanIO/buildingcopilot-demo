@@ -541,7 +541,7 @@ Réponds UNIQUEMENT par un objet JSON valide, sans commentaire :
 }}
 
 Règles pour la stratégie :
-- "inventaire" : la question demande EXPLICITEMENT une liste exhaustive sur plusieurs éléments ou plusieurs années. Signaux forts : "tous les", "liste complète", "depuis [année]", "historique", "combien de", "évolution depuis", "chaque année". NE PAS utiliser si la question porte sur un seul sujet sans demande d'exhaustivité.
+- "inventaire" : la question demande une liste ou un recensement. Signaux forts : "tous les", "liste complète", "depuis [année]", "historique", "combien de", "évolution depuis", "chaque année". Signaux implicites : question au PLURIEL qui attend naturellement plusieurs résultats ("quels travaux ont été votés ?", "quels sinistres ?", "quelles résolutions ?"). NE PAS utiliser UNIQUEMENT si la question porte clairement sur un seul élément précis.
 - "cible" : la question porte sur UN document précis, un article, une résolution, un détail spécifique, ou demande d'expliquer/détailler quelque chose
 - "equilibre" : mode PAR DÉFAUT. Question ouverte, synthèse, état des lieux, recherche d'information générale. Inclut "quel est", "quels sont", "récapitulatif", les demandes de diagramme, workflow, schéma, ou processus. En cas de doute entre inventaire et équilibré, choisir équilibré.
 
@@ -553,6 +553,14 @@ Règles pour les filtres :
 - sous_type : UNIQUEMENT si l'utilisateur demande un SOUS-TYPE DE DOCUMENT spécifique (ex : "les contrats MRI", "les DDE", "le contrat de syndic"). Même règle que doc_type : ne jamais remplir si la question porte sur un SUJET ou un OBJET transversal. Valeurs possibles : MRI, DDE, RAVALEMENT, ASCENSEUR, CHAUFFAGE, TOITURE, SYNDIC, etc.
 - statut : seulement si la question implique un état (en cours, actif, résilié, clos)
 - Tout champ incertain → null
+
+Exemples stratégie (IMPORTANT) :
+- "quels travaux ont été votés ?" → strategie="inventaire" (pluriel, attend une liste)
+- "quels sinistres sont en cours ?" → strategie="inventaire" (pluriel, attend une liste)
+- "liste des résolutions depuis 2020" → strategie="inventaire" (demande explicite de liste)
+- "quel est le contrat de syndic actuel ?" → strategie="cible" (un seul document)
+- "que dit le RCP sur les parties communes ?" → strategie="cible" (un sujet précis)
+- "état des lieux de la copropriété" → strategie="equilibre" (synthèse générale)
 
 Exemples doc_type (IMPORTANT — suivre exactement cette logique) :
 - "quels sont les contrats de maintenance depuis 2010" → doc_type="CONTRAT", annee_min=2010
