@@ -12,6 +12,7 @@ Clé de matching : airtable_record_id (ID unique Airtable)
 import json
 import os
 import re
+import unicodedata
 import urllib.request
 import urllib.parse
 import psycopg2
@@ -296,6 +297,208 @@ def upsert_dossier(cur, dossier):
     cur.execute(sql, values)
 
 
+def _normalize_name(name):
+    """Normalize a person name for fuzzy matching.
+    'M. LEMEAU' / 'LEMEAU Yves' / 'DDE LEMEAU' → 'lemeau'
+    """
+    if not name:
+        return ""
+    # Remove accents
+    s = unicodedata.normalize("NFD", name)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = s.upper()
+    # Strip common prefixes: M., Mme, Mr, Syndicat..., DDE
+    # Each prefix must be a standalone word (\b...\b) to avoid clipping real names
+    s = re.sub(r'\bSYNDICAT\b.*', '', s)  # "Syndicat des Copropriétaires..." → ""
+    s = re.sub(r'\b(MR|MME|MADAME|MONSIEUR|SINISTRE_DDE|DDE)\b', '', s)
+    s = re.sub(r'\bM\b\.?', '', s)  # standalone "M" or "M."
+    # Keep only alpha tokens
+    tokens = re.findall(r'[A-Z]{2,}', s)
+    return " ".join(sorted(tokens))
+
+
+_MERGE_DATE_TOLERANCE_DAYS = 30  # max écart entre dates d'ouverture pour considérer un doublon
+
+
+def _match_rag_dossier(cur, at_lese_nom, at_nom_dossier, at_date_ouverture, code_ncg):
+    """Find a RAG-only dossier matching an Airtable sinistre by lese_nom + date proximity.
+
+    Matching rules:
+    1. Normalized lese_nom (or fallback nom_dossier) must share all tokens of the shorter name.
+    2. If both dossiers have a date_ouverture, they must be within _MERGE_DATE_TOLERANCE_DAYS.
+
+    Returns (dossier_id, lese_nom) of the best RAG match, or (None, None).
+    """
+    if not code_ncg:
+        return None, None
+
+    # Fetch all RAG dossiers for this copro
+    cur.execute("""
+        SELECT dossier_id, lese_nom, nom_dossier, date_ouverture
+        FROM dossiers
+        WHERE code_ncg = %s AND airtable_record_id IS NULL
+    """, [code_ncg])
+    rag_rows = cur.fetchall()
+    if not rag_rows:
+        return None, None
+
+    # Build normalized Airtable name for matching
+    at_norm = _normalize_name(at_lese_nom)
+    if not at_norm:
+        return None, None
+
+    at_tokens = set(at_norm.split())
+
+    # Normalize at_date_ouverture to a date object for comparison
+    at_date = None
+    if at_date_ouverture:
+        if isinstance(at_date_ouverture, str):
+            try:
+                at_date = date.fromisoformat(at_date_ouverture[:10])
+            except (ValueError, TypeError):
+                pass
+        elif isinstance(at_date_ouverture, date):
+            at_date = at_date_ouverture
+
+    candidates = []
+    for rag_id, rag_lese, rag_nom, rag_date in rag_rows:
+        # ── Name matching on lese_nom ──
+        rag_lese_norm = _normalize_name(rag_lese)
+        rag_nom_norm = _normalize_name(rag_nom)
+        rag_norm = rag_lese_norm or rag_nom_norm
+        if not rag_norm:
+            continue
+        rag_tokens = set(rag_norm.split())
+        overlap = at_tokens & rag_tokens
+        if not overlap:
+            continue
+        score = len(overlap) / min(len(at_tokens), len(rag_tokens))
+        if score < 1.0:
+            continue
+
+        # ── Date proximity guard ──
+        if at_date and rag_date:
+            rag_d = rag_date if isinstance(rag_date, date) else None
+            if rag_d:
+                delta = abs((at_date - rag_d).days)
+                if delta > _MERGE_DATE_TOLERANCE_DAYS:
+                    continue  # same person, different sinistre
+
+        # ── Bonus: lese_nom matched directly (not via nom_dossier fallback) ──
+        lese_direct = 1 if rag_lese_norm and (at_tokens & set(rag_lese_norm.split())) else 0
+        # ── Bonus: nom_dossier also contains the person name ──
+        nom_also = 1 if rag_nom_norm and (at_tokens & set(rag_nom_norm.split())) else 0
+        # ── Bonus: closer date ──
+        date_closeness = 0
+        if at_date and rag_date and isinstance(rag_date, date):
+            date_closeness = max(0, _MERGE_DATE_TOLERANCE_DAYS - abs((at_date - rag_date).days))
+
+        candidates.append((
+            (lese_direct, nom_also, date_closeness, score),  # sort key
+            rag_id, rag_lese
+        ))
+
+    if not candidates:
+        return None, None
+
+    # Pick the best candidate: prefer lese_nom match, then nom_dossier match, then closest date
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    _, best_id, best_name = candidates[0]
+    return best_id, best_name
+
+
+# Fields to absorb from RAG dossier into the Airtable dossier.
+# Only copy when the Airtable dossier has NULL/empty for that field.
+_RAG_MERGE_FIELDS = [
+    "documents_lies", "resume_ia", "etapes",
+    "pieces_requises", "pieces_fournies",
+    "expert_nom", "assureur", "lese_lot",
+]
+
+
+def merge_rag_into_airtable(cur, code_ncg):
+    """Post-sync pass: find RAG dossiers that duplicate an Airtable dossier,
+    absorb their exclusive data, and delete the RAG duplicate.
+
+    Returns (merged_count, details_list).
+    """
+    # All Airtable dossiers for this copro
+    cur.execute("""
+        SELECT dossier_id, lese_nom, nom_dossier, code_ncg, date_ouverture
+        FROM dossiers
+        WHERE code_ncg = %s AND airtable_record_id IS NOT NULL
+    """, [code_ncg])
+    at_dossiers = cur.fetchall()
+
+    merged = []
+    already_merged_rag_ids = set()  # prevent same RAG dossier from being absorbed twice
+    for at_id, at_lese, at_nom, at_code, at_date in at_dossiers:
+        rag_id, rag_lese = _match_rag_dossier(cur, at_lese, at_nom, at_date, at_code)
+        if not rag_id or rag_id in already_merged_rag_ids:
+            continue
+        already_merged_rag_ids.add(rag_id)
+
+        # Fetch the RAG dossier's mergeable fields
+        field_list = ", ".join(_RAG_MERGE_FIELDS)
+        cur.execute(f"SELECT {field_list} FROM dossiers WHERE dossier_id = %s", [rag_id])
+        rag_row = cur.fetchone()
+        if not rag_row:
+            continue
+        rag_data = dict(zip(_RAG_MERGE_FIELDS, rag_row))
+
+        # Fetch current Airtable dossier's values for these fields
+        cur.execute(f"SELECT {field_list} FROM dossiers WHERE dossier_id = %s", [at_id])
+        at_row = cur.fetchone()
+        at_data = dict(zip(_RAG_MERGE_FIELDS, at_row))
+
+        # Build UPDATE SET for fields where AT is empty but RAG has data
+        updates = {}
+        for field in _RAG_MERGE_FIELDS:
+            rag_val = rag_data[field]
+            at_val = at_data[field]
+            # "empty" = None, empty string, empty list/array, empty jsonb []
+            at_empty = (at_val is None
+                        or at_val == ""
+                        or at_val == []
+                        or (isinstance(at_val, list) and len(at_val) == 0)
+                        or at_val == "[]")
+            rag_has = (rag_val is not None
+                       and rag_val != ""
+                       and rag_val != []
+                       and not (isinstance(rag_val, list) and len(rag_val) == 0)
+                       and rag_val != "[]")
+            if at_empty and rag_has:
+                updates[field] = rag_val
+
+        if updates:
+            set_clauses = ", ".join(f"{k} = %s" for k in updates)
+            # Serialize jsonb fields (etapes) for psycopg2
+            vals = []
+            for k in updates:
+                v = updates[k]
+                if k == "etapes" and not isinstance(v, str):
+                    vals.append(psycopg2.extras.Json(v))
+                else:
+                    vals.append(v)
+            vals.append(at_id)
+            cur.execute(
+                f"UPDATE dossiers SET {set_clauses}, updated_at = NOW() WHERE dossier_id = %s",
+                vals
+            )
+
+        # Delete the RAG duplicate
+        cur.execute("DELETE FROM dossiers WHERE dossier_id = %s", [rag_id])
+        merged.append({
+            "airtable": at_id,
+            "rag_absorbed": rag_id,
+            "fields_copied": list(updates.keys()),
+            "at_lese": at_lese,
+            "rag_lese": rag_lese,
+        })
+
+    return len(merged), merged
+
+
 def main():
     print("=" * 60)
     print("SYNCHRONISATION AIRTABLE ASSYNCO → PALIM")
@@ -363,6 +566,13 @@ def main():
                 continue
 
         conn.commit()
+
+        # ── Merge RAG duplicates — DÉSACTIVÉ (v0.5.0) ──
+        # On garde tous les dossiers RAG + Airtable sans dédoublonnage.
+        # Claude fait la synthèse quand un utilisateur interroge des dossiers
+        # au même nom de lésé (ex: LEMEAU RAG 23/11 + LEMEAU Airtable 17/05).
+        # merge_rag_into_airtable(cur, copro_code_ncg)
+        print(f"\n   ℹ️  Dédoublonnage RAG↔Airtable désactivé (tous les dossiers conservés)")
 
         # Summary stats
         cur.execute("""
