@@ -4,23 +4,42 @@ Classification en 3 passes :
   1. Règles déterministes (mots-clés dossier, seuil >100 images)
   2. Heuristiques (noms de fichiers, chemin)
   3. LLM Vision (Sonnet 4.6) sur échantillon 5% en cas de doute
-Lance : python 01_filtrage.py
+
+Usage :
+  python 01_filtrage.py --copro 5033       # Mode per-copro (recommandé)
+  python 01_filtrage.py                    # Mode legacy (chemins hardcodés)
 """
 import os
 import shutil
 import json
 import base64
 import random
+import argparse
 import boto3
 from pathlib import Path
 
+from pipeline_config import paths_for, RESULTS_ROOT
+
 # =====================================================
-# CONFIGURATION
+# CONFIGURATION (mode legacy si --copro absent)
 # =====================================================
-ARCHIVES_ROOT = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\RUN ON 6 COPROS"  # ← MODIFIER ICI
-OUTPUT_DIR = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Filtrees"    # ← MODIFIER ICI
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-REPORT_FILE = os.path.join(SCRIPT_DIR, "filtrage_rapport.json")
+
+_parser = argparse.ArgumentParser(description="Filtrage des archives d'une copropriété.")
+_parser.add_argument("--copro", help="Code NCG de la copropriété (ex: 5033). Si absent, mode legacy.")
+_args, _ = _parser.parse_known_args()
+
+if _args.copro:
+    _paths = paths_for(_args.copro)
+    ARCHIVES_ROOT = str(_paths["raw_source"])
+    OUTPUT_DIR = str(_paths["filtered"])
+    _paths["per_copro"].mkdir(parents=True, exist_ok=True)
+    REPORT_FILE = str(_paths["filtrage_report"])
+    print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
+else:
+    ARCHIVES_ROOT = str(RESULTS_ROOT / "RUN ON 6 COPROS")
+    OUTPUT_DIR = str(RESULTS_ROOT / "Archives_Filtrees")
+    REPORT_FILE = os.path.join(SCRIPT_DIR, "filtrage_rapport.json")
 
 AWS_REGION = "eu-west-1"
 
