@@ -1,6 +1,8 @@
 """
 ÉTAPE 5 — Génération des embeddings via Amazon Bedrock Titan (VERSION PARALLÈLE)
-Lance : python 05_embedding.py
+Usage :
+  python 05_embedding.py --copro 5033    # Mode per-copro (recommandé)
+  python 05_embedding.py                  # Mode legacy (chemins hardcodés)
 
 Optimisations vs version séquentielle :
   - 15 workers parallèles (ThreadPoolExecutor) : 5-8x plus rapide
@@ -10,17 +12,32 @@ Optimisations vs version séquentielle :
 """
 import os
 import json
+import argparse
 import boto3
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
+from pipeline_config import paths_for
+
 # =====================================================
 # CONFIGURATION
 # =====================================================
-INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"
-OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings.jsonl"
+_parser = argparse.ArgumentParser(description="Génération des embeddings d'une copropriété.")
+_parser.add_argument("--copro", help="Code NCG de la copropriété (ex: 5033). Si absent, mode legacy.")
+_args, _ = _parser.parse_known_args()
+
+if _args.copro:
+    _paths = paths_for(_args.copro)
+    _paths["per_copro"].mkdir(parents=True, exist_ok=True)
+    INPUT_FILE = str(_paths["chunks_jsonl"])
+    OUTPUT_FILE = str(_paths["embeddings_jsonl"])
+    print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
+else:
+    INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"
+    OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings.jsonl"
+
 AWS_REGION = "eu-west-1"
 
 EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"

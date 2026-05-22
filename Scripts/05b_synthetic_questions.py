@@ -1,6 +1,8 @@
 """
 ETAPE 5b - Generation de questions synthetiques via Haiku (Phase 1a)
-Lance : python 05b_synthetic_questions.py
+Usage :
+  python 05b_synthetic_questions.py --copro 5033    # Mode per-copro (recommandé)
+  python 05b_synthetic_questions.py                  # Mode legacy (chemins hardcodés)
 
 Enrichit chaque chunk eligible avec 3-5 questions dont la reponse est
 explicitement dans le texte. Ces questions ameliorent le recall BM25
@@ -15,17 +17,32 @@ Cout estime : ~3500 chunks x $0.0001 = ~$0.35
 """
 import os
 import json
+import argparse
 import boto3
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
+from pipeline_config import paths_for
+
 # =====================================================
 # CONFIGURATION
 # =====================================================
-INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings.jsonl"
-OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings_sq.jsonl"
+_parser = argparse.ArgumentParser(description="Génération de questions synthétiques d'une copropriété.")
+_parser.add_argument("--copro", help="Code NCG de la copropriété (ex: 5033). Si absent, mode legacy.")
+_args, _ = _parser.parse_known_args()
+
+if _args.copro:
+    _paths = paths_for(_args.copro)
+    _paths["per_copro"].mkdir(parents=True, exist_ok=True)
+    INPUT_FILE = str(_paths["embeddings_jsonl"])
+    OUTPUT_FILE = str(_paths["embeddings_sq_jsonl"])
+    print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
+else:
+    INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings.jsonl"
+    OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings_sq.jsonl"
+
 AWS_REGION = "eu-west-1"
 
 HAIKU_MODEL = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"

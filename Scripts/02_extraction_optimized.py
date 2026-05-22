@@ -9,19 +9,24 @@ Architecture "fire-all-then-collect" pour Textract :
   Phase 5 : Nettoyage S3 + checkpoint
 
 Gain attendu : 5-10x plus rapide que la version séquentielle
-Lance : python 02_extraction_optimized.py
+Usage :
+  python 02_extraction_optimized.py --copro 5033    # Mode per-copro (recommandé)
+  python 02_extraction_optimized.py                  # Mode legacy (chemins hardcodés)
 """
 import os
 import sys
 import json
 import time
 import shutil
+import argparse
 import boto3
 import logging
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from botocore.config import Config
 from tqdm import tqdm
+
+from pipeline_config import paths_for
 
 # ── Dépendances (installation auto si manquantes) ──
 try:
@@ -54,8 +59,32 @@ except ImportError:
 # =====================================================
 # CONFIGURATION
 # =====================================================
-FILTERED_DIR = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Filtrees"
-OUTPUT_DIR   = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Extraites"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+_parser = argparse.ArgumentParser(description="Extraction de texte d'une copropriété.")
+_parser.add_argument("--copro", help="Code NCG de la copropriété (ex: 5033). Si absent, mode legacy.")
+_args, _ = _parser.parse_known_args()
+
+if _args.copro:
+    _paths = paths_for(_args.copro)
+    # FILTERED_DIR / OUTPUT_DIR pointent sur la base (Archives_Filtrees / Archives_Extraites)
+    # pour que rel_path reste au format legacy "{copro_folder}/.../file.pdf" et que les
+    # champs copropriete/dossier_parent/source_file restent compatibles avec le mode legacy.
+    # On restreint juste le walk au sous-dossier copro via _WALK_DIR.
+    FILTERED_DIR = str(_paths["filtered"].parent)   # = Archives_Filtrees
+    OUTPUT_DIR   = str(_paths["extracted"].parent)  # = Archives_Extraites
+    _WALK_DIR    = str(_paths["filtered"])          # = Archives_Filtrees/{copro}
+    _paths["per_copro"].mkdir(parents=True, exist_ok=True)
+    CHECKPOINT_FILE = str(_paths["extraction_checkpoint"])
+    _LOG_PATH = str(_paths["extraction_log"])
+    print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
+else:
+    FILTERED_DIR = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Filtrees"
+    OUTPUT_DIR   = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Extraites"
+    _WALK_DIR    = FILTERED_DIR
+    CHECKPOINT_FILE = os.path.join(SCRIPT_DIR, "extraction_checkpoint.json")
+    _LOG_PATH = "extraction.log"
+
 S3_BUCKET = "smarterplan-rag-prototype"
 S3_TEXTRACT_PREFIX = "textract_temp/"
 AWS_REGION = "eu-west-1"
@@ -66,10 +95,6 @@ JOB_LAUNCH_RATE = 5               # Jobs lancés par seconde (quota Textract dé
 POLL_INTERVAL = 3                 # Secondes entre chaque cycle de polling
 POLL_BATCH_SIZE = 50              # Jobs vérifiés par cycle
 MAX_RETRIES = 3                   # Retries sur throttling
-
-# ── Checkpoint / reprise ──
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CHECKPOINT_FILE = os.path.join(SCRIPT_DIR, "extraction_checkpoint.json")
 
 # ── AWS clients avec retry adaptatif ──
 boto_config = Config(
@@ -85,7 +110,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("extraction.log", encoding="utf-8")
+        logging.FileHandler(_LOG_PATH, encoding="utf-8")
     ]
 )
 log = logging.getLogger(__name__)
@@ -308,7 +333,7 @@ def triage_files():
     ocr_files = []      # (filepath, rel_path, ext)
 
     log.info("Phase 0: Triage des fichiers...")
-    for root, dirs, filenames in os.walk(FILTERED_DIR):
+    for root, dirs, filenames in os.walk(_WALK_DIR):
         for fname in filenames:
             filepath = os.path.join(root, fname)
             rel_path = os.path.relpath(filepath, FILTERED_DIR)

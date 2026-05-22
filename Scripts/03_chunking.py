@@ -1,6 +1,8 @@
 """
 ÉTAPE 3 — Chunking intelligent adapté aux documents de copropriété
-Lance : python 03_chunking.py
+Usage :
+  python 03_chunking.py --copro 5033    # Mode per-copro (recommandé)
+  python 03_chunking.py                  # Mode legacy (chemins hardcodés)
 Prérequis : content_filter.py dans le même dossier
 
 Classification doc_type en 3 passes :
@@ -20,6 +22,7 @@ import json
 import time
 import hashlib
 import logging
+import argparse
 import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,12 +32,24 @@ import boto3
 
 # Filtre de contenu binaire / garbage (v2)
 from content_filter import analyze_file_quality, filter_chunks, make_placeholder_chunk
+from pipeline_config import paths_for
 
 # =====================================================
 # CONFIGURATION
 # =====================================================
-EXTRACTED_DIR = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Extraites"  # ← MODIFIER
-OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"     # ← MODIFIER
+_parser = argparse.ArgumentParser(description="Chunking d'une copropriété.")
+_parser.add_argument("--copro", help="Code NCG de la copropriété (ex: 5033). Si absent, mode legacy.")
+_args, _ = _parser.parse_known_args()
+
+if _args.copro:
+    _paths = paths_for(_args.copro)
+    EXTRACTED_DIR = str(_paths["extracted"])
+    _paths["per_copro"].mkdir(parents=True, exist_ok=True)
+    OUTPUT_FILE = str(_paths["chunks_jsonl"])
+    print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
+else:
+    EXTRACTED_DIR = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Extraites"
+    OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"
 
 # Taille cible des chunks (en caractères)
 CHUNK_TARGET_SIZE = 1500    # ~375 tokens français

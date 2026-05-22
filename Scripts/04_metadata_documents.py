@@ -3,25 +3,44 @@
 Lit chunks_copro.jsonl (sortie de l'étape 3), agrège par source_file, extrait metadata via LLM.
 Fenêtre de lecture adaptative : en-tête seul ou tête+queue selon le doc_type.
 Sortie : documents_metadata.jsonl (1 ligne JSON par document source)
-Lance : python 04_metadata_documents.py
+Usage :
+  python 04_metadata_documents.py --copro 5033    # Mode per-copro (recommandé)
+  python 04_metadata_documents.py                  # Mode legacy (chemins hardcodés)
 """
 import json
 import os
 import re
 import time
+import argparse
 import unicodedata
 import boto3
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
+from pipeline_config import paths_for
+
 # =====================================================
 # CONFIGURATION
 # =====================================================
-INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"     # ← MODIFIER
-OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\documents_metadata.jsonl"  # ← MODIFIER
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CACHE_FILE = os.path.join(SCRIPT_DIR, "metadata_cache.json")
+
+_parser = argparse.ArgumentParser(description="Extraction métadonnées d'une copropriété.")
+_parser.add_argument("--copro", help="Code NCG de la copropriété (ex: 5033). Si absent, mode legacy.")
+_args, _ = _parser.parse_known_args()
+
+if _args.copro:
+    _paths = paths_for(_args.copro)
+    _paths["per_copro"].mkdir(parents=True, exist_ok=True)
+    INPUT_FILE = str(_paths["chunks_jsonl"])
+    OUTPUT_FILE = str(_paths["documents_metadata_jsonl"])
+    CACHE_FILE = str(_paths["per_copro"] / "metadata_cache.json")
+    print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
+else:
+    INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"
+    OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\documents_metadata.jsonl"
+    CACHE_FILE = os.path.join(SCRIPT_DIR, "metadata_cache.json")
+
 AWS_REGION = "eu-west-1"
 LLM_MODEL = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 
