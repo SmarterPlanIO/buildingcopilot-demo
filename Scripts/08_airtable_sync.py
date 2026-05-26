@@ -26,11 +26,24 @@ AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
 AIRTABLE_BASE_ID = os.environ.get("AIRTABLE_BASE_ID", "appi1ee5p93EBHtLR")
 AIRTABLE_TABLE_ID = os.environ.get("AIRTABLE_TABLE_ID", "tblvvkhcHZjDyHLdp")  # 🏄‍♂️Sinistre
 
-# Filtrer par copropriété TARIEL (ref NCG = 5390)
-# Pour ajouter d'autres copros, étendre cette liste
+# Filtres par copropriété : match précis sur le code NCG parenthésé dans {Name}.
+# Le champ {Name} suit le format canonique "DDE-... @ NOM(CODE) Nos Ref:..." et
+# 920/922 sinistres (100%) respectent ce format (vérifié via diag_copro_filters.py).
+# On filtre donc sur FIND("(CODE)") : zéro faux positif. Les alias mot-clé (rue/résidence)
+# sont volontairement ABSENTS car ils rattrapent des sinistres d'AUTRES immeubles partageant
+# le nom de rue (ex: alias TARIEL → TARIEL(5448)/(5443) ; CRESSON → 5 autres codes ; PATAY → 8031/8032).
 # Clé = nom copro interne, valeur = (formule Airtable, code_ncg)
 COPRO_FILTERS = {
-    "SOURCE_ARCHIVES": ('OR(FIND("5390",{Name}),FIND("TIVOLI",{Name}))', "5390"),
+    "5033_TORCY":         ('FIND("(5033)",{Name})', "5033"),
+    "5354_UNIVERSITE":    ('FIND("(5354)",{Name})', "5354"),
+    "5390_TARIEL":        ('FIND("(5390)",{Name})', "5390"),
+    "5427_CRESSON":       ('FIND("(5427)",{Name})', "5427"),
+    "5480_LE_STADE":      ('FIND("(5480)",{Name})', "5480"),
+    "5499_GUILLEMIN":     ('FIND("(5499)",{Name})', "5499"),
+    "5548_HOCHE_MESSINE": ('FIND("(5548)",{Name})', "5548"),
+    "5553_FREGATES":      ('FIND("(5553)",{Name})', "5553"),
+    "8030_PATAY":         ('FIND("(8030)",{Name})', "8030"),
+    "8050_STYLE":         ('FIND("(8050)",{Name})', "8050"),
 }
 
 DB_HOST = os.environ.get("DB_HOST", "")

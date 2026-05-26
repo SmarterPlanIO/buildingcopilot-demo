@@ -54,6 +54,13 @@ def extract_code_ncg(text):
     """Extract NCG code (4-6 digit ID) from file path or Airtable name."""
     if not text:
         return None
+    # Pattern 0 (prioritaire) : dossier copro en tête du chemin relatif — "5390 - 2-6 BIS..."
+    # Sans ce pattern ancré, un dossier intermédiaire "\2025 - " ou un doc "\13476 - CV"
+    # est capté à tort (le code de tête n'a pas de séparateur devant). Inoffensif sur les
+    # Names Airtable qui commencent par "DDE-"/"INC-" (lettres, pas de match digit-start).
+    m = re.match(r'\s*(\d{4,6})\s*-\s*', text)
+    if m:
+        return m.group(1)
     # Pattern 1: between parentheses — Airtable format "TIVOLI(5390)"
     m = re.search(r'\((\d{4,6})\)', text)
     if m:
@@ -67,6 +74,18 @@ def extract_code_ncg(text):
     if m:
         return m.group(1)
     return None
+
+
+def parse_date(v):
+    """Normalise une date pour PostgreSQL. Haiku produit parfois des dates
+    partielles (YYYY-MM, YYYY) → on pad au 1er. None si vide ou non parsable."""
+    if not isinstance(v, str) or not v.strip():
+        return None
+    m = re.fullmatch(r'(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?', v.strip())
+    if not m:
+        return None
+    y, mo, d = m.group(1), m.group(2) or "1", m.group(3) or "1"
+    return f"{y}-{int(mo):02d}-{int(d):02d}"
 
 with open(INPUT_FILE, "r", encoding="utf-8") as f:
     for line in tqdm(f, total=total, desc="Chargement DB"):
@@ -303,8 +322,8 @@ if os.path.exists(DOSSIERS_FILE):
                 clean(rec["type_dossier"]),
                 clean(rec["nom_dossier"]),
                 rec.get("statut", "EN_ATTENTE"),
-                rec.get("date_ouverture"),
-                rec.get("date_cloture"),
+                parse_date(rec.get("date_ouverture")),
+                parse_date(rec.get("date_cloture")),
                 clean(rec.get("lese_nom") or ""),
                 clean(rec.get("lese_lot") or ""),
                 clean(rec.get("responsable_nom") or ""),
