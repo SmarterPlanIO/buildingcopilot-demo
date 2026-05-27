@@ -129,10 +129,20 @@ _DETECT_SYSTEM = (
     '  "annee": null, "annee_min": null, "annee_max": null\n'
     "}\n\n"
     "Règles :\n"
-    "- source=documents pour les documents (contrats, factures, devis, diagnostics, PV...). "
-    "source=dossiers pour les sinistres/travaux/contentieux (montants réglés, provisions, expert, assureur, statut du dossier).\n"
-    "- operation=count pour \"combien\". operation=sum pour \"montant total\" (remplir metric). "
-    "operation=list pour énumérer (remplir select_field).\n"
+    "- source=dossiers UNIQUEMENT pour des questions sur les DOSSIERS DE SINISTRE eux-mêmes "
+    "(montants réglés, provisions, franchise, statut du sinistre, expert, assureur, cause). "
+    "La table dossiers ne contient QUE des sinistres : ne JAMAIS y router une question de "
+    "travaux ou d'intervention par corps de métier.\n"
+    "- source=documents pour TOUT le reste. Les travaux et interventions par MÉTIER vivent dans "
+    "documents.sous_type, MÊME quand la question contient le mot 'travaux'. Valeurs sous_type "
+    "canoniques (MAJUSCULES) : PLOMBERIE, CHAUFFAGE, ASCENSEUR, ELECTRICITE, PEINTURE, RAVALEMENT, "
+    "ETANCHEITE, TOITURE, VMC, ESPACES_VERTS, NETTOYAGE, DIGICODE, SECURITE_INCENDIE, DERATISATION, "
+    "PARKING, RELEVAGE, COMPTEUR. Ex : 'travaux de plomberie' → source=documents, sous_type=PLOMBERIE "
+    "(surtout PAS source=dossiers/TRAVAUX).\n"
+    "- operation=count pour \"combien\" ET pour \"quelles copros ont (eu) ...\" "
+    "(le GROUP BY par copropriété donne directement la liste des copros concernées). "
+    "operation=sum pour \"montant total\" (remplir metric). "
+    "operation=list pour énumérer des éléments précis (remplir select_field).\n"
     "- select_field=partie pour lister les entreprises/intervenants cités (source=documents uniquement).\n"
     "- statut documents : actif|expire|resilie|cloture|en_cours. statut dossiers : EN_ATTENTE|EN_COURS|CLOTURE.\n"
     "- Ne remplis que les champs déductibles avec certitude. Tout champ incertain → null.\n\n"
@@ -141,6 +151,8 @@ _DETECT_SYSTEM = (
     "- \"montant total réglé des sinistres par copropriété\" → {\"analytique\":true,\"operation\":\"sum\",\"source\":\"dossiers\",\"metric\":\"total_regle\"}\n"
     "- \"quels copros ont un contrat de syndic actif\" → {\"analytique\":true,\"operation\":\"list\",\"source\":\"documents\",\"select_field\":\"nom_fichier\",\"doc_type\":\"CONTRAT\",\"sous_type\":\"SYNDIC\",\"statut\":\"actif\"}\n"
     "- \"liste toutes les entreprises intervenues dans toutes les copros\" → {\"analytique\":true,\"operation\":\"list\",\"source\":\"documents\",\"select_field\":\"partie\"}\n"
+    "- \"quelles copros ont eu des travaux de plomberie\" → {\"analytique\":true,\"operation\":\"count\",\"source\":\"documents\",\"sous_type\":\"PLOMBERIE\"}\n"
+    "- \"quelles copropriétés ont un ascenseur entretenu\" → {\"analytique\":true,\"operation\":\"count\",\"source\":\"documents\",\"sous_type\":\"ASCENSEUR\"}\n"
     "- \"que dit le règlement sur les parties communes\" → {\"analytique\":false}\n"
     "- \"résume le dossier sinistre de Mme Durand\" → {\"analytique\":false}"
 )
@@ -190,6 +202,9 @@ def build_analytical_sql(spec: Dict[str, Any],
         val = spec.get(key)
         if val is None or val == "null":
             continue
+        # La DB stocke ces champs en MAJUSCULES → normaliser pour éviter un mismatch de casse
+        if key in ("sous_type", "doc_type", "type_dossier") and isinstance(val, str):
+            val = val.upper()
         where.append(f"{expr} {oper} %s")
         params.append(val)
 
@@ -288,6 +303,11 @@ def run_analytical_route(spec: Dict[str, Any], copro_filter: Optional[str],
         return None
 
     if not rows:
+        # Une liste vide est souvent le signe d'un mauvais routage (filtre/source) plutôt
+        # que d'une vraie absence → on retombe sur le retrieval normal (l'appelant gère None).
+        # Pour count/sum, 0 est une réponse légitime ("0 sinistre en 1990") → on la garde.
+        if spec.get("operation") == "list":
+            return None
         return {
             "answer": "Aucun résultat pour cette recherche dans les copropriétés en base.",
             "sql": sql, "n_rows": 0, "rows": [],
