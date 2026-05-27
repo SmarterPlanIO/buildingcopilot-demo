@@ -2617,6 +2617,27 @@ if user_input:
                     prefilter = {}
                 prefilter["doc_type"] = _overrides["doc_type"]
 
+    # ── Scoping par résolution d'entité (anti-dilution multi-copro) ──
+    # En mode "Toutes les copropriétés", une requête ciblée (ex: "le sinistre de
+    # M. Lemeau") est diluée par le bruit des autres copros dans le top-K global.
+    # Si la requête se résout à des dossiers d'UNE SEULE copro via le résolveur
+    # existant (lese_nom / refs / nom_dossier), on cadre le retrieval sur cette
+    # copro. Garde-fou : scope uniquement si résolution non ambiguë (1 copro).
+    # Sinon (0 ou ≥2 copros) → comportement inchangé.
+    if copro_filter is None and not _sel_dossier_id:
+        _resolved = _search_dossiers_for_query(get_db_connection(), user_input, copropriete=None)
+        _resolved_copros = {d.get("code_ncg") for d in _resolved if d.get("code_ncg")}
+        if len(_resolved_copros) == 1:
+            copro_filter = next(iter(_resolved_copros))
+            _scoped_name = next(
+                (d.get("copropriete") for d in _resolved if d.get("code_ncg") == copro_filter),
+                copro_filter,
+            )
+            st.caption(
+                f"🎯 Recherche cadrée automatiquement sur **{_scoped_name}** "
+                f"(dossier de la requête détecté dans cette copropriété)."
+            )
+
     # ── Recherche (Phase 1b : décomposition temporelle si inventaire) ──
     _strategie = "inventaire" if "Inventaire" in strategy_label else (
         "cible" if "Ciblé" in strategy_label else "equilibre"
