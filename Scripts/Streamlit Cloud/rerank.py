@@ -16,6 +16,7 @@ st.secrets. Le client boto3 est construit par l'appelant (qui detient les creds)
 via build_rerank_client() et passe a rerank_rows().
 """
 import os
+import time
 
 import boto3
 
@@ -61,15 +62,25 @@ def _passage_text(row):
     return f"{header}\n{(row[_I_TEXT] or '')[:_MAX_DOC_CHARS]}"
 
 
-def rerank_rows(query, rows, client, rrf_weight=RERANK_RRF_WEIGHT):
+def rerank_rows(query, rows, client, rrf_weight=RERANK_RRF_WEIGHT, stats=None):
     """Reordonne les candidats par score hybride RRF x Cohere.
 
     rows : liste de tuples issus de search_chunks (ordre RRF decroissant).
     Retourne une liste de la meme longueur, reordonnee. Fallback silencieux sur
     l'ordre RRF d'entree si le client est absent ou si l'appel rerank echoue —
     une requete utilisateur ne doit jamais casser sur un probleme de rerank.
+
+    stats : dict optionnel rempli pour l'observabilite (applied, ok,
+    fallback_reason, n_in, n_results, latency_ms). Permet a l'appelant de tracer
+    le rerank (span Langfuse) et de distinguer un vrai rerank d'un fallback RRF.
     """
+    def _stat(**kw):
+        if stats is not None:
+            stats.update(kw)
+
     if client is None or len(rows) <= 1:
+        _stat(applied=False, ok=False, fallback_reason="no_client_or_single",
+              n_in=len(rows), latency_ms=0)
         return rows
 
     pool = rows[:MAX_RERANK_DOCS]
@@ -77,6 +88,7 @@ def rerank_rows(query, rows, client, rrf_weight=RERANK_RRF_WEIGHT):
 
     passages = [_passage_text(r) for r in pool]
 
+    _t0 = time.time()
     try:
         resp = client.rerank(
             queries=[{"type": "TEXT", "textQuery": {"text": query[:2000]}}],
@@ -99,10 +111,16 @@ def rerank_rows(query, rows, client, rrf_weight=RERANK_RRF_WEIGHT):
             },
         )
         results = resp.get("results", [])
-    except Exception:
+    except Exception as exc:
+        _stat(applied=False, ok=False, fallback_reason=f"exception:{type(exc).__name__}",
+              n_in=len(pool), latency_ms=int((time.time() - _t0) * 1000))
         return rows  # jamais casser la requete sur un echec rerank
 
+    _latency_ms = int((time.time() - _t0) * 1000)
+
     if not results:
+        _stat(applied=False, ok=False, fallback_reason="empty_results",
+              n_in=len(pool), n_results=0, latency_ms=_latency_ms)
         return rows
 
     # index pool -> score de pertinence Cohere (deja ~[0,1])
@@ -125,4 +143,6 @@ def rerank_rows(query, rows, client, rrf_weight=RERANK_RRF_WEIGHT):
 
     # tri stable : score hybride desc, puis ordre RRF d'origine en egalite
     scored.sort(key=lambda x: (-x[0], x[1]))
+    _stat(applied=True, ok=True, fallback_reason=None,
+          n_in=len(pool), n_results=len(results), latency_ms=_latency_ms)
     return [r for _, _, r in scored] + tail

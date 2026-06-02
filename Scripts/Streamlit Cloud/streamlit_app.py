@@ -41,7 +41,7 @@ from dossiers_api import (
     merge_with_airtable_chunks,
 )
 from analytics import detect_analytical_query, run_analytical_route
-from rerank import build_rerank_client, rerank_rows
+from rerank import build_rerank_client, rerank_rows, RERANK_RRF_WEIGHT
 _boot_mark("imports: dossiers_api")
 
 # =====================================================
@@ -764,10 +764,27 @@ def filter_resolution_categories(results, query, strategie):
     return [r for r in results if len(r) <= 10 or r[10] not in ("PROCEDURE_AG", "ELECTION_CS")]
 
 
+def _code_ncg_filter(copropriete, col="code_ncg"):
+    """Construit le filtre SQL copro pour une valeur polymorphe.
+
+    copropriete : None/[] = toutes les copros (pas de clause) ; str = une seule
+    (rétro-compat) ; list/tuple = plusieurs (clause IN). Retourne (clause, params).
+    """
+    if not copropriete:
+        return None, []
+    codes = [copropriete] if isinstance(copropriete, str) else [c for c in copropriete if c]
+    if not codes:
+        return None, []
+    if len(codes) == 1:
+        return f"{col} = %s", [codes[0]]
+    placeholders = ",".join(["%s"] * len(codes))
+    return f"{col} IN ({placeholders})", codes
+
+
 def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                   sim_threshold=SIMILARITY_THRESHOLD, chunks_per_source=MAX_CHUNKS_PER_SOURCE,
                   doc_type_boost=0.01, prefilter=None, doc_type_hint=None,
-                  exclude_categories=None, include_bordereau_ar=False):
+                  exclude_categories=None, include_bordereau_ar=False, trace=None):
     """
     Pipeline hybride 5 étapes : pré-filtrage document (conditionnel) + RRF + diversité + rerank + quota RCP.
     doc_type_hint vient de Haiku (detect_strategy_haiku), plus de détection par mots-clés.
@@ -785,9 +802,10 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
             with conn.cursor() as cur:
                 pf_clauses, pf_params = [], []
 
-                if copropriete:
-                    pf_clauses.append("code_ncg = %s")
-                    pf_params.append(copropriete)
+                _pf_cclause, _pf_cparams = _code_ncg_filter(copropriete, "code_ncg")
+                if _pf_cclause:
+                    pf_clauses.append(_pf_cclause)
+                    pf_params.extend(_pf_cparams)
 
                 if prefilter.get("doc_type"):
                     pf_clauses.append("(COALESCE(doc_type_corrige, doc_type) = %s OR dossier_lie = %s)")
@@ -841,9 +859,10 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
         # Exclure les chunks trop courts (signatures, pieds de page, fragments OCR)
         where_clauses.append(f"c.nb_caracteres >= {MIN_CHUNK_CHARS}")
 
-        if copropriete:
-            where_clauses.append("c.code_ncg = %s")
-            params_before.append(copropriete)
+        _cclause, _cparams = _code_ncg_filter(copropriete, "c.code_ncg")
+        if _cclause:
+            where_clauses.append(_cclause)
+            params_before.extend(_cparams)
 
         if prefilter_active and prefilter_files:
             placeholders = ",".join(["%s"] * len(prefilter_files))
@@ -949,7 +968,24 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
         capped.sort(key=lambda r: original_order.get(id(r), 999))
         deduped = capped
     elif len(deduped) > 1:
-        deduped = rerank_rows(query, deduped, get_rerank_client())
+        _rk_stats = {}
+        deduped = rerank_rows(query, deduped, get_rerank_client(), stats=_rk_stats)
+        # Span Langfuse dédié : visibilité sur applied/ok/fallback/latence (fail-open sinon invisible)
+        if trace is not None:
+            try:
+                _rk_span = trace.span(name="rerank_cohere",
+                                      input={"n_candidates": _rk_stats.get("n_in")})
+                _rk_span.end(
+                    output={"applied": _rk_stats.get("applied"),
+                            "ok": _rk_stats.get("ok"),
+                            "fallback_reason": _rk_stats.get("fallback_reason"),
+                            "n_in": _rk_stats.get("n_in"),
+                            "n_results": _rk_stats.get("n_results")},
+                    metadata={"latency_ms": _rk_stats.get("latency_ms"),
+                              "rrf_weight": RERANK_RRF_WEIGHT},
+                )
+            except Exception:
+                pass
 
     # ── POINT 6 : quota minimum RCP ──
     top = deduped[:max_chunks]
@@ -971,7 +1007,7 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
 
 def search_decomposed(query, copropriete, max_chunks, sim_threshold,
                       chunks_per_source, doc_type_boost, prefilter, doc_type_hint,
-                      strategie, include_bordereau_ar=False):
+                      strategie, include_bordereau_ar=False, trace=None):
     """
     Phase 1b — Recherche décomposée par année pour les requêtes inventaire temporelles.
     Lance N sous-requêtes en parallèle, agrège et déduplique les résultats.
@@ -990,7 +1026,8 @@ def search_decomposed(query, copropriete, max_chunks, sim_threshold,
         results, dt_hint, pf_active = search_chunks(
             query, copropriete, max_chunks, sim_threshold,
             chunks_per_source, doc_type_boost, prefilter, doc_type_hint,
-            exclude_categories=_excl_cats, include_bordereau_ar=include_bordereau_ar
+            exclude_categories=_excl_cats, include_bordereau_ar=include_bordereau_ar,
+            trace=trace
         )
         # filter_resolution_categories n'est plus nécessaire si exclu en SQL,
         # mais on le garde en filet de sécurité pour les chunks sans catégorie
@@ -2175,22 +2212,25 @@ with st.sidebar:
     copros = get_copros()
     _boot_mark(f"sidebar: get_copros done ({len(copros)} copros)")
     _ = st.markdown("---")
-    # code_ncg values from DB; display as code_ncg in dropdown
-    copro_codes = ["Toutes les copropriétés"] + [c[0] for c in copros]
+    # code_ncg values from DB ; multiselect → 0 sélectionnée = toutes les copros
+    copro_codes = [c[0] for c in copros]
     # Build display labels: "5390 - 2-6 BIS HENRI TARIEL" (use copropriete field which already has full name)
-    _copro_labels = {"Toutes les copropriétés": "Toutes les copropriétés"}
-    _copro_labels.update({c[0]: (c[1][:180] if c[1] else c[0]) for c in copros})
-    default_idx = 1 if len(copros) == 1 else 0
-    selected_copro = st.selectbox(
-        f"📁 Copropriété ({len(copros)})",
+    _copro_labels = {c[0]: (c[1][:180] if c[1] else c[0]) for c in copros}
+    # Une seule copro en base → la pré-sélectionner ; sinon vide (= toutes)
+    _default_copros = copro_codes if len(copros) == 1 else []
+    selected_copros = st.multiselect(
+        f"📁 Copropriétés ({len(copros)}) — vide = toutes",
         copro_codes,
-        index=default_idx,
+        default=_default_copros,
         format_func=lambda x: _copro_labels.get(x, x),
     )
+    if not selected_copros:
+        st.caption("🌐 Recherche sur **toutes** les copropriétés")
     # ── Mes dossiers (Module Gestion de Projet) ──
     _ = st.markdown("---")
     try:
-        _copro_for_dossiers = selected_copro if selected_copro and "Toutes" not in selected_copro else None
+        # Dossiers en sidebar : 1 copro sélectionnée → ses dossiers ; 0 ou ≥2 → tous
+        _copro_for_dossiers = selected_copros[0] if len(selected_copros) == 1 else None
         _boot_mark("sidebar: get_dossiers start")
         _dossiers = get_dossiers(_copro_for_dossiers)
         _boot_mark(f"sidebar: get_dossiers done ({len(_dossiers)} dossiers)")
@@ -2485,7 +2525,8 @@ if user_input:
         st.markdown(user_input)
 
     # ── Paramètres ──
-    copro_filter = selected_copro if selected_copro != "Toutes les copropriétés" else None
+    # None = toutes ; liste de codes = scope multi-copro (peut être réduit à 1 par l'auto-scoping plus bas)
+    copro_filter = selected_copros or None
     DISPLAY_K_ACTUAL = display_k if 'display_k' in dir() else TOP_K_DISPLAY
     SIM_ACTUAL = sim_threshold if 'sim_threshold' in dir() else SIMILARITY_THRESHOLD
     _auto = auto_strategy if 'auto_strategy' in dir() else True
@@ -2668,6 +2709,7 @@ if user_input:
             chunks_per_source=CPS_ACTUAL, doc_type_boost=DTB_ACTUAL,
             prefilter=prefilter, doc_type_hint=doc_type_hint,
             strategie=_strategie, include_bordereau_ar=_include_bordereau_ar,
+            trace=_ret_span,
         )
 
         # ── Double retrieval contextuel (Option 1) ──
