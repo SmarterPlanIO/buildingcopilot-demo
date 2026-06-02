@@ -30,6 +30,7 @@ from PALIM_dossiers import search_dossiers as _search_dossiers
 
 # ── Clients singletons (réutilisés sur invocations warm) ──
 _bedrock = None
+_rerank = None
 
 
 def _bedrock_client():
@@ -42,6 +43,22 @@ def _bedrock_client():
                           retries={"max_attempts": 3}, tcp_keepalive=True),
         )
     return _bedrock
+
+
+def _rerank_client():
+    """Client rerank Cohere — bedrock-agent-runtime en eu-central-1 (Francfort).
+    None si rerank désactivé. Creds = rôle Lambda en prod / env en local."""
+    global _rerank
+    if not cfg.ENABLE_RERANK:
+        return None
+    if _rerank is None:
+        from botocore.config import Config
+        _rerank = boto3.client(
+            "bedrock-agent-runtime", region_name=cfg.AWS_REGION_RERANK,
+            config=Config(read_timeout=30, connect_timeout=10,
+                          retries={"max_attempts": 2}, tcp_keepalive=True),
+        )
+    return _rerank
 
 
 def _log(tool, **fields):
@@ -134,7 +151,8 @@ def PALIM_search_chunks(
                 copro_codes=codes, doc_type=doc_type, year_min=year_min, year_max=year_max,
                 statut=statut, sous_type=sous_type, retrieval_mode=retrieval_mode,
                 max_chunks=max_chunks, include_bordereau_ar=include_bordereau_ar,
-                include_legal_context=include_legal_context, trace=tr,
+                include_legal_context=include_legal_context,
+                enable_rerank=cfg.ENABLE_RERANK, rerank_client=_rerank_client(), trace=tr,
             )
         except Exception as exc:
             lf.update_trace(tr, output={"error_type": "INTERNAL"},

@@ -24,6 +24,12 @@ RERANK_CANDIDATES = 200       # pool large (compense absence de FlashRank en clo
 RCP_MIN_SLOTS = 3             # quota minimum RCP quand include_legal_context=True
 MIN_CHUNK_CHARS = 500         # ignore signatures / fragments OCR
 
+# ── Rerank Cohere (eu-central-1, cf. rerank.py) ──
+# ON par défaut en V1 pour aligner la qualité MCP sur l'app Streamlit. Mettre
+# ENABLE_RERANK=0 pour désactiver (ex. si IAM eu-central-1 absent). Le rerank ne
+# s'applique que hors pré-filtrage actif, et retombe fail-open sur l'ordre RRF.
+ENABLE_RERANK = os.environ.get("ENABLE_RERANK", "1").strip().lower() not in ("0", "false", "no", "")
+
 # Catégories de résolution filtrées en mode inventaire (cf. filter_resolution_categories)
 INVENTAIRE_EXCLUDE_CATEGORIES = ("PROCEDURE_AG", "ELECTION_CS")
 

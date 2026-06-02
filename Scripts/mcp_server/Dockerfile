@@ -1,6 +1,7 @@
 # Image container Lambda + Lambda Web Adapter (streaming) pour le serveur MCP PALIM.
-# Build depuis Scripts/mcp_server/. Pré-requis : vendoriser dossiers_api.py
+# Build depuis Scripts/mcp_server/. Pré-requis : vendoriser les modules de "Streamlit Cloud"
 #   cp "../Streamlit Cloud/dossiers_api.py" ./dossiers_api_vendored.py
+#   cp "../Streamlit Cloud/rerank.py"       ./rerank_vendored.py
 FROM public.ecr.aws/lambda/python:3.12
 
 # Lambda Web Adapter (extension) — permet à un serveur HTTP/ASGI de tourner en Lambda

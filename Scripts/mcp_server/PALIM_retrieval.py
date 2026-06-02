@@ -11,6 +11,8 @@ Le scoping est validé EN AMONT par PALIM_scope.validate_search_scope :
 hybrid_search suppose copro_codes non vide et déjà normalisé.
 """
 import json
+import os
+import sys
 
 import PALIM_config as cfg
 import PALIM_tracing as lf
@@ -18,6 +20,20 @@ import PALIM_tracing as lf
 # Index des colonnes du SELECT final (ordre figé ci-dessous)
 _C_CHUNK_ID, _C_CODE_NCG, _C_COPRO, _C_SRC, _C_FILE, _C_DOCTYPE, \
     _C_TEXT, _C_CHUNK_IDX, _C_VEC, _C_BM25, _C_RRF, _C_RESCAT = range(12)
+
+# Rerank Cohere : réutilise rerank_rows de l'app (source unique de vérité pour
+# l'appel Cohere + le score hybride RRF×Cohere). Même pattern d'import que
+# PALIM_dossiers (module dans "Streamlit Cloud", vendorisé au build Lambda).
+_SC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Streamlit Cloud")
+if _SC_DIR not in sys.path:
+    sys.path.insert(0, _SC_DIR)
+try:
+    from rerank import rerank_rows as _rerank_rows
+except Exception:  # packaging Lambda : rerank vendorisé dans le même dossier
+    try:
+        from rerank_vendored import rerank_rows as _rerank_rows  # type: ignore
+    except Exception:
+        _rerank_rows = None  # rerank indisponible → retrieval continue sans (fail-open)
 
 
 def embed_query(text, bedrock):
@@ -124,7 +140,7 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
                   year_min=None, year_max=None, statut=None, sous_type=None,
                   retrieval_mode="equilibre", max_chunks=12,
                   include_bordereau_ar=False, include_legal_context=False,
-                  enable_rerank=False, trace=None):
+                  enable_rerank=False, rerank_client=None, trace=None):
     """
     Retrieval hybride scopé. copro_codes : liste non vide (validée en amont).
     Retourne une liste de dicts (cf. _row_to_dict), ordonnée par pertinence.
@@ -236,7 +252,27 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
         capped.sort(key=lambda r: order.get(id(r), 1_000_000))
         deduped = capped
 
-    # TODO Phase 6 : rerank cohere (eu-central-1) si enable_rerank ; no-op en V1.
+    # ── Rerank Cohere (cloud, eu-central-1) ──
+    # Miroir de l'app (streamlit_app.py:953-988) : bypass quand le pré-filtrage
+    # est actif (les bons docs sont déjà sélectionnés, rerank pénaliserait l'OCR
+    # bruité). Sinon, rerank Cohere sur le pool RRF. Parité app↔MCP = réutilise
+    # rerank_rows. Fail-open : tout échec retombe sur l'ordre RRF.
+    elif (enable_rerank and rerank_client is not None
+          and _rerank_rows is not None and len(deduped) > 1):
+        # Proxy en ordre app (nom@3, doctype@4, text@5, rrf@8) pour réutiliser
+        # rerank_rows ; ligne MCP originale en @9, remappée après tri (index-safe).
+        proxies = [
+            (None, None, None, r[_C_FILE], r[_C_DOCTYPE], r[_C_TEXT], None, None, r[_C_RRF], r)
+            for r in deduped
+        ]
+        _rk = {}
+        _rk_sp = lf.span(trace, "rerank_cohere", n_candidates=len(proxies))
+        reordered = _rerank_rows(query, proxies, rerank_client, stats=_rk)
+        deduped = [p[9] for p in reordered]
+        lf.end_span(_rk_sp, applied=_rk.get("applied"), ok=_rk.get("ok"),
+                    fallback_reason=_rk.get("fallback_reason"),
+                    n_in=_rk.get("n_in"), n_results=_rk.get("n_results"),
+                    latency_ms=_rk.get("latency_ms"))
 
     # ── Équilibrage multi-copro + sélection finale ──
     top = _balance_by_copro(deduped, copro_codes, max_chunks)
