@@ -7,14 +7,30 @@ Contient toute la logique métier liée aux dossiers de sinistres.
 Indépendant du framework UI — remplacer streamlit_app.py sans perdre cette logique.
 """
 import re
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Optional, List, Dict, Tuple, Any, Union
 
 
 # ──────────────────────────────────────────────────────────────
 # LECTURE DB
 # ──────────────────────────────────────────────────────────────
 
-def get_dossiers(conn, copropriete: Optional[str] = None) -> List[Tuple]:
+def _code_ncg_predicate(copropriete, col: str = "code_ncg") -> Tuple[str, list]:
+    """Prédicat SQL de filtrage copro (sans mot-clé WHERE/AND).
+
+    copropriete : None/[] = toutes (prédicat vide) ; str = une ; list/tuple = IN.
+    Retourne (predicat, params).
+    """
+    if not copropriete:
+        return "", []
+    codes = [copropriete] if isinstance(copropriete, str) else [c for c in copropriete if c]
+    if not codes:
+        return "", []
+    if len(codes) == 1:
+        return f"{col} = %s", [codes[0]]
+    return f"{col} IN (" + ",".join(["%s"] * len(codes)) + ")", codes
+
+
+def get_dossiers(conn, copropriete: Optional[Union[str, List[str]]] = None) -> List[Tuple]:
     """Retourne les dossiers triés par statut puis date d'ouverture.
 
     Args:
@@ -28,28 +44,18 @@ def get_dossiers(conn, copropriete: Optional[str] = None) -> List[Tuple]:
     """
     try:
         with conn.cursor() as cur:
-            if copropriete:
-                cur.execute("""
-                    SELECT dossier_id, nom_dossier, type_dossier, statut,
-                           date_ouverture, etapes, pieces_requises, pieces_fournies,
-                           lese_nom, expert_nom, assureur, montant_estime,
-                           ref_assynco, ref_cie
-                    FROM dossiers WHERE code_ncg = %s
-                    ORDER BY
-                        CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
-                        date_ouverture DESC
-                """, [copropriete])
-            else:
-                cur.execute("""
-                    SELECT dossier_id, nom_dossier, type_dossier, statut,
-                           date_ouverture, etapes, pieces_requises, pieces_fournies,
-                           lese_nom, expert_nom, assureur, montant_estime,
-                           ref_assynco, ref_cie
-                    FROM dossiers
-                    ORDER BY
-                        CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
-                        date_ouverture DESC
-                """)
+            _pred, _params = _code_ncg_predicate(copropriete, "code_ncg")
+            where_sql = ("WHERE " + _pred) if _pred else ""
+            cur.execute(f"""
+                SELECT dossier_id, nom_dossier, type_dossier, statut,
+                       date_ouverture, etapes, pieces_requises, pieces_fournies,
+                       lese_nom, expert_nom, assureur, montant_estime,
+                       ref_assynco, ref_cie
+                FROM dossiers {where_sql}
+                ORDER BY
+                    CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
+                    date_ouverture DESC
+            """, _params)
             return cur.fetchall()
     except Exception:
         return []
@@ -77,7 +83,7 @@ def get_dossier_detail(conn, dossier_id: str) -> Optional[Dict]:
         return None
 
 
-def search_dossiers_for_query(conn, query: str, copropriete: Optional[str] = None) -> List[Dict]:
+def search_dossiers_for_query(conn, query: str, copropriete: Optional[Union[str, List[str]]] = None) -> List[Dict]:
     """Recherche hybride keyword+regex dans la table dossiers.
 
     Extrait les références (A/I + digits) et noms propres de la requête,
@@ -123,9 +129,10 @@ def search_dossiers_for_query(conn, query: str, copropriete: Optional[str] = Non
 
             where_sql = " OR ".join(where_parts)
             copro_filter_sql = ""
-            if copropriete:
-                copro_filter_sql = " AND code_ncg = %s"
-                params.append(copropriete)
+            _pred, _pparams = _code_ncg_predicate(copropriete, "code_ncg")
+            if _pred:
+                copro_filter_sql = " AND " + _pred
+                params.extend(_pparams)
 
             cur.execute(f"""
                 SELECT *
@@ -474,7 +481,7 @@ def merge_with_airtable_chunks(
     results: List[Tuple],
     query: str,
     selected_dossier_data: Optional[Dict],
-    copro_filter: Optional[str],
+    copro_filter: Optional[Union[str, List[str]]],
     conn,
 ) -> List[Tuple]:
     """Fusionne les résultats RAG avec les chunks virtuels Airtable.

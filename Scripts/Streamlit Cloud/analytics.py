@@ -19,7 +19,7 @@ Phase 2 (à venir) : source `prestataires` (typage métier).
 """
 import json
 import re
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, Union
 
 
 # ──────────────────────────────────────────────────────────────
@@ -183,7 +183,7 @@ def detect_analytical_query(query: str, bedrock, model: str) -> Optional[Dict[st
 # 2. Builder SQL paramétré (liste blanche)
 # ──────────────────────────────────────────────────────────────
 def build_analytical_sql(spec: Dict[str, Any],
-                         copro_filter: Optional[str]) -> Optional[Tuple[str, list]]:
+                         copro_filter: Optional[Union[str, List[str]]]) -> Optional[Tuple[str, list]]:
     """Traduit une spec validée en (sql, params). Retourne None si la spec n'est
     pas traduisible (source/opération/champ hors liste blanche)."""
     source = spec.get("source")
@@ -209,8 +209,14 @@ def build_analytical_sql(spec: Dict[str, Any],
         params.append(val)
 
     if copro_filter:
-        where.append("code_ncg = %s")
-        params.append(copro_filter)
+        # copro_filter : str = une copro ; list/tuple = plusieurs (IN)
+        _codes = [copro_filter] if isinstance(copro_filter, str) else [c for c in copro_filter if c]
+        if len(_codes) == 1:
+            where.append("code_ncg = %s")
+            params.append(_codes[0])
+        elif _codes:
+            where.append("code_ncg IN (" + ",".join(["%s"] * len(_codes)) + ")")
+            params.extend(_codes)
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
@@ -278,7 +284,7 @@ def _fallback_table(rows: List[tuple]) -> str:
     return "\n".join(lines)
 
 
-def run_analytical_route(spec: Dict[str, Any], copro_filter: Optional[str],
+def run_analytical_route(spec: Dict[str, Any], copro_filter: Optional[Union[str, List[str]]],
                          conn, bedrock, model: str,
                          question: str = "") -> Optional[Dict[str, Any]]:
     """Exécute la route analytique. Retourne un dict
