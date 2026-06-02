@@ -18,7 +18,9 @@ DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
 DB_PORT = 5432
 DB_NAME = "postgres"
 DB_USER = "ragadmin"
-DB_PASSWORD = "NokiumRAG99?"
+DB_PASSWORD = os.environ.get("DB_PASSWORD")  # secret hors du code — exporter avant de lancer
+if not DB_PASSWORD:
+    raise SystemExit("❌ DB_PASSWORD manquant. Lance : DB_PASSWORD=... python load_dossiers_only.py")
 
 
 def clean(s):

@@ -121,9 +121,9 @@ PYTHONIOENCODING=utf-8 python 04_metadata_documents.py
 rm chunks_avec_embeddings.jsonl chunks_avec_embeddings_sq.jsonl  # PURGER avant re-embed
 PYTHONIOENCODING=utf-8 python 05_embedding.py
 PYTHONIOENCODING=utf-8 python 05b_synthetic_questions.py
-PYTHONIOENCODING=utf-8 python 06b_load_db.py
+DB_PASSWORD="..." PYTHONIOENCODING=utf-8 python 06b_load_db.py
 # OBLIGATOIRE apres 06b — le TRUNCATE efface les chunks virtuels Airtable :
-PYTHONIOENCODING=utf-8 AIRTABLE_PAT="patFfI...cfa15" DB_HOST="sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com" DB_PASSWORD="NokiumRAG99?" python 08_airtable_sync.py
+PYTHONIOENCODING=utf-8 AIRTABLE_PAT="..." DB_HOST="sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com" DB_PASSWORD="..." python 08_airtable_sync.py
 ```
 
 ### Gotchas
