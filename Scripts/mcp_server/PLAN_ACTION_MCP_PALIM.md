@@ -283,7 +283,7 @@ aws ecr create-repository --repository-name palim-mcp --region eu-west-1
 # build + push palim-mcp:v1
 aws lambda create-function --function-name palim-mcp --package-type Image \
   --code ImageUri=<acct>.dkr.ecr.eu-west-1.amazonaws.com/palim-mcp:v1 \
-  --role <ARN_role_exec> --timeout 60 --memory-size 1024 \
+  --role arn:aws:iam::046004768626:role/PALIM-MCP-lambda-role --timeout 60 --memory-size 1024 \
   --environment file://env.json --region eu-west-1
 aws lambda create-function-url-config --function-name palim-mcp \
   --auth-type NONE --invoke-mode RESPONSE_STREAM --region eu-west-1
@@ -292,7 +292,7 @@ aws lambda create-function-url-config --function-name palim-mcp \
 
 **Observabilité (optionnel, Phase 6 P2 implémentée)** : `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` (défaut `https://cloud.langfuse.com`), `LANGFUSE_USER` (optionnel). Si absentes → tracing no-op (aucun impact). Pas d'IAM supplémentaire (HTTPS sortant vers Langfuse Cloud EU, pas un service AWS). Pour le pilote la clé secrète vit en env Lambda ; migration Secrets Manager possible post-pilote.
 
-IAM : `bedrock:InvokeModel` (Titan V2 eu-west-1 ; cohere eu-central-1 plus tard) + **`secretsmanager:GetSecretValue` sur l'ARN du secret DB** + `AWSLambdaBasicExecutionRole`.
+IAM : **rôle d'exécution `PALIM-MCP-lambda-role` créé** (`arn:aws:iam::046004768626:role/PALIM-MCP-lambda-role`, trust `lambda.amazonaws.com`). Policy least-priv `PALIM-MCP-policy` attachée : `bedrock:InvokeModel` (Titan V2 eu-west-1), `bedrock:Rerank` (cohere `cohere.rerank-v3-5:0` eu-central-1), `secretsmanager:GetSecretValue` sur `palim/mcp_ncg_reader-*` + `AWSLambdaBasicExecutionRole`. Pas de user IAM, pas de clé longue durée (la Lambda assume le rôle). JSON IaC dans `C:\Users\thai-\palim_iam\`.
 Réseau : **RDS reste publiquement accessible** → pas de VPC Lambda (le plus simple). **Posture = LLB "Option B"** : on ne compte pas sur l'isolement réseau, on compense par les garde-fous d'accès (§11). Optionnel : restreindre le Security Group RDS aux IP de sortie connues si stables.
 
 **Critère de succès** : `curl -N "<url>/mcp/<slug>" ... tools/list` → 200 + 5 tools ; cold start < 60s.
