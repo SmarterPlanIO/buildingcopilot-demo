@@ -1,8 +1,8 @@
 """
 ÉTAPE 7 — Interface de requête RAG (Streamlit Cloud) — v4 Haiku Strategy Router
-Pipeline : Haiku strategy detection → Pré-filtrage document → Vector + BM25 → RRF fusion → Source diversity → Claude
+Pipeline : Haiku strategy detection → Pré-filtrage document → Vector + BM25 → RRF fusion → Source diversity → Rerank Cohere → Claude
 Lance : streamlit run streamlit_app.py
-Note : pas de FlashRank en cloud (compensé par RERANK_CANDIDATES=200)
+Note : rerank Cohere 3.5 (eu-central-1) sur le pool RRF quand le pré-filtrage est inactif (cf. rerank.py)
 """
 import json
 import re
@@ -41,6 +41,7 @@ from dossiers_api import (
     merge_with_airtable_chunks,
 )
 from analytics import detect_analytical_query, run_analytical_route
+from rerank import build_rerank_client, rerank_rows
 _boot_mark("imports: dossiers_api")
 
 # =====================================================
@@ -356,6 +357,11 @@ def get_bedrock_client():
     )
     _boot_mark("bedrock client: done")
     return _client
+
+@st.cache_resource(ttl=1800)
+def get_rerank_client():
+    """Client rerank Cohere — region Francfort (eu-central-1), creds app."""
+    return build_rerank_client(AWS_ACCESS_KEY, AWS_SECRET_KEY)
 
 @st.cache_data(ttl=300)
 def get_copros():
@@ -925,10 +931,12 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
             seen_texts.add(sig)
             deduped.append(r)
 
-    # (Pas de FlashRank en cloud — RRF score utilisé directement, compensé par RERANK_CANDIDATES=200)
-
-    # ── Cap dynamique par source (quand pré-filtrage actif) ──
+    # ── Rerank Cohere (cloud) ──
+    # Bypass quand le pré-filtrage est actif : les bons documents sont déjà
+    # sélectionnés, le RRF suffit et le rerank pénaliserait les chunks OCR bruités.
+    # Sinon (mode large / Toutes copros), rerank Cohere sur le pool RRF.
     if prefilter_active:
+        # Cap dynamique par source sur l'ordre RRF (pas de rerank)
         from collections import defaultdict
         by_source = defaultdict(list)
         for r in deduped:
@@ -940,6 +948,8 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
         original_order = {id(r): i for i, r in enumerate(deduped)}
         capped.sort(key=lambda r: original_order.get(id(r), 999))
         deduped = capped
+    elif len(deduped) > 1:
+        deduped = rerank_rows(query, deduped, get_rerank_client())
 
     # ── POINT 6 : quota minimum RCP ──
     top = deduped[:max_chunks]
