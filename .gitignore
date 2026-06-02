@@ -26,7 +26,9 @@ __pycache__/
 /*.jpg
 /*.jpeg
 /Retouche/
-/"Données brutes"/
+# NB : pas de guillemets dans .gitignore — git les prend au pied de la lettre.
+# Les espaces sont littéraux, donc le pattern matche le dossier accentué tel quel.
+/Données brutes/
 
 # ─── Fichiers de log et sorties runtime ─────────────────────────────────────
 *.log
@@ -36,11 +38,14 @@ Scripts/inventaire_stats.txt
 Scripts/metadata_cache.json
 
 # ─── Données lourdes (Résultats bruts) ──────────────────────────────────────
-"Résultats bruts/Archives_Extraites/"
-"Résultats bruts/Archives_Filtrees/"
-"Résultats bruts/RUN ON 6 COPROS/"
-Résultats bruts/*.jsonl
-Résultats bruts/*.csv
+# Patterns sans guillemets (cf. note plus haut). Couvre les sous-dossiers
+# volumineux (archives, runs, embeddings per-copro) + les sorties jsonl/csv.
+/Résultats bruts/Archives_Extraites/
+/Résultats bruts/Archives_Filtrees/
+/Résultats bruts/RUN ON 6 COPROS/
+/Résultats bruts/per_copro/
+/Résultats bruts/*.jsonl
+/Résultats bruts/*.csv
 
 # ─── Secrets locaux Streamlit ────────────────────────────────────────────────
 secrets.toml
