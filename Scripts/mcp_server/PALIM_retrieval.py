@@ -13,6 +13,7 @@ hybrid_search suppose copro_codes non vide et déjà normalisé.
 import json
 
 import PALIM_config as cfg
+import PALIM_tracing as lf
 
 # Index des colonnes du SELECT final (ordre figé ci-dessous)
 _C_CHUNK_ID, _C_CODE_NCG, _C_COPRO, _C_SRC, _C_FILE, _C_DOCTYPE, \
@@ -123,16 +124,19 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
                   year_min=None, year_max=None, statut=None, sous_type=None,
                   retrieval_mode="equilibre", max_chunks=12,
                   include_bordereau_ar=False, include_legal_context=False,
-                  enable_rerank=False):
+                  enable_rerank=False, trace=None):
     """
     Retrieval hybride scopé. copro_codes : liste non vide (validée en amont).
     Retourne une liste de dicts (cf. _row_to_dict), ordonnée par pertinence.
+    trace : handle Langfuse optionnel (spans embed/SQL) ; None => pas de tracing.
     """
     mode = cfg.RETRIEVAL_MODES.get(retrieval_mode, cfg.RETRIEVAL_MODES["equilibre"])
     chunks_per_source = mode["chunks_per_source"]
     sim_threshold = mode["sim_threshold"]
 
+    _sp = lf.span(trace, "embed_query", chars=len(query), mode=retrieval_mode)
     query_embedding = embed_query(query, bedrock)
+    lf.end_span(_sp, dim=len(query_embedding))
 
     # ── Étape 0 : pré-filtrage document ──
     prefilter_files, n_groups = _prefilter_source_files(
@@ -149,6 +153,8 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
     if retrieval_mode == "inventaire":
         exclude_categories = list(cfg.INVENTAIRE_EXCLUDE_CATEGORIES)
 
+    _sp = lf.span(trace, "sql_retrieval", n_copros=len(copro_codes),
+                  prefilter_active=prefilter_active, doc_type=doc_type)
     with conn.cursor() as cur:
         where, wparams = ["c.nb_caracteres >= %s", "c.code_ncg = ANY(%s)"], [cfg.MIN_CHUNK_CHARS, copro_codes]
         if prefilter_active and prefilter_files:
@@ -207,6 +213,7 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
                   *wparams, sql_cap, sim_threshold, sql_limit]
         cur.execute(sql, params)
         raw = cur.fetchall()
+    lf.end_span(_sp, n_rows=len(raw))
 
     # ── Déduplication par signature de texte ──
     seen, deduped = set(), []

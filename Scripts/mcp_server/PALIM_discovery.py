@@ -6,12 +6,15 @@ réponse de fond. Retour orienté triage : match_count, doc_types, years,
 snippet court. final_answer_allowed=false (cf. PLAN_ACTION §3.3).
 """
 import PALIM_config as cfg
+import PALIM_tracing as lf
 from PALIM_retrieval import embed_query
 
 
 def discover_copros(conn, bedrock, query, doc_type=None, year_min=None,
-                    year_max=None, top_k=cfg.DISCOVERY_TOP_K):
+                    year_max=None, top_k=cfg.DISCOVERY_TOP_K, trace=None):
+    _sp = lf.span(trace, "embed_query", chars=len(query))
     qvec = embed_query(query, bedrock)
+    lf.end_span(_sp, dim=len(qvec))
 
     pool_clauses = ["c.doc_type != 'BORDEREAU_AR'", "c.nb_caracteres >= %s"]
     pool_params = [cfg.MIN_CHUNK_CHARS]
@@ -65,9 +68,11 @@ def discover_copros(conn, bedrock, query, doc_type=None, year_min=None,
     params = [str(qvec), *pool_params, str(qvec), cfg.RERANK_CANDIDATES,
               *year_params, cfg.DISCOVERY_SNIPPET_CHARS, top_k]
 
+    _sp = lf.span(trace, "sql_aggregate", doc_type=doc_type, top_k=top_k)
     with conn.cursor() as cur:
         cur.execute(sql, params)
         rows = cur.fetchall()
+    lf.end_span(_sp, n_candidates=len(rows))
 
     candidates = []
     for code_ncg, nom, match_count, doc_types, years, snippet, top_sim in rows:

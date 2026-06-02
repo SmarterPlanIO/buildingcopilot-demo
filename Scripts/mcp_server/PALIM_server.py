@@ -21,6 +21,7 @@ from mcp.server.fastmcp import FastMCP
 
 import PALIM_config as cfg
 import PALIM_scope as scope
+import PALIM_tracing as lf
 from PALIM_db import get_conn
 from PALIM_retrieval import hybrid_search
 from PALIM_discovery import discover_copros
@@ -112,42 +113,58 @@ def PALIM_search_chunks(
     """
     t0 = time.time()
     codes = scope.normalize_copro_codes(copro_codes)
-    ok, inferred, err = scope.validate_search_scope(codes)
-    if not ok:
-        _log("PALIM_search_chunks", error_type=err["error_type"], copro_codes=codes)
-        return err
-
-    max_chunks = _clamp(max_chunks, 12, cfg.MAX_CHUNKS_CAP)
-    warnings = scope.build_scope_warnings(codes)
+    tr = lf.start_trace("PALIM_search_chunks",
+                        input={"query": query, "copro_codes": codes,
+                               "filters": {"doc_type": doc_type, "year_min": year_min,
+                                           "year_max": year_max, "retrieval_mode": retrieval_mode}},
+                        tags=["mcp", "search_chunks"])
     try:
-        results = hybrid_search(
-            get_conn(), _bedrock_client(), query,
-            copro_codes=codes, doc_type=doc_type, year_min=year_min, year_max=year_max,
-            statut=statut, sous_type=sous_type, retrieval_mode=retrieval_mode,
-            max_chunks=max_chunks, include_bordereau_ar=include_bordereau_ar,
-            include_legal_context=include_legal_context,
-        )
-    except Exception as exc:
-        return _internal_error("PALIM_search_chunks", exc)
+        ok, inferred, err = scope.validate_search_scope(codes)
+        if not ok:
+            _log("PALIM_search_chunks", error_type=err["error_type"], copro_codes=codes)
+            lf.update_trace(tr, output=err,
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return err
 
-    if inferred == "multi":
-        found = {r["code_ncg"] for r in results}
-        missing = [c for c in codes if c not in found]
-        if missing:
-            warnings.append(f"Aucun résultat pour : {missing}.")
+        max_chunks = _clamp(max_chunks, 12, cfg.MAX_CHUNKS_CAP)
+        warnings = scope.build_scope_warnings(codes)
+        try:
+            results = hybrid_search(
+                get_conn(), _bedrock_client(), query,
+                copro_codes=codes, doc_type=doc_type, year_min=year_min, year_max=year_max,
+                statut=statut, sous_type=sous_type, retrieval_mode=retrieval_mode,
+                max_chunks=max_chunks, include_bordereau_ar=include_bordereau_ar,
+                include_legal_context=include_legal_context, trace=tr,
+            )
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_search_chunks", exc)
 
-    _log("PALIM_search_chunks", inferred_scope=inferred, copro_codes=codes,
-         max_chunks=max_chunks, n_results=len(results),
-         latency_ms=int((time.time() - t0) * 1000), warnings=warnings)
-    return {
-        "ok": True, "inferred_scope": inferred, "copro_codes": codes,
-        "query_used": query,
-        "filters_applied": {"doc_type": doc_type, "year_min": year_min, "year_max": year_max,
-                            "statut": statut, "sous_type": sous_type, "retrieval_mode": retrieval_mode,
-                            "include_bordereau_ar": include_bordereau_ar,
-                            "include_legal_context": include_legal_context},
-        "warnings": warnings, "results": results,
-    }
+        if inferred == "multi":
+            found = {r["code_ncg"] for r in results}
+            missing = [c for c in codes if c not in found]
+            if missing:
+                warnings.append(f"Aucun résultat pour : {missing}.")
+
+        _log("PALIM_search_chunks", inferred_scope=inferred, copro_codes=codes,
+             max_chunks=max_chunks, n_results=len(results),
+             latency_ms=int((time.time() - t0) * 1000), warnings=warnings)
+        lf.update_trace(tr, output={"n_results": len(results), "inferred_scope": inferred,
+                                    "warnings": warnings},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000),
+                                  "max_chunks": max_chunks})
+        return {
+            "ok": True, "inferred_scope": inferred, "copro_codes": codes,
+            "query_used": query,
+            "filters_applied": {"doc_type": doc_type, "year_min": year_min, "year_max": year_max,
+                                "statut": statut, "sous_type": sous_type, "retrieval_mode": retrieval_mode,
+                                "include_bordereau_ar": include_bordereau_ar,
+                                "include_legal_context": include_legal_context},
+            "warnings": warnings, "results": results,
+        }
+    finally:
+        lf.flush()
 
 
 @mcp.tool()
@@ -166,13 +183,22 @@ def PALIM_list_copros(query: str | None = None) -> dict:
         annee_min/max, has_rcp, has_pv_ag, has_dossiers (+ adresse/aliases si disponibles).
     """
     t0 = time.time()
+    tr = lf.start_trace("PALIM_list_copros", input={"query": query}, tags=["mcp", "list_copros"])
     try:
-        res = _list_copros(get_conn(), query)
-    except Exception as exc:
-        return _internal_error("PALIM_list_copros", exc)
-    _log("PALIM_list_copros", query=bool(query), n=len(res.get("copros", [])),
-         latency_ms=int((time.time() - t0) * 1000))
-    return res
+        try:
+            res = _list_copros(get_conn(), query)
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_list_copros", exc)
+        n = len(res.get("copros", []))
+        _log("PALIM_list_copros", query=bool(query), n=n,
+             latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"n_copros": n},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        return res
+    finally:
+        lf.flush()
 
 
 @mcp.tool()
@@ -197,15 +223,25 @@ def PALIM_discover_copros(
     """
     t0 = time.time()
     top_k = _clamp(top_k, cfg.DISCOVERY_TOP_K, 25)
+    tr = lf.start_trace("PALIM_discover_copros",
+                        input={"query": query, "doc_type": doc_type, "top_k": top_k},
+                        tags=["mcp", "discover_copros"])
     try:
-        candidates = discover_copros(get_conn(), _bedrock_client(), query,
-                                     doc_type=doc_type, year_min=year_min,
-                                     year_max=year_max, top_k=top_k)
-    except Exception as exc:
-        return _internal_error("PALIM_discover_copros", exc)
-    _log("PALIM_discover_copros", n=len(candidates), latency_ms=int((time.time() - t0) * 1000))
-    return {"ok": True, "final_answer_allowed": False, "candidates": candidates,
-            "warnings": ["final_answer_not_allowed_from_global_discovery"]}
+        try:
+            candidates = discover_copros(get_conn(), _bedrock_client(), query,
+                                         doc_type=doc_type, year_min=year_min,
+                                         year_max=year_max, top_k=top_k, trace=tr)
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_discover_copros", exc)
+        _log("PALIM_discover_copros", n=len(candidates), latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"n_candidates": len(candidates)},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        return {"ok": True, "final_answer_allowed": False, "candidates": candidates,
+                "warnings": ["final_answer_not_allowed_from_global_discovery"]}
+    finally:
+        lf.flush()
 
 
 @mcp.tool()
@@ -229,51 +265,66 @@ def PALIM_get_full_document(
         {ok, source_file, metadata, text, truncated, max_chars, total_chars_available, chunks_returned}.
     """
     t0 = time.time()
-    sf = (source_file or "").strip()
-    if len(sf) < 3 or "%" in sf or "*" in sf:
-        return {"ok": False, "error_type": "INVALID_SOURCE_FILE",
-                "message": "source_file invalide ou trop large. Fournir un source_file exact issu de PALIM_search_chunks."}
-    max_chars = _clamp(max_chars, cfg.GET_FULL_DOC_DEFAULT_CHARS, cfg.MAX_CHARS_CAP)
+    tr = lf.start_trace("PALIM_get_full_document",
+                        input={"source_file": source_file, "reason": reason},
+                        tags=["mcp", "get_full_document"])
     try:
-        with get_conn().cursor() as cur:
-            cur.execute(
-                """SELECT code_ncg, copropriete, doc_type, nom_fichier, chunk_index, text
-                   FROM chunks WHERE source_file = %s ORDER BY chunk_index""", (sf,))
-            rows = cur.fetchall()
-    except Exception as exc:
-        return _internal_error("PALIM_get_full_document", exc)
+        sf = (source_file or "").strip()
+        if len(sf) < 3 or "%" in sf or "*" in sf:
+            res = {"ok": False, "error_type": "INVALID_SOURCE_FILE",
+                   "message": "source_file invalide ou trop large. Fournir un source_file exact issu de PALIM_search_chunks."}
+            lf.update_trace(tr, output=res, metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return res
+        max_chars = _clamp(max_chars, cfg.GET_FULL_DOC_DEFAULT_CHARS, cfg.MAX_CHARS_CAP)
+        try:
+            with get_conn().cursor() as cur:
+                cur.execute(
+                    """SELECT code_ncg, copropriete, doc_type, nom_fichier, chunk_index, text
+                       FROM chunks WHERE source_file = %s ORDER BY chunk_index""", (sf,))
+                rows = cur.fetchall()
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_get_full_document", exc)
 
-    if not rows:
-        return {"ok": False, "error_type": "NOT_FOUND",
-                "message": f"Aucun document pour source_file={sf}."}
+        if not rows:
+            res = {"ok": False, "error_type": "NOT_FOUND",
+                   "message": f"Aucun document pour source_file={sf}."}
+            lf.update_trace(tr, output=res, metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return res
 
-    if chunk_start is not None or chunk_end is not None:
-        lo = chunk_start if chunk_start is not None else -10**9
-        hi = chunk_end if chunk_end is not None else 10**9
-        rows = [r for r in rows if r[4] is not None and lo <= r[4] <= hi]
+        if chunk_start is not None or chunk_end is not None:
+            lo = chunk_start if chunk_start is not None else -10**9
+            hi = chunk_end if chunk_end is not None else 10**9
+            rows = [r for r in rows if r[4] is not None and lo <= r[4] <= hi]
 
-    meta = {"code_ncg": rows[0][0], "copropriete": rows[0][1],
-            "doc_type": rows[0][2], "nom_fichier": rows[0][3]}
-    full = "\n\n".join((r[5] or "") for r in rows)
-    total = len(full)
+        meta = {"code_ncg": rows[0][0], "copropriete": rows[0][1],
+                "doc_type": rows[0][2], "nom_fichier": rows[0][3]}
+        full = "\n\n".join((r[5] or "") for r in rows)
+        total = len(full)
 
-    text, included, acc = [], [], 0
-    for r in rows:
-        seg = r[5] or ""
-        if acc + len(seg) > max_chars and included:
-            break
-        text.append(seg)
-        included.append(r[4])
-        acc += len(seg) + 2
-    out_text = "\n\n".join(text)[:max_chars]
-    truncated = total > len(out_text)
+        text, included, acc = [], [], 0
+        for r in rows:
+            seg = r[5] or ""
+            if acc + len(seg) > max_chars and included:
+                break
+            text.append(seg)
+            included.append(r[4])
+            acc += len(seg) + 2
+        out_text = "\n\n".join(text)[:max_chars]
+        truncated = total > len(out_text)
 
-    _log("PALIM_get_full_document", source_file=sf, total_chars=total,
-         returned_chars=len(out_text), truncated=truncated,
-         latency_ms=int((time.time() - t0) * 1000))
-    return {"ok": True, "source_file": sf, "metadata": meta, "text": out_text,
-            "truncated": truncated, "max_chars": max_chars,
-            "total_chars_available": total, "chunks_returned": included}
+        _log("PALIM_get_full_document", source_file=sf, total_chars=total,
+             returned_chars=len(out_text), truncated=truncated,
+             latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"returned_chars": len(out_text), "truncated": truncated,
+                                    "chunks_returned": len(included), "code_ncg": meta["code_ncg"]},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        return {"ok": True, "source_file": sf, "metadata": meta, "text": out_text,
+                "truncated": truncated, "max_chars": max_chars,
+                "total_chars_available": total, "chunks_returned": included}
+    finally:
+        lf.flush()
 
 
 @mcp.tool()
@@ -296,18 +347,29 @@ def PALIM_search_dossiers(
     t0 = time.time()
     codes = scope.normalize_copro_codes(copro_codes)
     inferred = scope.infer_scope(codes)
-    max_results = _clamp(max_results, 20, cfg.MAX_RESULTS_CAP)
-    warnings = scope.build_scope_warnings(codes)
-    if inferred == "global":
-        warnings.append("Recherche dossiers sans copro : résultats candidats, à confirmer par scope.")
+    tr = lf.start_trace("PALIM_search_dossiers",
+                        input={"query": query, "copro_codes": codes},
+                        tags=["mcp", "search_dossiers"])
     try:
-        results = _search_dossiers(get_conn(), query, copro_codes=codes, max_results=max_results)
-    except Exception as exc:
-        return _internal_error("PALIM_search_dossiers", exc)
-    _log("PALIM_search_dossiers", inferred_scope=inferred, copro_codes=codes,
-         n_results=len(results), latency_ms=int((time.time() - t0) * 1000))
-    return {"ok": True, "inferred_scope": inferred, "copro_codes": codes,
-            "warnings": warnings, "results": results}
+        max_results = _clamp(max_results, 20, cfg.MAX_RESULTS_CAP)
+        warnings = scope.build_scope_warnings(codes)
+        if inferred == "global":
+            warnings.append("Recherche dossiers sans copro : résultats candidats, à confirmer par scope.")
+        try:
+            results = _search_dossiers(get_conn(), query, copro_codes=codes, max_results=max_results)
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_search_dossiers", exc)
+        _log("PALIM_search_dossiers", inferred_scope=inferred, copro_codes=codes,
+             n_results=len(results), latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"n_results": len(results), "inferred_scope": inferred,
+                                    "warnings": warnings},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        return {"ok": True, "inferred_scope": inferred, "copro_codes": codes,
+                "warnings": warnings, "results": results}
+    finally:
+        lf.flush()
 
 
 # App ASGI pour uvicorn / Lambda Web Adapter

@@ -58,3 +58,11 @@ AWS_REGION_SECRETS = os.environ.get("AWS_REGION_SECRETS", AWS_REGION_EMBED)
 # ── MCP ──
 MCP_URL_SLUG = os.environ.get("MCP_URL_SLUG", "mcp")  # slug secret en prod
 IVFFLAT_PROBES = int(os.environ.get("IVFFLAT_PROBES", "10"))
+
+# ── Observabilité (Langfuse, optionnel — no-op si clés absentes) ──
+# Pin langfuse==2.60.4 (v3 casse l'API .trace()/.span(), cf. CLAUDE.md).
+# Pilote : clés en env Lambda. La clé secrète pourra migrer vers Secrets Manager.
+LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+LANGFUSE_USER = os.environ.get("LANGFUSE_USER", "")  # identifiant pilote optionnel

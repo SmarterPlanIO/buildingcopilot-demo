@@ -290,6 +290,8 @@ aws lambda create-function-url-config --function-name palim-mcp \
 ```
 `env.json` : `DB_HOST/PORT/NAME`, `DB_USER=mcp_ncg_reader`, **`DB_SECRET_ARN`** (PAS de `DB_PASSWORD` en prod), `AWS_REGION_SECRETS`, `MCP_URL_SLUG=<random>`. Le mot de passe est lu depuis AWS Secrets Manager au runtime (modèle LLB `handler.py`), jamais en variable d'env ni transmis à un tiers.
 
+**Observabilité (optionnel, Phase 6 P2 implémentée)** : `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` (défaut `https://cloud.langfuse.com`), `LANGFUSE_USER` (optionnel). Si absentes → tracing no-op (aucun impact). Pas d'IAM supplémentaire (HTTPS sortant vers Langfuse Cloud EU, pas un service AWS). Pour le pilote la clé secrète vit en env Lambda ; migration Secrets Manager possible post-pilote.
+
 IAM : `bedrock:InvokeModel` (Titan V2 eu-west-1 ; cohere eu-central-1 plus tard) + **`secretsmanager:GetSecretValue` sur l'ARN du secret DB** + `AWSLambdaBasicExecutionRole`.
 Réseau : **RDS reste publiquement accessible** → pas de VPC Lambda (le plus simple). **Posture = LLB "Option B"** : on ne compte pas sur l'isolement réseau, on compense par les garde-fous d'accès (§11). Optionnel : restreindre le Security Group RDS aux IP de sortie connues si stables.
 
@@ -313,7 +315,7 @@ Réseau : **RDS reste publiquement accessible** → pas de VPC Lambda (le plus s
 | P1 | `PALIM_plan_query` (V1.1) : planning déterministe (Option A), interface compatible routeur Haiku (Option B) |
 | P1 | `PALIM_run_analytical_query` : route spec→SQL (`analytics.py`), comptages multi-copro |
 | P2 | **Cognito OAuth** devant Function URL ; IP allowlist si Anthropic publie ses IP de connecteurs ; alarme CloudWatch volume anormal |
-| P2 | Langfuse tracing (`langfuse==2.60.4`) |
+| P2 | ~~Langfuse tracing (`langfuse==2.60.4`)~~ **FAIT** : `PALIM_tracing.py` (no-op si clés absentes), 1 trace/tool + spans embed/SQL, flush par appel. Env vars §7 |
 | P3 | **Scale 150 copros** : IVFFlat → HNSW + routage grossier copro |
 | P3 | Retry / circuit breaker Bedrock/RDS ; rotation mot de passe DB |
 
