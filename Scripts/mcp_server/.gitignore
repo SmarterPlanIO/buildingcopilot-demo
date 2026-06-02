@@ -1,0 +1,10 @@
+# Secrets / local — ne jamais committer
+sql/create_mcp_reader.sql
+env.json
+dossiers_api_vendored.py
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
