@@ -3,7 +3,7 @@
 > Pour un LLM qui débarque sur ce repo. Carte du terrain, pas un cours.
 > PALIM = assistant IA RAG pour la gestion de copropriété (syndic). Client : NCG.
 > Voir `CLAUDE.md` (racine) pour les **règles strictes** (git Google Drive, encodage, st.secrets) — à lire en plus de ce fichier.
-> Dernière mise à jour : 29 mai 2026.
+> Dernière mise à jour : 2 juin 2026.
 
 ---
 
@@ -60,7 +60,7 @@ Pipeline d'ingestion de documents de copropriété (PDF/Word/Excel scannés) →
 │       ├── streamlit_app.py     # App prod (2900+ lignes) — UI + orchestration retrieval
 │       ├── dossiers_api.py      # Logique métier dossiers/sinistres (UI-agnostique)
 │       ├── analytics.py         # Route analytique : NL→spec JSON whitelist→SQL paramétré
-│       ├── VERSION              # Version affichée en sidebar (actuellement 0.6.1)
+│       ├── VERSION              # Version affichée en sidebar (actuellement 0.7.0)
 │       ├── requirements.txt     # deps de l'app déployée
 │       └── secrets_template.toml
 ├── Données brutes/              # Archives sources par copro (gitignored)
@@ -68,7 +68,7 @@ Pipeline d'ingestion de documents de copropriété (PDF/Word/Excel scannés) →
     └── rag-prototype-guide.md   # Mémoire complète du pipeline (à maintenir)
 ```
 
-**Deux apps Streamlit coexistent** : `Scripts/07_query_rag_ui.py` (locale, avec FlashRank) et `Scripts/Streamlit Cloud/streamlit_app.py` (déployée, sans FlashRank, `RERANK_CANDIDATES=200` pour compenser). **Modifier la version Cloud** pour tout ce qui touche la prod.
+**Deux apps Streamlit coexistent** : `Scripts/07_query_rag_ui.py` (locale, rerank FlashRank) et `Scripts/Streamlit Cloud/streamlit_app.py` (déployée, rerank Cohere via `rerank.py`). **Modifier la version Cloud** pour tout ce qui touche la prod.
 
 ---
 
@@ -115,8 +115,9 @@ puis **globaux** (une fois, après tous les copros) :
 Pipeline d'une requête :
 ```
 detect_strategy_haiku()   → Haiku classifie (inventaire/ciblé/équilibré) + extrait filtres structurels (~300ms)
-search_chunks()           → pré-filtrage documents → Vector + BM25 → RRF fusion → diversité par source
-                            (Cloud : pas de FlashRank, RRF direct + RERANK_CANDIDATES=200)
+search_chunks()           → pré-filtrage documents → Vector + BM25 → RRF fusion → diversité par source → rerank Cohere
+                            (Cloud : rerank Cohere 3.5 eu-central-1 sur le pool RRF quand le pré-filtrage est inactif, cf. rerank.py ;
+                             bypass + cap RRF quand le pré-filtrage est actif. Pool = RERANK_CANDIDATES=200)
 build_llm_payload()       → assemble le contexte
 generate_answer_stream()  → Sonnet 4.6, streaming, citations [Source N]
 ```
@@ -132,6 +133,7 @@ generate_answer_stream()  → Sonnet 4.6, streaming, citations [Source N]
 **Modules métier UI-agnostiques** (à ne PAS mélanger avec l'UI — voir §7) :
 - `dossiers_api.py` — accès/logique dossiers sinistres. `get_dossiers()`, `get_dossier_detail()`, `search_dossiers_for_query()`.
 - `analytics.py` — route analytique multi-copro. Le LLM **ne génère jamais de SQL brut** : il mappe vers une spec JSON sur **liste blanche** (`detect_analytical_query`), un builder déterministe produit du SQL **paramétré** (`build_analytical_sql`), `run_analytical_route` formate. Identique pour 1, 10 ou 150 copros.
+- `rerank.py` — rerank Cohere 3.5 (Bedrock eu-central-1). `build_rerank_client()` (client cross-région) + `rerank_rows()` (injection en-tête `[DOC_TYPE] nom_fichier`, score hybride RRF×Cohere `alpha=0.25`, fallback ordre RRF si échec). Appelé par `search_chunks` hors pré-filtrage.
 
 ---
 
@@ -164,6 +166,7 @@ generate_answer_stream()  → Sonnet 4.6, streaming, citations [Source N]
 | Schéma DB exact | `Scripts/06a_init_db.py` |
 | Classification doc_type, chunking | `Scripts/03_chunking.py` |
 | Logique retrieval/ranking | `Scripts/Streamlit Cloud/streamlit_app.py` (`search_chunks`) |
+| Rerank Cohere (cloud) | `Scripts/Streamlit Cloud/rerank.py` |
 | Dossiers sinistres | `Scripts/Streamlit Cloud/dossiers_api.py` + `08_airtable_sync.py` |
 | Agrégations analytiques sécurisées | `Scripts/Streamlit Cloud/analytics.py` |
 | Mémoire complète du pipeline (archi, décisions) | `Résultats bruts/rag-prototype-guide.md` |
