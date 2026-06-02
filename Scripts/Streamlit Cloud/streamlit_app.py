@@ -535,11 +535,11 @@ Question actuelle : {query}
 Réponds UNIQUEMENT par un objet JSON valide, sans commentaire :
 {{
   "strategie": "inventaire|cible|equilibre",
-  "doc_type": "RCP|PV_AG|CONTRAT|DEVIS|FACTURE|BUDGET|DIAGNOSTIC|COURRIER|SINISTRE|COMPTABILITE|ENTRETIEN|ASSURANCE|MUTATION|PLAN|null",
+  "doc_type": "un type (RCP|PV_AG|CONTRAT|DEVIS|FACTURE|BUDGET|DIAGNOSTIC|COURRIER|SINISTRE|COMPTABILITE|ENTRETIEN|ASSURANCE|MUTATION|PLAN), OU une liste [\"CONTRAT\",\"FACTURE\"] si la question en vise plusieurs, ou null",
   "annee": 2024 ou null,
   "annee_min": 2020 ou null,
   "annee_max": 2024 ou null,
-  "sous_type": "MRI|DDE|RAVALEMENT|ASCENSEUR|CHAUFFAGE|TOITURE|SYNDIC|etc ou null",
+  "sous_type": "un sous-type (MRI|DDE|RAVALEMENT|ASCENSEUR|CHAUFFAGE|TOITURE|SYNDIC|PLOMBERIE|etc), OU une liste [\"PLOMBERIE\",\"CHAUFFAGE\"] si plusieurs, ou null",
   "statut": "actif|expire|resilie|cloture|en_cours|null",
   "is_followup": true ou false,
   "expanded_query": "version complète et autonome de la question si is_followup=true, sinon null",
@@ -556,8 +556,8 @@ Règles pour les filtres :
 - Ne remplis que les champs que tu peux déduire avec CERTITUDE de la question
 - annee : année exacte mentionnée. Si "depuis 2020" → annee_min=2020, annee=null
 - Si deux années mentionnées → annee_min et annee_max, annee=null
-- doc_type : remplir UNIQUEMENT si l'utilisateur nomme explicitement un TYPE DE DOCUMENT dans sa question (ex : "les contrats", "les PV d'AG", "les diagnostics", "les factures", "les devis"). Même si un qualificatif de sujet suit, le doc_type reste valide : "contrats de maintenance" → doc_type="CONTRAT", "factures d'ascenseur" → doc_type="FACTURE", "PV d'AG mentionnant le ravalement" → doc_type="PV_AG". En revanche, si la question ne nomme AUCUN type de document et porte uniquement sur un SUJET ou OBJET transversal → doc_type=null (ex : "état des extincteurs", "problèmes de fuite", "travaux de ravalement" → doc_type=null, car ces sujets peuvent apparaître dans ENTRETIEN, DIAGNOSTIC, PV_AG, COURRIER, DEVIS, FACTURE, CONTRAT, etc.)
-- sous_type : UNIQUEMENT si l'utilisateur demande un SOUS-TYPE DE DOCUMENT spécifique (ex : "les contrats MRI", "les DDE", "le contrat de syndic"). Même règle que doc_type : ne jamais remplir si la question porte sur un SUJET ou un OBJET transversal. Valeurs possibles : MRI, DDE, RAVALEMENT, ASCENSEUR, CHAUFFAGE, TOITURE, SYNDIC, etc.
+- doc_type : remplir UNIQUEMENT si l'utilisateur nomme explicitement un TYPE DE DOCUMENT dans sa question (ex : "les contrats", "les PV d'AG", "les diagnostics", "les factures", "les devis"). Même si un qualificatif de sujet suit, le doc_type reste valide : "contrats de maintenance" → doc_type="CONTRAT", "factures d'ascenseur" → doc_type="FACTURE", "PV d'AG mentionnant le ravalement" → doc_type="PV_AG". En revanche, si la question ne nomme AUCUN type de document et porte uniquement sur un SUJET ou OBJET transversal → doc_type=null (ex : "état des extincteurs", "problèmes de fuite", "travaux de ravalement" → doc_type=null, car ces sujets peuvent apparaître dans ENTRETIEN, DIAGNOSTIC, PV_AG, COURRIER, DEVIS, FACTURE, CONTRAT, etc.). Si la question vise EXPLICITEMENT PLUSIEURS types (ex : "les contrats et les factures", "devis ou factures"), renvoie une LISTE : doc_type=["CONTRAT","FACTURE"].
+- sous_type : UNIQUEMENT si l'utilisateur demande un SOUS-TYPE DE DOCUMENT spécifique (ex : "les contrats MRI", "les DDE", "le contrat de syndic"). Même règle que doc_type : ne jamais remplir si la question porte sur un SUJET ou un OBJET transversal. Valeurs possibles : MRI, DDE, RAVALEMENT, ASCENSEUR, CHAUFFAGE, TOITURE, SYNDIC, PLOMBERIE, etc. Si plusieurs sous-types sont visés (ex : "plomberie et chauffage"), renvoie une LISTE : sous_type=["PLOMBERIE","CHAUFFAGE"].
 - statut : seulement si la question implique un état (en cours, actif, résilié, clos)
 - Tout champ incertain → null
 
@@ -576,6 +576,8 @@ Exemples doc_type (IMPORTANT — suivre exactement cette logique) :
 - "les factures de ravalement" → doc_type="FACTURE"
 - "les PV d'AG depuis 2018" → doc_type="PV_AG", annee_min=2018
 - "les diagnostics amiante" → doc_type="DIAGNOSTIC"
+- "les contrats et factures de ravalement" → doc_type=["CONTRAT","FACTURE"]
+- "interventions de plomberie et de chauffage" → sous_type=["PLOMBERIE","CHAUFFAGE"], doc_type=null (sujet transversal)
 - "état des extincteurs" → doc_type=null (sujet transversal, pas un type de document)
 - "problèmes de fuite au sous-sol" → doc_type=null (sujet transversal)
 - "travaux de ravalement" → doc_type=null (sujet transversal)
@@ -621,15 +623,23 @@ def detect_strategy_haiku(query, prev_query=None):
         if strategie not in ("inventaire", "cible", "equilibre"):
             strategie = "equilibre"
 
-        # doc_type pour le boost RRF
-        doc_type_hint = parsed.get("doc_type")
-        if doc_type_hint == "null":
-            doc_type_hint = None
+        # Normalise un champ Haiku scalaire OU liste (doc_type, sous_type) :
+        # liste nettoyée des éléments vides/"null", liste à 1 élément ramenée au scalaire.
+        def _norm_multi(val):
+            if isinstance(val, list):
+                val = [v for v in val if v and v != "null"]
+                if not val:
+                    return None
+                return val[0] if len(val) == 1 else val
+            return None if val == "null" else val
+
+        # doc_type pour le boost RRF (scalaire ou liste)
+        doc_type_hint = _norm_multi(parsed.get("doc_type"))
 
         # Construire prefilter à partir des champs non-null
         prefilter = {}
         for key in ("doc_type", "annee", "annee_min", "annee_max", "sous_type", "statut"):
-            val = parsed.get(key)
+            val = _norm_multi(parsed.get(key)) if key in ("doc_type", "sous_type") else parsed.get(key)
             if val is not None and val != "null":
                 prefilter[key] = val
 
@@ -764,21 +774,26 @@ def filter_resolution_categories(results, query, strategie):
     return [r for r in results if len(r) <= 10 or r[10] not in ("PROCEDURE_AG", "ELECTION_CS")]
 
 
-def _code_ncg_filter(copropriete, col="code_ncg"):
-    """Construit le filtre SQL copro pour une valeur polymorphe.
+def _sql_in_filter(col, value):
+    """Filtre SQL polymorphe pour une colonne.
 
-    copropriete : None/[] = toutes les copros (pas de clause) ; str = une seule
-    (rétro-compat) ; list/tuple = plusieurs (clause IN). Retourne (clause, params).
+    value : None/[]/"" = pas de clause ; str = '<col> = %s' ; list/tuple =
+    '<col> IN (...)'. Les éléments falsy ou littéraux "null" sont écartés.
+    Retourne (clause | None, params).
     """
-    if not copropriete:
+    if not value:
         return None, []
-    codes = [copropriete] if isinstance(copropriete, str) else [c for c in copropriete if c]
-    if not codes:
+    vals = [value] if isinstance(value, str) else [v for v in value if v and v != "null"]
+    if not vals:
         return None, []
-    if len(codes) == 1:
-        return f"{col} = %s", [codes[0]]
-    placeholders = ",".join(["%s"] * len(codes))
-    return f"{col} IN ({placeholders})", codes
+    if len(vals) == 1:
+        return f"{col} = %s", [vals[0]]
+    return f"{col} IN (" + ",".join(["%s"] * len(vals)) + ")", vals
+
+
+def _code_ncg_filter(copropriete, col="code_ncg"):
+    """Filtre copro polymorphe (None/str/list). Délègue à _sql_in_filter."""
+    return _sql_in_filter(col, copropriete)
 
 
 def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
@@ -807,10 +822,12 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                     pf_clauses.append(_pf_cclause)
                     pf_params.extend(_pf_cparams)
 
-                if prefilter.get("doc_type"):
-                    pf_clauses.append("(COALESCE(doc_type_corrige, doc_type) = %s OR dossier_lie = %s)")
-                    pf_params.append(prefilter["doc_type"])
-                    pf_params.append(prefilter["doc_type"])
+                _pf_dt1, _pf_dtp1 = _sql_in_filter("COALESCE(doc_type_corrige, doc_type)", prefilter.get("doc_type"))
+                if _pf_dt1:
+                    _pf_dt2, _pf_dtp2 = _sql_in_filter("dossier_lie", prefilter.get("doc_type"))
+                    pf_clauses.append(f"({_pf_dt1} OR {_pf_dt2})")
+                    pf_params.extend(_pf_dtp1)
+                    pf_params.extend(_pf_dtp2)
 
                 if prefilter.get("annee"):
                     pf_clauses.append("annee = %s")
@@ -823,9 +840,10 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                     pf_clauses.append("annee >= %s")
                     pf_params.append(prefilter["annee_min"])
 
-                if prefilter.get("sous_type"):
-                    pf_clauses.append("sous_type = %s")
-                    pf_params.append(prefilter["sous_type"])
+                _pf_st, _pf_stp = _sql_in_filter("sous_type", prefilter.get("sous_type"))
+                if _pf_st:
+                    pf_clauses.append(_pf_st)
+                    pf_params.extend(_pf_stp)
 
                 if prefilter.get("statut"):
                     pf_clauses.append("statut = %s")
@@ -881,7 +899,9 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
             params_before.extend(list(exclude_categories))
 
         where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-        doc_type_for_boost = doc_type_hint if doc_type_hint else "__NONE__"
+        # Boost RRF sur le(s) doc_type indiqué(s) par Haiku (scalaire ou liste).
+        _boost_clause, _boost_params = _sql_in_filter("c.doc_type", doc_type_hint)
+        _boost_expr = f"CASE WHEN {_boost_clause} THEN %s ELSE 0 END" if _boost_clause else "0"
 
         # Quand le pré-filtrage est actif, ouvrir large la diversité SQL
         # pour avoir des candidats de tout le document
@@ -898,7 +918,7 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
                        COALESCE(d.groupe_doc, c.source_file) as groupe_doc,
                        1 - (c.embedding <=> %s::vector) as vec_similarity,
                        ts_rank(c.text_search, plainto_tsquery('french', %s), 32) as bm25_score,
-                       CASE WHEN c.doc_type = %s THEN %s ELSE 0 END as doc_type_boost
+                       {_boost_expr} as doc_type_boost
                 FROM chunks c
                 LEFT JOIN documents d ON c.source_file = d.source_file
                 {where_sql}
@@ -933,9 +953,11 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
             LIMIT %s
         """
 
+        # Args du boost : placeholders du WHEN (doc_type) + le poids du THEN. Vide si pas de boost.
+        _boost_args = [*_boost_params, doc_type_boost] if _boost_clause else []
         params = [
             str(query_embedding), query,
-            doc_type_for_boost, doc_type_boost,
+            *_boost_args,
             *params_before,
             sql_cap, sim_threshold, sql_limit,
         ]
@@ -1250,7 +1272,8 @@ CONTEXTE CONVERSATIONNEL :
     # Hints
     context_hints = []
     if doc_type_hint:
-        context_hints.append(f"Type de document principal : {doc_type_hint} (mais l'info peut apparaître dans d'autres types)")
+        _dth = ", ".join(doc_type_hint) if isinstance(doc_type_hint, list) else doc_type_hint
+        context_hints.append(f"Type(s) de document principal : {_dth} (mais l'info peut apparaître dans d'autres types)")
     hints_text = "\n".join(context_hints) if context_hints else "Aucun filtre spécifique"
 
     # ── Dossier context: injected as virtual chunk in search_results (Fix A), not in system prompt ──
