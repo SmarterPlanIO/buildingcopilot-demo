@@ -18,6 +18,7 @@ import time
 
 import boto3
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 import PALIM_config as cfg
 import PALIM_scope as scope
@@ -85,10 +86,17 @@ def _internal_error(tool, exc):
             "message": "Erreur interne du serveur PALIM. Réessayer ou reformuler."}
 
 
+# DNS rebinding protection OFF : FastMCP l'auto-active pour les hosts localhost
+# avec une allowlist localhost (server.py:178), ce qui rejette en 421
+# "Invalid Host header" le domaine *.lambda-url.*.on.aws derrière la Function URL.
+# Inadaptée à un endpoint public ; barrière d'accès = slug secret + resource policy.
+# Le check Content-Type des POST reste actif (indépendant de ce flag).
+_SECURITY = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 try:
-    mcp = FastMCP("PALIM", streamable_http_path="/" + cfg.MCP_URL_SLUG.lstrip("/"))
+    mcp = FastMCP("PALIM", streamable_http_path="/" + cfg.MCP_URL_SLUG.lstrip("/"),
+                  transport_security=_SECURITY)
 except TypeError:
-    mcp = FastMCP("PALIM")
+    mcp = FastMCP("PALIM", transport_security=_SECURITY)
 
 
 # ============================================================================
