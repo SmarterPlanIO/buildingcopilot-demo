@@ -422,92 +422,123 @@ def _match_rag_dossier(cur, at_lese_nom, at_nom_dossier, at_date_ouverture, code
 
 # Fields to absorb from RAG dossier into the Airtable dossier.
 # Only copy when the Airtable dossier has NULL/empty for that field.
+# lese_nom inclus : beaucoup de sinistres Assynco l'ont à NULL alors que le RAG
+# connaît le lésé (ex. El Habr) — sans ça, supprimer le RAG perdrait le nom.
 _RAG_MERGE_FIELDS = [
+    "lese_nom",
     "documents_lies", "resume_ia", "etapes",
     "pieces_requises", "pieces_fournies",
     "expert_nom", "assureur", "lese_lot",
 ]
 
 
-def merge_rag_into_airtable(cur, code_ncg):
-    """Post-sync pass: find RAG dossiers that duplicate an Airtable dossier,
-    absorb their exclusive data, and delete the RAG duplicate.
+def _match_rag_by_date_type(cur, code_ncg, at_date, at_type):
+    """Fallback d'appariement : jumeau RAG par date d'ouverture EXACTE + type_dossier
+    identique, seulement s'il existe UN seul candidat (sinon ambigu -> pas de fusion).
 
-    Returns (merged_count, details_list).
+    Sert les sinistres Assynco sans lese_nom (NULL), que _match_rag_dossier ne peut
+    pas apparier faute de nom. La double contrainte date exacte + type, plus l'unicité,
+    écarte les DDE distincts du même immeuble. Retourne (dossier_id, lese_nom) ou (None, None).
     """
-    # All Airtable dossiers for this copro
+    if not at_date or not at_type:
+        return None, None
     cur.execute("""
-        SELECT dossier_id, lese_nom, nom_dossier, code_ncg, date_ouverture
+        SELECT dossier_id, lese_nom FROM dossiers
+        WHERE code_ncg = %s AND airtable_record_id IS NULL
+          AND date_ouverture = %s AND type_dossier = %s
+    """, [code_ncg, at_date, at_type])
+    cands = cur.fetchall()
+    if len(cands) == 1:
+        return cands[0][0], cands[0][1]
+    return None, None
+
+
+def _absorb_rag_and_delete(cur, at_id, rag_id):
+    """Absorbe les champs RAG exclusifs (_RAG_MERGE_FIELDS) dans la ligne Airtable
+    quand celle-ci est vide, puis supprime la ligne RAG. Retourne la liste des champs
+    copiés, ou None si le dossier RAG a disparu entre-temps.
+    """
+    field_list = ", ".join(_RAG_MERGE_FIELDS)
+    cur.execute(f"SELECT {field_list} FROM dossiers WHERE dossier_id = %s", [rag_id])
+    rag_row = cur.fetchone()
+    if not rag_row:
+        return None
+    rag_data = dict(zip(_RAG_MERGE_FIELDS, rag_row))
+    cur.execute(f"SELECT {field_list} FROM dossiers WHERE dossier_id = %s", [at_id])
+    at_data = dict(zip(_RAG_MERGE_FIELDS, cur.fetchone()))
+
+    updates = {}
+    for field in _RAG_MERGE_FIELDS:
+        rag_val, at_val = rag_data[field], at_data[field]
+        at_empty = (at_val is None or at_val == "" or at_val == []
+                    or (isinstance(at_val, list) and len(at_val) == 0) or at_val == "[]")
+        rag_has = (rag_val is not None and rag_val != "" and rag_val != []
+                   and not (isinstance(rag_val, list) and len(rag_val) == 0) and rag_val != "[]")
+        if at_empty and rag_has:
+            updates[field] = rag_val
+
+    if updates:
+        set_clauses = ", ".join(f"{k} = %s" for k in updates)
+        vals = []
+        for k in updates:
+            v = updates[k]
+            vals.append(psycopg2.extras.Json(v) if (k == "etapes" and not isinstance(v, str)) else v)
+        vals.append(at_id)
+        cur.execute(
+            f"UPDATE dossiers SET {set_clauses}, updated_at = NOW() WHERE dossier_id = %s", vals)
+
+    cur.execute("DELETE FROM dossiers WHERE dossier_id = %s", [rag_id])
+    return list(updates.keys())
+
+
+def merge_rag_into_airtable(cur, code_ncg):
+    """Post-sync : fusionne les doublons RAG dans leur jumeau Airtable, absorbe les
+    champs RAG exclusifs, supprime la ligne RAG. Deux passes, priorité au nom :
+
+      1. Appariement par nom (lese_nom partagé + date proche) — haute confiance.
+      2. Fallback date exacte + type_dossier + candidat RAG unique — rattrape les
+         sinistres Assynco sans lese_nom (que la passe 1 ne peut pas matcher).
+
+    La passe 1 réclame ses jumeaux en premier (et les supprime), ce qui réduit
+    l'ambiguïté de la passe 2. Retourne (merged_count, details_list).
+    """
+    cur.execute("""
+        SELECT dossier_id, lese_nom, nom_dossier, code_ncg, date_ouverture, type_dossier
         FROM dossiers
         WHERE code_ncg = %s AND airtable_record_id IS NOT NULL
     """, [code_ncg])
     at_dossiers = cur.fetchall()
 
     merged = []
-    already_merged_rag_ids = set()  # prevent same RAG dossier from being absorbed twice
-    for at_id, at_lese, at_nom, at_code, at_date in at_dossiers:
+    matched_at = set()
+    already_rag = set()
+
+    # ── Passe 1 : appariement par nom ──
+    for at_id, at_lese, at_nom, at_code, at_date, at_type in at_dossiers:
         rag_id, rag_lese = _match_rag_dossier(cur, at_lese, at_nom, at_date, at_code)
-        if not rag_id or rag_id in already_merged_rag_ids:
+        if not rag_id or rag_id in already_rag:
             continue
-        already_merged_rag_ids.add(rag_id)
-
-        # Fetch the RAG dossier's mergeable fields
-        field_list = ", ".join(_RAG_MERGE_FIELDS)
-        cur.execute(f"SELECT {field_list} FROM dossiers WHERE dossier_id = %s", [rag_id])
-        rag_row = cur.fetchone()
-        if not rag_row:
+        already_rag.add(rag_id)
+        fields = _absorb_rag_and_delete(cur, at_id, rag_id)
+        if fields is None:
             continue
-        rag_data = dict(zip(_RAG_MERGE_FIELDS, rag_row))
+        matched_at.add(at_id)
+        merged.append({"airtable": at_id, "rag_absorbed": rag_id, "fields_copied": fields,
+                       "at_lese": at_lese, "rag_lese": rag_lese, "via": "name"})
 
-        # Fetch current Airtable dossier's values for these fields
-        cur.execute(f"SELECT {field_list} FROM dossiers WHERE dossier_id = %s", [at_id])
-        at_row = cur.fetchone()
-        at_data = dict(zip(_RAG_MERGE_FIELDS, at_row))
-
-        # Build UPDATE SET for fields where AT is empty but RAG has data
-        updates = {}
-        for field in _RAG_MERGE_FIELDS:
-            rag_val = rag_data[field]
-            at_val = at_data[field]
-            # "empty" = None, empty string, empty list/array, empty jsonb []
-            at_empty = (at_val is None
-                        or at_val == ""
-                        or at_val == []
-                        or (isinstance(at_val, list) and len(at_val) == 0)
-                        or at_val == "[]")
-            rag_has = (rag_val is not None
-                       and rag_val != ""
-                       and rag_val != []
-                       and not (isinstance(rag_val, list) and len(rag_val) == 0)
-                       and rag_val != "[]")
-            if at_empty and rag_has:
-                updates[field] = rag_val
-
-        if updates:
-            set_clauses = ", ".join(f"{k} = %s" for k in updates)
-            # Serialize jsonb fields (etapes) for psycopg2
-            vals = []
-            for k in updates:
-                v = updates[k]
-                if k == "etapes" and not isinstance(v, str):
-                    vals.append(psycopg2.extras.Json(v))
-                else:
-                    vals.append(v)
-            vals.append(at_id)
-            cur.execute(
-                f"UPDATE dossiers SET {set_clauses}, updated_at = NOW() WHERE dossier_id = %s",
-                vals
-            )
-
-        # Delete the RAG duplicate
-        cur.execute("DELETE FROM dossiers WHERE dossier_id = %s", [rag_id])
-        merged.append({
-            "airtable": at_id,
-            "rag_absorbed": rag_id,
-            "fields_copied": list(updates.keys()),
-            "at_lese": at_lese,
-            "rag_lese": rag_lese,
-        })
+    # ── Passe 2 : fallback date + type, candidat RAG unique ──
+    for at_id, at_lese, at_nom, at_code, at_date, at_type in at_dossiers:
+        if at_id in matched_at:
+            continue
+        rag_id, rag_lese = _match_rag_by_date_type(cur, at_code, at_date, at_type)
+        if not rag_id or rag_id in already_rag:
+            continue
+        already_rag.add(rag_id)
+        fields = _absorb_rag_and_delete(cur, at_id, rag_id)
+        if fields is None:
+            continue
+        merged.append({"airtable": at_id, "rag_absorbed": rag_id, "fields_copied": fields,
+                       "at_lese": at_lese, "rag_lese": rag_lese, "via": "date_type"})
 
     return len(merged), merged
 
