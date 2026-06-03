@@ -61,6 +61,22 @@ DB_PASSWORD = os.environ.get("DB_PASSWORD", "")  # fallback dev seulement
 DB_SECRET_ARN = os.environ.get("DB_SECRET_ARN", "")  # ARN ou nom du secret Secrets Manager
 AWS_REGION_SECRETS = os.environ.get("AWS_REGION_SECRETS", AWS_REGION_EMBED)
 
+# ── Assynco ERP (Airtable — lecture R1 : Copropriétés + Police + Sinistre) ──
+# cf. PLAN_ACTION_MCP_ASSYNCO.md et skills/assynco-erp/references/data-model.md
+ENABLE_ASSYNCO = os.environ.get("ENABLE_ASSYNCO", "1").strip().lower() not in ("0", "false", "no", "")
+ASSYNCO_BASE_ID = os.environ.get("ASSYNCO_BASE_ID", "appi1ee5p93EBHtLR")
+ASSYNCO_TABLE_COPRO = os.environ.get("ASSYNCO_TABLE_COPRO", "tblsPUcmAXwWcZFjj")
+ASSYNCO_TABLE_POLICE = os.environ.get("ASSYNCO_TABLE_POLICE", "tblNHIMVgw0Xv36u0")
+ASSYNCO_TABLE_SINISTRE = os.environ.get("ASSYNCO_TABLE_SINISTRE", "tblvvkhcHZjDyHLdp")
+ASSYNCO_TABLE_ORG = os.environ.get("ASSYNCO_TABLE_ORG", "tblKwYRub475OfjMI")       # Organisation
+ASSYNCO_TABLE_CONTACT = os.environ.get("ASSYNCO_TABLE_CONTACT", "tblz0qBxVKkSfRzqP")  # Contacts
+ASSYNCO_TABLE_PRODUIT = os.environ.get("ASSYNCO_TABLE_PRODUIT", "tbllnrD1aydOAaRqy")  # Produit (type de contrat)
+# PAT : Secrets Manager (ARN) en prod ; AIRTABLE_PAT en env = fallback dev seulement.
+AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
+AIRTABLE_PAT_SECRET_ARN = os.environ.get("AIRTABLE_PAT_SECRET_ARN", "")
+ASSYNCO_MAX_RECORDS_CAP = int(os.environ.get("ASSYNCO_MAX_RECORDS_CAP", "50"))
+ASSYNCO_HTTP_TIMEOUT = int(os.environ.get("ASSYNCO_HTTP_TIMEOUT", "15"))
+
 # ── MCP ──
 MCP_URL_SLUG = os.environ.get("MCP_URL_SLUG", "mcp")  # slug secret en prod
 IVFFLAT_PROBES = int(os.environ.get("IVFFLAT_PROBES", "10"))

@@ -28,6 +28,7 @@ from PALIM_retrieval import hybrid_search
 from PALIM_discovery import discover_copros
 from PALIM_copros import list_copros as _list_copros
 from PALIM_dossiers import search_dossiers as _search_dossiers
+import PALIM_assynco as assynco
 
 # ── Clients singletons (réutilisés sur invocations warm) ──
 _bedrock = None
@@ -398,6 +399,150 @@ def PALIM_search_dossiers(
                         metadata={"latency_ms": int((time.time() - t0) * 1000)})
         return {"ok": True, "inferred_scope": inferred, "copro_codes": codes,
                 "warnings": warnings, "results": results}
+    finally:
+        lf.flush()
+
+
+# ============================================================================
+# Tools Assynco (ERP assurance — Airtable, lecture R1 : Copro + Police + Sinistre)
+# cf. PLAN_ACTION_MCP_ASSYNCO.md. Scope = hub Copropriétés (code NCG -> record).
+# ============================================================================
+
+def _assynco_guard(code_ncg):
+    """(ok, code|None, err|None) — vérifie l'activation + la présence d'un code."""
+    if not cfg.ENABLE_ASSYNCO:
+        return False, None, {"ok": False, "error_type": "ASSYNCO_DISABLED",
+                             "message": "Accès Assynco désactivé sur ce serveur."}
+    codes = scope.normalize_copro_codes(code_ncg)
+    if not codes:
+        return False, None, {"ok": False, "error_type": "MISSING_COPRO_SCOPE",
+                             "message": "code_ncg requis (ex: '5390'). Utiliser PALIM_list_copros pour le trouver."}
+    return True, codes[0], None
+
+
+@mcp.tool()
+def PALIM_assynco_get_copro(code_ncg: str) -> dict:
+    """Fiche d'une copropriété dans l'ERP assurance Assynco : identité + synthèse assurance.
+
+    Données LIVE Airtable (base courtier Assynco), distinctes du RAG documentaire.
+    Pour les détails des contrats, enchaîner sur PALIM_assynco_list_polices.
+
+    Args:
+        code_ncg: Code NCG de la copropriété (ex: "5390").
+
+    Returns:
+        {ok, code_ncg, copro} ; copro : nom, adresse, type_syndicat, nb_coproprietaires,
+        descriptif (surface, bâtiments, ascenseurs, chauffage), total_prime, prime_mri,
+        total_sinistres, nb_polices_liees. {ok:false, NOT_FOUND} si copro absente d'Assynco.
+    """
+    t0 = time.time()
+    tr = lf.start_trace("PALIM_assynco_get_copro", input={"code_ncg": code_ncg},
+                        tags=["mcp", "assynco", "get_copro"])
+    try:
+        ok, code, err = _assynco_guard(code_ncg)
+        if not ok:
+            lf.update_trace(tr, output=err, metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return err
+        try:
+            copro = assynco.get_copro(code)
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_assynco_get_copro", exc)
+        if not copro:
+            res = {"ok": False, "error_type": "NOT_FOUND",
+                   "message": f"Aucune copropriété Assynco pour le code {code}."}
+            lf.update_trace(tr, output=res, metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return res
+        _log("PALIM_assynco_get_copro", code_ncg=code, latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"found": True, "nb_polices": copro.get("nb_polices_liees")},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        return {"ok": True, "code_ncg": code, "copro": copro}
+    finally:
+        lf.flush()
+
+
+@mcp.tool()
+def PALIM_assynco_list_polices(code_ncg: str, max_results: int = 20) -> dict:
+    """Polices d'assurance souscrites d'une copropriété (Assynco, live).
+
+    Garanties au niveau libellés + franchises + primes (cf. data-model R1). Les
+    plafonds structurés par risque ne sont pas inclus (table Produit, hors R1).
+
+    Args:
+        code_ncg: Code NCG de la copropriété (ex: "5390").
+        max_results: Nombre max de polices (plafonné serveur).
+
+    Returns:
+        {ok, code_ncg, n_results, polices[]} ; chaque police : numero_police,
+        statut_contrat, garanties (libellés), franchise(s), prime_annuelle_ttc/ht,
+        date_effet/resiliation, assureur, syndic, courtier.
+    """
+    t0 = time.time()
+    tr = lf.start_trace("PALIM_assynco_list_polices", input={"code_ncg": code_ncg},
+                        tags=["mcp", "assynco", "list_polices"])
+    try:
+        ok, code, err = _assynco_guard(code_ncg)
+        if not ok:
+            lf.update_trace(tr, output=err, metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return err
+        max_results = _clamp(max_results, 20, cfg.ASSYNCO_MAX_RECORDS_CAP)
+        try:
+            polices = assynco.list_polices(code, max_records=max_results)
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_assynco_list_polices", exc)
+        warnings = [] if polices else [f"Aucune police trouvée pour {code} dans Assynco."]
+        _log("PALIM_assynco_list_polices", code_ncg=code, n_results=len(polices),
+             latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"n_results": len(polices)},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        return {"ok": True, "code_ncg": code, "n_results": len(polices),
+                "warnings": warnings, "polices": polices}
+    finally:
+        lf.flush()
+
+
+@mcp.tool()
+def PALIM_assynco_search_sinistres(code_ncg: str, query: str | None = None,
+                                   max_results: int = 20) -> dict:
+    """Sinistres d'une copropriété dans l'ERP Assynco (live, plus riche que la table dossiers RAG).
+
+    Args:
+        code_ncg: Code NCG de la copropriété (ex: "5390").
+        query: Filtre texte optionnel (insensible casse) sur le libellé du sinistre.
+        max_results: Nombre max de sinistres (plafonné serveur).
+
+    Returns:
+        {ok, code_ncg, n_results, sinistres[]} ; chaque sinistre : nom, situation,
+        date_survenance, lese_nom, cause, garantie_impactee, franchise, plafond,
+        montants (estimation/cout_assureur/provisions/total_regle), pipeline 🚦,
+        références (cie/expert/client), assureur, expert.
+    """
+    t0 = time.time()
+    tr = lf.start_trace("PALIM_assynco_search_sinistres",
+                        input={"code_ncg": code_ncg, "query": query},
+                        tags=["mcp", "assynco", "search_sinistres"])
+    try:
+        ok, code, err = _assynco_guard(code_ncg)
+        if not ok:
+            lf.update_trace(tr, output=err, metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return err
+        max_results = _clamp(max_results, 20, cfg.ASSYNCO_MAX_RECORDS_CAP)
+        try:
+            sinistres = assynco.search_sinistres(code, query=query, max_records=max_results)
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_assynco_search_sinistres", exc)
+        warnings = [] if sinistres else [f"Aucun sinistre trouvé pour {code} dans Assynco."]
+        _log("PALIM_assynco_search_sinistres", code_ncg=code, n_results=len(sinistres),
+             query=bool(query), latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"n_results": len(sinistres)},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        return {"ok": True, "code_ncg": code, "n_results": len(sinistres),
+                "warnings": warnings, "sinistres": sinistres}
     finally:
         lf.flush()
 
