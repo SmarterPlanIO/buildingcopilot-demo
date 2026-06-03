@@ -7,6 +7,7 @@ Contient toute la logique métier liée aux dossiers de sinistres.
 Indépendant du framework UI — remplacer streamlit_app.py sans perdre cette logique.
 """
 import re
+import unicodedata
 from typing import Optional, List, Dict, Tuple, Any, Union
 
 
@@ -83,11 +84,37 @@ def get_dossier_detail(conn, dossier_id: str) -> Optional[Dict]:
         return None
 
 
+# Haystack accent-normalisé (translate, car l'extension unaccent n'est pas installée)
+# pour le match langage naturel. Inclut garantie_impactee (text[], "DDE - Dégâts des
+# Eaux") et cause, donc une requête "dégât des eaux" matche les dossiers de type DDE.
+_ACCENT_FROM = "àáâãäçèéêëìíîïñòóôõöùúûüýÿ"
+_ACCENT_TO = "aaaaaceeeeiiiinooooouuuuyy"
+_DOSSIER_HAYSTACK_SQL = (
+    "translate(lower("
+    "coalesce(nom_dossier,'')||' '||coalesce(array_to_string(garantie_impactee,' '),'')"
+    "||' '||coalesce(cause,'')||' '||coalesce(lese_nom,'')||' '||coalesce(type_dossier,'')"
+    f"), '{_ACCENT_FROM}', '{_ACCENT_TO}')"
+)
+_DOSSIER_STOPWORDS = {"des", "les", "aux", "une", "sur", "par", "pour", "avec", "dans"}
+
+
+def _nl_tokens(query: str) -> List[str]:
+    """Tokens langage naturel d'une requête : minuscules, sans accents, >=3 car, hors stopwords."""
+    out = []
+    for w in query.split():
+        t = "".join(c for c in unicodedata.normalize("NFKD", w) if not unicodedata.combining(c)).lower()
+        if len(t) >= 3 and t not in _DOSSIER_STOPWORDS:
+            out.append(t)
+    return out
+
+
 def search_dossiers_for_query(conn, query: str, copropriete: Optional[Union[str, List[str]]] = None) -> List[Dict]:
     """Recherche hybride keyword+regex dans la table dossiers.
 
-    Extrait les références (A/I + digits) et noms propres de la requête,
-    puis matche sur nom_dossier, lese_nom, ref_cie, ref_assynco, ref_sinistre_client.
+    Extrait les références (A/I + digits) et noms propres de la requête, puis matche sur
+    nom_dossier, lese_nom, ref_cie, ref_assynco, ref_sinistre_client. Les autres mots
+    (langage naturel) sont matchés en ET, accents normalisés, sur garantie/cause/type
+    en plus du nom : "dégât des eaux" trouve les dossiers de garantie "DDE".
 
     Args:
         conn: Connexion psycopg2 active.
@@ -122,6 +149,14 @@ def search_dossiers_for_query(conn, query: str, copropriete: Optional[Union[str,
                     where_parts.append("(lese_nom ILIKE %s OR nom_dossier ILIKE %s)")
                     np = f"%{name}%"
                     params.extend([np, np])
+
+            # Langage naturel : tokens (ET) sur un haystack accent-insensible incluant
+            # garantie/cause/type, pour matcher p.ex. "dégât des eaux" -> garantie "DDE".
+            nl = _nl_tokens(query)
+            if nl:
+                token_clause = " AND ".join(f"{_DOSSIER_HAYSTACK_SQL} ILIKE %s" for _ in nl)
+                where_parts.append("(" + token_clause + ")")
+                params.extend(f"%{t}%" for t in nl)
 
             # Recherche générale sur nom_dossier (toujours)
             where_parts.append("nom_dossier ILIKE %s")
