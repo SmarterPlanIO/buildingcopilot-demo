@@ -91,12 +91,16 @@ def _internal_error(tool, exc):
 # "Invalid Host header" le domaine *.lambda-url.*.on.aws derrière la Function URL.
 # Inadaptée à un endpoint public ; barrière d'accès = slug secret + resource policy.
 # Le check Content-Type des POST reste actif (indépendant de ce flag).
+# stateless_http=True : indispensable en Lambda. Le mode stateful garde les
+# sessions (mcp-session-id) en mémoire du conteneur ; or chaque requête est une
+# invocation séparée pouvant taper une autre instance → "Session not found".
+# En stateless chaque requête est autonome (adapté au serverless).
 _SECURITY = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 try:
     mcp = FastMCP("PALIM", streamable_http_path="/" + cfg.MCP_URL_SLUG.lstrip("/"),
-                  transport_security=_SECURITY)
+                  transport_security=_SECURITY, stateless_http=True)
 except TypeError:
-    mcp = FastMCP("PALIM", transport_security=_SECURITY)
+    mcp = FastMCP("PALIM", transport_security=_SECURITY, stateless_http=True)
 
 
 # ============================================================================
