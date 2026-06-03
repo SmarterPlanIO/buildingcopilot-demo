@@ -560,18 +560,23 @@ def merge_with_airtable_chunks(
 # ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import os
     import psycopg2
 
-    DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
-    DB_PORT = 5432
-    DB_NAME = "postgres"
-    DB_USER = "ragadmin"
-    DB_PASSWORD = "SmarterRAG99!"
+    # Creds via env (jamais en clair dans le code). Defaut = reader read-only.
+    #   PYTHONIOENCODING=utf-8 DB_PASSWORD=... python dossiers_api.py
+    DB_HOST = os.environ.get("DB_HOST", "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com")
+    DB_PORT = int(os.environ.get("DB_PORT", "5432"))
+    DB_NAME = os.environ.get("DB_NAME", "postgres")
+    DB_USER = os.environ.get("DB_USER", "mcp_ncg_reader")
+    DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+    if not DB_PASSWORD:
+        raise SystemExit("DB_PASSWORD requis en variable d'environnement.")
 
     print("09_dossiers_api.py — Test de connexion")
     conn = psycopg2.connect(
         host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
-        user=DB_USER, password=DB_PASSWORD
+        user=DB_USER, password=DB_PASSWORD, sslmode="require"
     )
 
     dossiers = get_dossiers(conn)
