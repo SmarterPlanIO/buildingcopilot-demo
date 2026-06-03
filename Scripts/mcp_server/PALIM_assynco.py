@@ -20,6 +20,7 @@ en réponse MCP structurée) :
   - search_sinistres(code_ncg, query, max_records) -> list[dict]
 """
 import json
+import unicodedata
 import urllib.parse
 import urllib.request
 
@@ -173,6 +174,31 @@ _POLICE_LINKS = {"Assureur": cfg.ASSYNCO_TABLE_ORG, "Syndic": cfg.ASSYNCO_TABLE_
                  "Type Contrat Assurance": cfg.ASSYNCO_TABLE_PRODUIT}
 _SINISTRE_LINKS = {"Assureur": cfg.ASSYNCO_TABLE_ORG, "Expert": cfg.ASSYNCO_TABLE_ORG}
 
+# Champs scrutés par le filtre texte de search_sinistres. `Garantie Impactée`
+# porte le libellé en clair ("DDE - Dégâts des Eaux", "VAN - Vandalisme") en plus
+# du code, donc une requête langage naturel ("eau", "vandalisme") y matche.
+_SINISTRE_SEARCH_FIELDS = ("Name", "Garantie Impactée", "Cause", "Nom du Lésé",
+                           "Situation Dossier", "Statut details",
+                           "Ref Cie", "Ref Expert", "Ref Sinistre Client")
+
+
+def _fold(s):
+    """Minuscule + sans accents : match tolérant (eau↔eaux, dégât↔dégâts)."""
+    s = unicodedata.normalize("NFKD", str(s))
+    return "".join(c for c in s if not unicodedata.combining(c)).lower()
+
+
+def _sinistre_haystack(fields):
+    """Concatène les champs cherchables d'un sinistre en une chaîne foldée."""
+    parts = []
+    for k in _SINISTRE_SEARCH_FIELDS:
+        v = fields.get(k)
+        if isinstance(v, list):
+            parts.extend(str(x) for x in v)
+        elif v is not None:
+            parts.append(str(v))
+    return _fold(" ".join(parts))
+
 
 def _project_copro(rec):
     f = rec.get("fields", {})
@@ -314,8 +340,10 @@ def search_sinistres(code_ncg, query=None, max_records=None):
     if not sin_ids:
         return []
     raw = _by_record_ids(cfg.ASSYNCO_TABLE_SINISTRE, sin_ids, fields=_SINISTRE_FIELDS)
-    q = (query or "").strip().lower()
-    if q:
-        raw = [r for r in raw if q in str(r.get("fields", {}).get("Name", "")).lower()]
+    tokens = [_fold(t) for t in (query or "").split() if t.strip()]
+    if tokens:
+        # Tous les tokens doivent apparaître (ET) dans les champs cherchables.
+        raw = [r for r in raw
+               if all(t in _sinistre_haystack(r.get("fields", {})) for t in tokens)]
     id_to_name = _resolve_names(raw, _SINISTRE_LINKS)
     return [_project_sinistre(r, id_to_name) for r in raw[: (max_records or cfg.ASSYNCO_MAX_RECORDS_CAP)]]

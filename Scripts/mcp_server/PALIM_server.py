@@ -512,7 +512,10 @@ def PALIM_assynco_search_sinistres(code_ncg: str, query: str | None = None,
 
     Args:
         code_ncg: Code NCG de la copropriété (ex: "5390").
-        query: Filtre texte optionnel (insensible casse) sur le libellé du sinistre.
+        query: Filtre texte optionnel, langage naturel OK (insensible casse/accents).
+            Matche sur garantie, cause, nom du lésé, situation, références et libellé
+            du sinistre ; tous les mots doivent apparaître. Ex: "dégât des eaux",
+            "vandalisme", "LEMEAU".
         max_results: Nombre max de sinistres (plafonné serveur).
 
     Returns:
