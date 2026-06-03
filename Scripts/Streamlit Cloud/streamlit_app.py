@@ -29,7 +29,10 @@ _boot_mark("imports: streamlit")
 import streamlit_mermaid as stmd
 _boot_mark("imports: streamlit_mermaid")
 
-from langfuse import Langfuse
+try:
+    from langfuse import Langfuse
+except ImportError:
+    Langfuse = None  # dep absente (ex: smoke test local sans langfuse) — tracing désactivé, l'app tourne quand même
 _boot_mark("imports: langfuse")
 from dossiers_api import (
     get_dossiers as _get_dossiers,
@@ -127,7 +130,7 @@ if not _lf_public:
     except Exception:
         pass
 
-_langfuse_enabled = bool(_lf_public and _lf_secret)
+_langfuse_enabled = bool(_lf_public and _lf_secret) and Langfuse is not None
 langfuse_client = None
 print(f"🔍 Langfuse keys: public={'YES' if _lf_public else 'NO'}, secret={'YES' if _lf_secret else 'NO'}, host={_lf_host}")
 if _langfuse_enabled:
@@ -2252,8 +2255,8 @@ with st.sidebar:
     # ── Mes dossiers (Module Gestion de Projet) ──
     _ = st.markdown("---")
     try:
-        # Dossiers en sidebar : 1 copro sélectionnée → ses dossiers ; 0 ou ≥2 → tous
-        _copro_for_dossiers = selected_copros[0] if len(selected_copros) == 1 else None
+        # Dossiers en sidebar : filtrés sur la sélection (liste → IN) ; vide = toutes
+        _copro_for_dossiers = selected_copros or None
         _boot_mark("sidebar: get_dossiers start")
         _dossiers = get_dossiers(_copro_for_dossiers)
         _boot_mark(f"sidebar: get_dossiers done ({len(_dossiers)} dossiers)")

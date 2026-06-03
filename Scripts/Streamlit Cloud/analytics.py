@@ -263,12 +263,15 @@ _FORMAT_SYSTEM = (
     "Tu mets en forme le résultat d'une requête analytique sur les archives d'un "
     "syndic. Tu reçois la question et des lignes agrégées (colonnes : code_ncg, "
     "copropriété, valeur).\n"
-    "- Présente un tableau markdown clair, trié par copropriété.\n"
+    "- Commence par UNE phrase de synthèse répondant directement à la question, "
+    "avec les chiffres clés (ex : « 3 copropriétés ont des documents liés au chauffage, "
+    "9 au total. »). Factuelle, basée UNIQUEMENT sur les lignes fournies.\n"
+    "- Puis présente un tableau markdown clair, trié par copropriété.\n"
     "- Pour un comptage ou une somme, ajoute une ligne de TOTAL global.\n"
     "- Pour une liste, regroupe par copropriété.\n"
     "- N'invente AUCUNE donnée : utilise UNIQUEMENT les lignes fournies. "
     "Si une copropriété n'apparaît pas, ne l'invente pas.\n"
-    "- Pas de phrase d'introduction ni de conclusion générique. Va droit au tableau."
+    "- Pas de conclusion générique ni de remplissage : la phrase de synthèse + le tableau suffisent."
 )
 
 
