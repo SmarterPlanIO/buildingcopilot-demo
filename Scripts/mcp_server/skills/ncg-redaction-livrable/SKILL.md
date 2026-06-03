@@ -56,8 +56,8 @@ Sur un livrable **externe**, la traçabilité reste sobre et n'expose aucun iden
 En fin de **note interne structurée**, énumère : nombre d'assertions factuelles/juridiques, dont X sourcées sur un document et Y en `[À VÉRIFIER]`. Si plus de 20 % sont en `[À VÉRIFIER]`, **alerte explicitement** que la note n'est pas exploitable en l'état. Ce compteur ne figure **jamais** sur un livrable externe.
 
 ## 6. Identité visuelle NCG (logo)
-Les livrables **externes** (courrier, note au conseil syndical) et **tout export Word** portent l'en-tête NCG **avec le logo du client**. Le logo est un fichier image présent dans les fichiers du Projet Claude (ex. `logo_ncg.png`). Repère-le parmi les fichiers du projet et place-le dans l'en-tête du document.
-- Si aucun fichier logo n'est disponible dans le projet, **signale-le** (« logo NCG introuvable dans les fichiers du projet ») et laisse un emplacement réservé en en-tête, plutôt que d'omettre le logo en silence.
+Les livrables **externes** (courrier, note au conseil syndical) et **tout export Word** portent l'en-tête NCG **avec le logo du client**. Le logo est le fichier **`logo NCG.png`** présent dans les fichiers du Projet Claude. Place-le dans l'en-tête du document.
+- Si `logo NCG.png` n'est pas disponible dans le projet, **signale-le** (« logo NCG.png introuvable dans les fichiers du projet ») et laisse un emplacement réservé en en-tête, plutôt que d'omettre le logo en silence.
 - Les notes **internes** ne nécessitent pas le logo.
 
 ## 7. Proposer l'export Word

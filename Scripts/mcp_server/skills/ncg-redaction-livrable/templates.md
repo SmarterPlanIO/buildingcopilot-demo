@@ -38,7 +38,7 @@ Compteur de cohérence : [N] assertions, dont [X] sourcées, [Y] à vérifier.
 Destinataire externe. Zéro jargon interne. Aucune assertion non sourcée.
 
 ```
-[En-tête : logo NCG (fichier du projet) + coordonnées du syndic NCG]
+[En-tête : logo `logo NCG.png` (fichier du projet) + coordonnées du syndic NCG]
 
 Objet : [objet clair]
 Référence : [résidence / adresse]
@@ -65,7 +65,7 @@ Veuillez agréer, Madame, Monsieur, l'expression de nos salutations distinguées
 Destinataire externe (CS). Ton : factuel, orienté aide à la décision. Sources citées sobrement.
 
 ```
-[En-tête : logo NCG (fichier du projet)]
+[En-tête : logo `logo NCG.png` (fichier du projet)]
 
 NOTE AU CONSEIL SYNDICAL
 Copropriété : [nom]    Objet : [objet]    Date : [date]
