@@ -193,6 +193,7 @@ def PALIM_search_chunks(
                                 "include_bordereau_ar": include_bordereau_ar,
                                 "include_legal_context": include_legal_context},
             "warnings": warnings, "results": results,
+            "trace_ref": lf.trace_id(tr),
         }
     finally:
         lf.flush()
@@ -398,7 +399,7 @@ def PALIM_search_dossiers(
                                     "warnings": warnings},
                         metadata={"latency_ms": int((time.time() - t0) * 1000)})
         return {"ok": True, "inferred_scope": inferred, "copro_codes": codes,
-                "warnings": warnings, "results": results}
+                "warnings": warnings, "results": results, "trace_ref": lf.trace_id(tr)}
     finally:
         lf.flush()
 
@@ -545,6 +546,60 @@ def PALIM_assynco_search_sinistres(code_ncg: str, query: str | None = None,
                 "warnings": warnings, "sinistres": sinistres}
     finally:
         lf.flush()
+
+
+@mcp.tool()
+def PALIM_log_feedback(
+    rating: str,
+    comment: str | None = None,
+    question: str | None = None,
+    copro_codes: list[str] | None = None,
+    mode: str | None = None,
+    utilisateur: str | None = None,
+    trace_ref: str | None = None,
+) -> dict:
+    """Enregistre un retour utilisateur sur une réponse PALIM (observabilité pilote).
+
+    N'appeler que pour un feedback PROFESSIONNEL sur une réponse métier non triviale
+    (jamais sur du trivial ou du personnel). Si la réponse s'appuyait sur un
+    PALIM_search_chunks / PALIM_search_dossiers, passer son `trace_ref` pour rattacher
+    le feedback à la trace correspondante. Ne JAMAIS afficher `trace_ref` à l'utilisateur.
+
+    Args:
+        rating: "utile" ou "a_ameliorer".
+        comment: Commentaire libre de l'utilisateur (optionnel mais précieux).
+        question: Sujet ou question court (contexte).
+        copro_codes: Codes NCG concernés (contexte).
+        mode: Mot qualificatif du mode (ex: "factuel", "juridique", "rédaction", "synthèse-dossier").
+        utilisateur: Prénom (minuscules, sans accent).
+        trace_ref: Référence renvoyée par search_chunks/search_dossiers (optionnel, pour le rattachement).
+
+    Returns:
+        {ok, logged, linked}. logged=true si enregistré ; linked=true si rattaché à une trace existante.
+    """
+    t0 = time.time()
+    r = (rating or "").strip().lower()
+    value = 1.0 if r.startswith("util") else 0.0
+    label = "utile" if value >= 1.0 else "a_ameliorer"
+    c = (comment or "").strip()[:2000] or None
+    if not r and not c:
+        return {"ok": False, "logged": False, "linked": False, "error_type": "EMPTY_FEEDBACK",
+                "message": "Feedback vide : fournir au moins rating ou comment."}
+    codes = scope.normalize_copro_codes(copro_codes)
+    context = {"question": (question or "").strip()[:500] or None,
+               "copro_codes": codes or None, "mode": (mode or "").strip() or None,
+               "rating": label}
+    try:
+        ok, linked = lf.log_feedback(value, comment=c, context=context,
+                                     user=(utilisateur or "").strip().lower() or None,
+                                     trace_ref=(trace_ref or "").strip() or None)
+    except Exception as exc:
+        return _internal_error("PALIM_log_feedback", exc)
+    finally:
+        lf.flush()
+    _log("PALIM_log_feedback", rating=label, linked=linked, has_comment=bool(c),
+         copro_codes=codes, mode=context["mode"], latency_ms=int((time.time() - t0) * 1000))
+    return {"ok": True, "logged": bool(ok), "linked": bool(linked)}
 
 
 # App ASGI pour uvicorn / Lambda Web Adapter

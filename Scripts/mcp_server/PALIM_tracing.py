@@ -89,6 +89,37 @@ def update_trace(trace, *, output=None, metadata=None):
         pass
 
 
+def trace_id(handle):
+    """Id de la trace (pour rattacher un score de feedback). None si tracing off."""
+    return getattr(handle, "id", None) if handle is not None else None
+
+
+def log_feedback(value, *, comment=None, context=None, user=None, trace_ref=None):
+    """Enregistre un feedback utilisateur comme score Langfuse.
+
+    value : 1.0 (utile) / 0.0 (à améliorer). comment : texte libre (peut être None).
+    context : dict {question, copro_codes, mode, rating} (trace autonome).
+    trace_ref : id de la trace de retrieval d'origine ; si fourni, le score s'y
+    rattache. Sinon une trace 'PALIM_feedback' autonome est créée.
+    Retourne (ok: bool, linked: bool). Ne lève jamais, ne logge aucun secret.
+    """
+    client = _get_client()
+    if client is None:
+        return False, False
+    try:
+        if trace_ref:
+            client.score(trace_id=trace_ref, name="user_feedback", value=value, comment=comment)
+            return True, True
+        tr = client.trace(name="PALIM_feedback",
+                          user_id=(user or cfg.LANGFUSE_USER or None),
+                          input=context or None, output={"comment": comment},
+                          metadata={"source": "mcp"}, tags=["mcp", "feedback"])
+        tr.score(name="user_feedback", value=value, comment=comment)
+        return True, False
+    except Exception:
+        return False, False
+
+
 def flush():
     """Vide la file Langfuse (bloquant). À appeler en fin d'appel de tool."""
     client = _get_client()
