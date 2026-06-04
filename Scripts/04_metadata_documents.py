@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 from pipeline_config import paths_for
+import bedrock_cost
 
 # =====================================================
 # CONFIGURATION
@@ -326,7 +327,9 @@ def extract_metadata(source_file, doc_type, texte):
                 modelId=LLM_MODEL, body=body,
                 contentType="application/json", accept="application/json"
             )
-            result_text = json.loads(response["body"].read())["content"][0]["text"].strip()
+            _resp = json.loads(response["body"].read())
+            bedrock_cost.track(_resp)
+            result_text = _resp["content"][0]["text"].strip()
             metadata = extract_json(result_text)
             # Normalisation mécanique du sous_type
             if metadata.get("sous_type"):
@@ -459,7 +462,9 @@ Sous-types à consolider :
                     modelId=LLM_MODEL, body=body,
                     contentType="application/json", accept="application/json"
                 )
-                result_text = json.loads(response["body"].read())["content"][0]["text"].strip()
+                _resp = json.loads(response["body"].read())
+                bedrock_cost.track(_resp)
+                result_text = _resp["content"][0]["text"].strip()
                 mapping = extract_json(result_text)
                 break
             except json.JSONDecodeError:
@@ -594,7 +599,9 @@ for (copro, dt, annee), source_files in multi_groups.items():
                     modelId=LLM_MODEL, body=body,
                     contentType="application/json", accept="application/json"
                 )
-                result_text = json.loads(response["body"].read())["content"][0]["text"].strip()
+                _resp = json.loads(response["body"].read())
+                bedrock_cost.track(_resp)
+                result_text = _resp["content"][0]["text"].strip()
                 dedup_result = extract_json(result_text)
                 break
             except json.JSONDecodeError:
@@ -742,6 +749,5 @@ for g, members in sorted(groups_with_copies.items()):
 
 print(f"\n📁 Métadonnées : {OUTPUT_FILE}")
 
-# Coût estimé
-cost = stats["llm_calls"] * 1000 * 0.80 / 1_000_000  # ~1000 tokens input, $0.80/MTok
-print(f"💰 Coût estimé Haiku : ${cost:.2f}")
+# Coût Haiku réel (tokens facturés par Bedrock, prix Haiku 4.5)
+print(f"💰 {bedrock_cost.format_line().strip()}")

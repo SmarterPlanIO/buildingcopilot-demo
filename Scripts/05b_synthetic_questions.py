@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 from pipeline_config import paths_for
+import bedrock_cost
 
 # =====================================================
 # CONFIGURATION
@@ -108,6 +109,7 @@ def generate_questions(chunk_text, chunk_id):
                 contentType="application/json", accept="application/json"
             )
             result = json.loads(response["body"].read())
+            bedrock_cost.track(result)
             answer = result["content"][0]["text"].strip()
 
             # Si Haiku repond SKIP, pas de questions
@@ -171,7 +173,7 @@ if __name__ == "__main__":
         eligible.append(chunk)
 
     print(f"  {len(eligible)} chunks eligibles pour les questions synthetiques")
-    print(f"  Cout estime : ~${len(eligible) * 0.0001:.2f}")
+    print(f"  Pre-estim. grossiere : ~${len(eligible) * 0.0001:.2f} (cout REEL affiche en fin de run)")
 
     if not eligible:
         print("Aucun chunk eligible. Copie du fichier sans modification.")
@@ -218,4 +220,5 @@ if __name__ == "__main__":
     print(f"  Questions generees   : {stats['generated']}")
     print(f"  Skips (pas assez)    : {stats['skipped']}")
     print(f"  Taux d'enrichissement: {stats['generated']/max(len(eligible),1)*100:.1f}%")
+    print(bedrock_cost.format_line())
     print(f"\n-> {OUTPUT_FILE}")

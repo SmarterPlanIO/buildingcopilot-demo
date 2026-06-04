@@ -33,6 +33,7 @@ import boto3
 # Filtre de contenu binaire / garbage (v2)
 from content_filter import analyze_file_quality, filter_chunks, make_placeholder_chunk
 from pipeline_config import paths_for
+import bedrock_cost
 
 # =====================================================
 # CONFIGURATION
@@ -189,6 +190,7 @@ Extrait :
             contentType="application/json", accept="application/json"
         )
         result = json.loads(response["body"].read())
+        bedrock_cost.track(result)
         answer = result["content"][0]["text"].strip().upper()
 
         _llm_stats["calls"] += 1
@@ -513,8 +515,10 @@ Texte :
             modelId=CLASSIFIER_MODEL, body=body,
             contentType="application/json", accept="application/json"
         )
-        result_text = json.loads(response["body"].read())["content"][0]["text"].strip()
-        
+        _resp = json.loads(response["body"].read())
+        bedrock_cost.track(_resp)
+        result_text = _resp["content"][0]["text"].strip()
+
         # Extraire le JSON (Haiku peut ajouter du texte autour)
         result_text = re.sub(r"^```json?\s*", "", result_text)
         result_text = re.sub(r"\s*```$", "", result_text)
@@ -980,7 +984,9 @@ Extrait :
                     modelId=CLASSIFIER_MODEL, body=body,
                     contentType="application/json", accept="application/json"
                 )
-                answer = json.loads(response["body"].read())["content"][0]["text"].strip().upper()
+                _resp = json.loads(response["body"].read())
+                bedrock_cost.track(_resp)
+                answer = _resp["content"][0]["text"].strip().upper()
                 result = answer if answer in DOC_TYPES_VALID else "AUTRE"
                 return source_file, result, "classify"
             except Exception as e:
@@ -1040,7 +1046,9 @@ Extrait (début et fin du document) :
                     modelId=CLASSIFIER_MODEL, body=body,
                     contentType="application/json", accept="application/json"
                 )
-                answer = json.loads(response["body"].read())["content"][0]["text"].strip().upper()
+                _resp = json.loads(response["body"].read())
+                bedrock_cost.track(_resp)
+                answer = _resp["content"][0]["text"].strip().upper()
                 result = answer if answer in DOC_TYPES_VALID else "PV_AG"
                 return source_file, result, "verify"
             except Exception as e:
@@ -1280,7 +1288,7 @@ print(f"  Cache hits           : {_llm_stats['hits_cache']}")
 print(f"  Skippés (texte court): {_llm_stats['skipped_short']}")
 print(f"  Erreurs              : {_llm_stats['errors']}")
 if _llm_stats['calls'] > 0:
-    print(f"  Coût estimé          : ~${_llm_stats['calls'] * 1500 * 0.0000008:.4f}")
+    print(f"  (ancienne estim. : ~${_llm_stats['calls'] * 1500 * 0.0000008:.4f} — fausse, voir cout reel ci-dessous)")
 
 print(f"\n--- Vérification PV_AG (pré-scan) ---")
 print(f"  Vérifiés             : {_verify_stats['verified']}")
@@ -1290,6 +1298,9 @@ print(f"\n--- Détection format résolutions (Haiku) ---")
 print(f"  Appels               : {_haiku_pattern_stats['calls']}")
 print(f"  Patterns trouvés     : {_haiku_pattern_stats['success']}")
 print(f"  Échecs (fallback)    : {_haiku_pattern_stats['fail']}")
+
+print(f"\n--- Coût Haiku (réel, tous appels confondus) ---")
+print(bedrock_cost.format_line())
 
 if _resolution_category_stats:
     print(f"\n--- Classification résolutions PV_AG (Phase 1a) ---")
