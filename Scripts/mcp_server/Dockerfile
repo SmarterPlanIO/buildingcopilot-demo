@@ -21,6 +21,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Modules PALIM + dossiers_api_vendored.py + rerank_vendored.py (top-level *.py)
 COPY *.py ./
+# Données statiques embarquées (registre liens visite 3D, lu par PALIM_visites.py)
+COPY visites_3d.txt ./
 
 # Démarre l'app ASGI FastMCP (streamable HTTP) ; LWA proxifie la Function URL
 CMD ["uvicorn", "PALIM_server:app", "--host", "0.0.0.0", "--port", "8000"]

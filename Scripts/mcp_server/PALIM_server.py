@@ -28,6 +28,7 @@ from PALIM_retrieval import hybrid_search
 from PALIM_discovery import discover_copros
 from PALIM_copros import list_copros as _list_copros
 from PALIM_dossiers import search_dossiers as _search_dossiers
+from PALIM_visites import match_visites as _match_visites
 import PALIM_assynco as assynco
 
 # ── Clients singletons (réutilisés sur invocations warm) ──
@@ -400,6 +401,44 @@ def PALIM_search_dossiers(
                         metadata={"latency_ms": int((time.time() - t0) * 1000)})
         return {"ok": True, "inferred_scope": inferred, "copro_codes": codes,
                 "warnings": warnings, "results": results, "trace_ref": lf.trace_id(tr)}
+    finally:
+        lf.flush()
+
+
+@mcp.tool()
+def PALIM_get_visite_3d(query: str) -> dict:
+    """Renvoie les liens de visite 3D (jumeau numérique SmarterPlan) correspondant à une requête.
+
+    QUAND L'APPELER : dès que l'utilisateur veut visualiser une copropriété ou un
+    équipement en 3D, demande une « visite », un « jumeau numérique », ou mentionne
+    un mot-clé connu disposant d'un modèle 3D. À ce stade les mots-clés couverts
+    sont : LEMEAU (copropriété) et EXTINCTEUR (équipement). Passer le texte de la
+    demande utilisateur tel quel comme `query` ; le serveur fait le matching.
+    Si aucun lien ne correspond (matches vide), ne pas inventer d'URL.
+
+    Présentation : afficher chaque lien en markdown — [visite 3D ↗](url) — préfixé
+    de son libellé. Ne jamais modifier l'URL retournée.
+
+    Args:
+        query: Le texte de la demande utilisateur (ex: "montre-moi LEMEAU en 3D").
+
+    Returns:
+        {ok, n, matches[]} ; chaque match : {label, url}. n=0 si aucun mot-clé 3D.
+    """
+    t0 = time.time()
+    tr = lf.start_trace("PALIM_get_visite_3d", input={"query": query},
+                        tags=["mcp", "visite_3d"])
+    try:
+        try:
+            matches = _match_visites(query)
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_get_visite_3d", exc)
+        _log("PALIM_get_visite_3d", n=len(matches), latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"n_matches": len(matches)},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        return {"ok": True, "n": len(matches), "matches": matches}
     finally:
         lf.flush()
 

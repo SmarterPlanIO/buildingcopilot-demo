@@ -161,28 +161,6 @@ else:
         "Christophe": "palim-christophe-2026",
     }
 
-# Liens 3D démo
-DEMO_3D_LINKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "URL_SP_demo.txt")
-DEMO_3D_LINKS = {}
-try:
-    with open(DEMO_3D_LINKS_FILE, "r", encoding="utf-8-sig") as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if not _line or _line.startswith("#"):
-                continue
-            if " : " in _line:
-                _kw, _url = _line.split(" : ", 1)
-                _kw = _kw.strip().upper()
-                _url = _url.strip()
-                if _url:
-                    DEMO_3D_LINKS[_kw] = _url
-            elif _line.startswith("http"):
-                DEMO_3D_LINKS["Visualisez votre copropriété en 3D"] = _line
-except FileNotFoundError:
-    print(f"⚠️ Fichier 3D non trouvé : {DEMO_3D_LINKS_FILE}")
-except Exception as _e:
-    print(f"⚠️ Erreur lecture fichier 3D : {_e}")
-
 # =====================================================
 # Page config
 # =====================================================
@@ -669,7 +647,7 @@ def detect_strategy_haiku(query, prev_query=None):
         return None
 
 
-def detect_retrieval_strategy(query, demo_mode=False, prev_query=None):
+def detect_retrieval_strategy(query, prev_query=None):
     """
     v4 : détection via Haiku avec fallback.
     Retourne (chunks_per_source, doc_type_boost, max_chunks_llm, label, prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar).
@@ -687,25 +665,25 @@ def detect_retrieval_strategy(query, demo_mode=False, prev_query=None):
             _ayear = prefilter.get("annee") if prefilter else None
             if _ayear:
                 # Année unique → scope réduit
-                mcl = 40 if demo_mode else MAX_CHUNKS_LLM_BROAD
+                mcl = MAX_CHUNKS_LLM_BROAD
             elif _amin and _amax and (int(_amax) - int(_amin)) < 5:
                 # Plage fermée < 5 ans → scope réduit
-                mcl = 40 if demo_mode else MAX_CHUNKS_LLM_BROAD
+                mcl = MAX_CHUNKS_LLM_BROAD
             else:
                 # Sans borne, borne ouverte (depuis), ou >= 5 ans → cap élevé
-                mcl = 60 if demo_mode else MAX_CHUNKS_LLM_TEMPORAL
+                mcl = MAX_CHUNKS_LLM_TEMPORAL
             cps = 4
             print(f"[STRATEGY] inventaire mcl={mcl} prefilter={prefilter}")
             return cps, 0.03, mcl, "🔎 Inventaire", prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar
         elif strategie == "cible":
-            mcl = 30 if demo_mode else 50
+            mcl = 50
             return 8, 0.005, mcl, "🔬 Ciblé", prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar
         else:
-            mcl = 40 if demo_mode else 80
+            mcl = 80
             return 5, 0.01, mcl, "⚖️ Équilibré", prefilter, doc_type_hint, is_followup, expanded_query, diagramme, include_bordereau_ar
 
     # Fallback : mode équilibré sans pré-filtrage
-    mcl = 40 if demo_mode else 80
+    mcl = 80
     return 5, 0.01, mcl, "⚖️ Équilibré (fallback)", None, None, False, None, False, False
 
 
@@ -2383,15 +2361,6 @@ with st.sidebar:
         st.caption("Aucun dossier sélectionné")
 
     _ = st.markdown("---")
-    demo_mode = st.toggle("⚡ Mode Démo", value=False,
-                           help="Haiku 4.5 + streaming + chunks réduits. ~15-20s au lieu de ~90s.")
-    if demo_mode:
-        st.caption("⚡ Haiku 4.5 + streaming")
-        if DEMO_3D_LINKS:
-            st.caption(f"🏠 {len(DEMO_3D_LINKS)} lien(s) 3D actif(s)")
-        else:
-            st.caption("⚠️ Aucun lien 3D (fichier absent ou vide)")
-
     with st.expander("⚙️ Paramètres avancés"):
         auto_strategy = st.checkbox("Stratégie de retrieval automatique", value=True,
                                      help="Détecte auto inventaire/ciblé, ajuste chunks et boost.")
@@ -2556,7 +2525,6 @@ if user_input:
     DISPLAY_K_ACTUAL = display_k if 'display_k' in dir() else TOP_K_DISPLAY
     SIM_ACTUAL = sim_threshold if 'sim_threshold' in dir() else SIMILARITY_THRESHOLD
     _auto = auto_strategy if 'auto_strategy' in dir() else True
-    _demo = demo_mode if 'demo_mode' in dir() else False
 
     # ── Langfuse : début de trace ──
     _trace_start = _time.time()
@@ -2571,7 +2539,6 @@ if user_input:
                 input=user_input,
                 metadata={
                     "copro_filter": copro_filter,
-                    "demo_mode": _demo,
                 },
             )
             st.session_state["_current_trace_id"] = _trace.id
@@ -2622,7 +2589,7 @@ if user_input:
             _ana = run_analytical_route(
                 _ana_spec, copro_filter,
                 get_db_connection(), get_bedrock_client(),
-                LLM_MODEL_FAST if _demo else LLM_MODEL,
+                LLM_MODEL,
                 question=user_input,
             )
     if _ana and _ana.get("answer"):
@@ -2658,7 +2625,7 @@ if user_input:
     _include_bordereau_ar = False
     if _auto:
         CPS_ACTUAL, DTB_ACTUAL, MCL_ACTUAL, strategy_label, prefilter, doc_type_hint, was_expanded, expanded_query, _diagramme, _include_bordereau_ar = detect_retrieval_strategy(
-            user_input, demo_mode=_demo, prev_query=prev_query
+            user_input, prev_query=prev_query
         )
         query_for_retrieval = expanded_query if was_expanded and expanded_query else user_input
     else:
@@ -2672,8 +2639,8 @@ if user_input:
         query_for_retrieval = user_input
         _diagramme = False
 
-    active_model = LLM_MODEL_FAST if _demo else LLM_MODEL
-    model_label = "Haiku 4.5 ⚡" if _demo else "Sonnet 4.6"
+    active_model = LLM_MODEL
+    model_label = "Sonnet 4.6"
 
     # ── Fix B : enrichir la requête avec le dossier sélectionné ──
     _sel_dossier_id = st.session_state.get("selected_dossier")
@@ -2828,25 +2795,8 @@ if user_input:
 
             # Métadonnées compactes
             pf_tag = " · 📋 Pré-filtré" if prefilter_used else ""
-            _mcl_tag = f" · cap={MCL_ACTUAL}" if not _demo else ""
-            if _demo:
-                st.caption(f"⚡ {len(results)} extraits · {unique_sources} docs · {model_label}{pf_tag}")
-            else:
-                st.caption(f"{strategy_label} · {len(results)} chunks · {unique_sources} docs · {model_label}{pf_tag}{_mcl_tag}")
-
-            # Visite 3D (démo) — match uniquement sur le prompt utilisateur
-            if _demo and DEMO_3D_LINKS:
-                for kw, url in DEMO_3D_LINKS.items():
-                    if kw.lower() in user_input.lower():
-                        _ = st.markdown(
-                            f'<div style="background:linear-gradient(135deg,#1a365d,#2a4a7f);'
-                            f'padding:0.7rem 1.2rem;border-radius:10px;margin-bottom:0.5rem">'
-                            f'<span style="color:#e2e8f0"><strong>{kw}</strong> — </span>'
-                            f'<a href="{url}" target="_blank" '
-                            f'style="color:#63b3ed;text-decoration:underline;font-weight:600">'
-                            f'visite 3D ↗</a></div>',
-                            unsafe_allow_html=True,
-                        )
+            _mcl_tag = f" · cap={MCL_ACTUAL}"
+            st.caption(f"{strategy_label} · {len(results)} chunks · {unique_sources} docs · {model_label}{pf_tag}{_mcl_tag}")
 
             # Historique LLM (tours précédents, sans le dernier user qu'on vient d'ajouter)
             history_for_llm = st.session_state.chat_history[:-1]
@@ -2867,25 +2817,16 @@ if user_input:
                     pass
             _gen_start = _time.time()
 
-            # Génération
+            # Génération (streaming)
             _llm_usage = {}
-            if _demo:
-                answer_placeholder = st.empty()
-                answer, _llm_usage = generate_answer_stream(
-                    user_input, results, doc_type_hint,
-                    active_model, answer_placeholder, chat_history=history_for_llm,
-                    diagramme=_diagramme, dossier_strict_ids=_strict_chunk_ids,
-                )
-                answer_placeholder.empty()
-                _ = render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
-            else:
-                with st.spinner("🤖 Génération de la réponse…"):
-                    answer, _llm_usage = generate_answer(
-                        user_input, results, doc_type_hint,
-                        model_id=active_model, chat_history=history_for_llm,
-                        diagramme=_diagramme, dossier_strict_ids=_strict_chunk_ids,
-                    )
-                _ = render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
+            answer_placeholder = st.empty()
+            answer, _llm_usage = generate_answer_stream(
+                user_input, results, doc_type_hint,
+                active_model, answer_placeholder, chat_history=history_for_llm,
+                diagramme=_diagramme, dossier_strict_ids=_strict_chunk_ids,
+            )
+            answer_placeholder.empty()
+            _ = render_answer_segments(linkify_sources(answer, n_displayed, anchor_prefix=cur_apfx))
 
             # ── Langfuse : fin span generation ──
             if _gen_span:
@@ -2924,8 +2865,6 @@ if user_input:
                 try:
                     # Tags pour filtrage dans le dashboard
                     _tags = [strategy_label.split()[1] if " " in strategy_label else strategy_label]
-                    if _demo:
-                        _tags.append("demo")
                     if _sel_dossier_data:
                         _tags.append("dossier")
                     _trace.update(
