@@ -1,10 +1,11 @@
+import os
 import json, boto3, psycopg2
 
 DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
 DB_PORT = 5432
 DB_NAME = "postgres"
 DB_USER = "ragadmin"
-DB_PASSWORD = "SmarterRAG99!"
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 
 bedrock = boto3.client("bedrock-runtime", region_name="eu-west-1")
 conn = psycopg2.connect(host=DB_HOST, port=DB_PORT, dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD)

@@ -13,11 +13,11 @@ CHUNKS_FILE = os.path.join(BASE_DIR, "chunks_copro.jsonl")
 ENRICHED_FILE = os.path.join(BASE_DIR, "chunks_enrichis.jsonl")
 EMBEDDINGS_FILE = os.path.join(BASE_DIR, "chunks_avec_embeddings.jsonl")
 
-DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"  # ← MODIFIER
+DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
 DB_PORT = 5432
 DB_NAME = "postgres"
 DB_USER = "ragadmin"
-DB_PASSWORD = "SmarterRAG99!"  # ← MODIFIER
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 
 YEARS_MISSING = ["2016", "2021", "2022", "2023", "2024"]
 

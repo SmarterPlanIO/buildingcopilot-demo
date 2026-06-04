@@ -2,16 +2,17 @@
 Script utilitaire — Purge des doublons et diagnostic DB
 Lance : python purge_doublons.py
 """
+import os
 import psycopg2
 
 # =====================================================
 # CONFIGURATION
 # =====================================================
-DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"  # ← MODIFIER
+DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
 DB_PORT = 5432
 DB_NAME = "postgres"
 DB_USER = "ragadmin"
-DB_PASSWORD = "SmarterRAG99!"  # ← MODIFIER
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 
 conn = psycopg2.connect(host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
                         user=DB_USER, password=DB_PASSWORD)

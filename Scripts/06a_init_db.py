@@ -2,16 +2,17 @@
 ÉTAPE 6a — Initialisation de la base PostgreSQL avec pgvector
 Lance : python 06a_init_db.py
 """
+import os
 import psycopg2
 
 # =====================================================
 # CONFIGURATION — Remplace par tes valeurs
 # =====================================================
-DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"  # ← MODIFIER
+DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
 DB_PORT = 5432
 DB_NAME = "postgres"
 DB_USER = "ragadmin"
-DB_PASSWORD = "SmarterRAG99!"  # ← MODIFIER
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 
 # =====================================================
 # Connexion et initialisation

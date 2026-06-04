@@ -7,6 +7,7 @@ doublons, chunks sans embedding, etc.
 Usage :
   python diag_db_inventory.py [NOM_COPRO]
 """
+import os
 import sys
 import psycopg2
 from collections import Counter
@@ -15,7 +16,7 @@ DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
 DB_PORT = 5432
 DB_NAME = "postgres"
 DB_USER = "ragadmin"
-DB_PASSWORD = "SmarterRAG99!"
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 
 SEP = "=" * 70
 

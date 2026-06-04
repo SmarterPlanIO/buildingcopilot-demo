@@ -1,4 +1,5 @@
 """diagnostic_garbay_elhabr.py — Trace GARBAY et EL HABR dans le pipeline de ranking réel"""
+import os
 import json
 import boto3
 import psycopg2
@@ -10,7 +11,7 @@ DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
 DB_PORT = 5432
 DB_NAME = "postgres"
 DB_USER = "ragadmin"
-DB_PASSWORD = "SmarterRAG99!"
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 AWS_REGION = "eu-west-1"
 EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 

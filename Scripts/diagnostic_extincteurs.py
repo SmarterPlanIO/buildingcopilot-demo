@@ -2,6 +2,7 @@
 Diagnostic RAG — Recherche des chunks extincteurs
 Lance : python diagnostic_extincteurs.py
 """
+import os
 import psycopg2
 
 # =====================================================
@@ -11,7 +12,7 @@ DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
 DB_PORT = 5432
 DB_NAME = "postgres"
 DB_USER = "ragadmin"
-DB_PASSWORD = "SmarterRAG99!"
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 
 # =====================================================
 conn = psycopg2.connect(

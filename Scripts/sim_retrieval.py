@@ -14,6 +14,7 @@ Corrections simulées :
 Usage :
   python sim_retrieval.py "liste tous les sinistres de cette copro" "NOM_COPRO"
 """
+import os
 import json
 import sys
 import re
@@ -28,7 +29,7 @@ DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
 DB_PORT = 5432
 DB_NAME = "postgres"
 DB_USER = "ragadmin"
-DB_PASSWORD = "SmarterRAG99!"
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 AWS_REGION = "eu-west-1"
 EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 
