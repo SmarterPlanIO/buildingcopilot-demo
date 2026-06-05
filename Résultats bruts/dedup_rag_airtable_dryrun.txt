@@ -1,0 +1,51 @@
+DÉDOUBLONNAGE RAG ↔ AIRTABLE — DRY-RUN (rollback)
+Copros : 5033, 5354, 5390, 5427, 5480, 5499, 5548, 5553, 8030, 8050
+================================================================
+
+[5033] 31 dossiers avant → 2 fusion(s)
+  - RAG supprimé #5033_24_TORCY_SINISTRE_DDE_GROS_ALEXIS_2021 [lese=GROS ALEXIS | nom=SINISTRE_DDE GROS ALEXIS | date=2021-06-24 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_rec3858JDDeujugdX [lese=GROS | date=2021-06-24] via=name | champs copiés=['documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'expert_nom', 'assureur']
+  - RAG supprimé #5033_24_TORCY_SINISTRE_DDE_PASCALE_CARMO_2024 [lese=Pascale CARMO | nom=SINISTRE_DDE Pascale CARMO | date=∅ | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_recLGwEN35nkERmeC [lese=CARMO | date=2021-02-25] via=name | champs copiés=['documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'expert_nom', 'assureur']
+
+[5354] 20 dossiers avant → 0 fusion(s)
+
+[5390] 31 dossiers avant → 4 fusion(s)
+  - RAG supprimé #5390_2_6_BIS_HENRI_TARIEL_SINISTRE_DDE_DDE_BRESSON_DU_30_04_24_2024 [lese=BRESSON | nom=DDE BRESSON DU 30.04.24 | date=2024-04-30 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_recm54J2o3vVhD0eH [lese=BRESSON | date=2024-04-30] via=name | champs copiés=['documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'pieces_fournies', 'expert_nom', 'assureur', 'lese_lot']
+  - RAG supprimé #5390_2_6_BIS_HENRI_TARIEL_SINISTRE_DDE_DDE_MARROUNI_2024 [lese=MONSIEUR ALAMI MARROUNI | nom=DDE MARROUNI | date=2024-08-04 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_recNC2Sy30OZtZqFn [lese=MARROUNI | date=2024-08-04] via=name | champs copiés=['documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'expert_nom', 'assureur', 'lese_lot']
+  - RAG supprimé #5390_2_6_BIS_HENRI_TARIEL_SINISTRE_DDE_DDE_EL_HABR_2020 [lese=El Habr | nom=DDE EL HABR | date=2020-12-27 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_recGcNE2RJzasIX4F [lese=∅ | date=2020-12-27] via=date_type | champs copiés=['lese_nom', 'documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'expert_nom', 'assureur']
+  - RAG supprimé #5390_2_6_BIS_HENRI_TARIEL_SINISTRE_DDE_DDE_MARTIN_INANNA_2019 [lese=MARTIN INANNA | nom=DDE MARTIN INANNA | date=2019-06-24 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_recnDP7BelUs9b5Ol [lese=∅ | date=2019-06-24] via=date_type | champs copiés=['lese_nom', 'documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'expert_nom', 'assureur', 'lese_lot']
+
+[5427] 37 dossiers avant → 4 fusion(s)
+  - RAG supprimé #5427_33_VICTOR_CRESSON_SINISTRE_DDE_EMMANUELLE_DINH_THI_2024 [lese=Emmanuelle DINH Thi | nom=SINISTRE_DDE Emmanuelle DINH Thi | date=2024-01-22 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_recxXSNsb9NM3sdYS [lese=DINH THI | date=2024-01-22] via=name | champs copiés=['documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'expert_nom', 'assureur', 'lese_lot']
+  - RAG supprimé #5427_33_VICTOR_CRESSON_SINISTRE_DDE_DE_MOREL_2021 [lese=DE MOREL | nom=SINISTRE_DDE DE MOREL | date=2021-09-08 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_recekd0fxyCEaCcYI [lese=∅ | date=2021-09-08] via=date_type | champs copiés=['lese_nom', 'documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'pieces_fournies', 'assureur', 'lese_lot']
+  - RAG supprimé #5427_33_VICTOR_CRESSON_SINISTRE_DDE_SCI_VRILPSON_2019 [lese=SCI VRILPSON | nom=SINISTRE_DDE SCI VRILPSON | date=2019-10-17 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_recilbkpK9ZmxzTdk [lese=∅ | date=2019-10-17] via=date_type | champs copiés=['lese_nom', 'documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'pieces_fournies', 'assureur']
+  - RAG supprimé #5427_33_VICTOR_CRESSON_SINISTRE_DDE_OPTIC_CRESSIN_2023 [lese=optic cressin | nom=SINISTRE_DDE optic cressin | date=2023-08-14 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_recw6HD8kj7UMCAhx [lese=OPTIC CRESSON | date=2023-08-14] via=date_type | champs copiés=['documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'pieces_fournies', 'assureur']
+
+[5480] 37 dossiers avant → 1 fusion(s)
+  - RAG supprimé #5480_88_90_GR_GAL_EBOUE_SINISTRE_DDE_MADAME_CANU_ISABELLE_2022 [lese=MADAME CANU ISABELLE | nom=SINISTRE_DDE MADAME CANU ISABELLE | date=2022-02-15 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_rec6gHYc6naxD0ZxC [lese=∅ | date=2022-02-15] via=date_type | champs copiés=['lese_nom', 'documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'expert_nom', 'assureur']
+
+[5499] 6 dossiers avant → 0 fusion(s)
+
+[5548] 1 dossiers avant → 0 fusion(s)
+
+[5553] 0 dossiers avant → 0 fusion(s)
+
+[8030] 34 dossiers avant → 2 fusion(s)
+  - RAG supprimé #8030_21_PATAY_SINISTRE_DDE_ROUDAUT_CHRISTIAN_2024 [lese=ROUDAUT CHRISTIAN | nom=SINISTRE_DDE ROUDAUT CHRISTIAN | date=2024-04-15 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_recHb0EhtUSt2ZNTH [lese=ROUDAUT CHRISTIAN | date=2024-04-15] via=name | champs copiés=['documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'pieces_fournies', 'assureur', 'lese_lot']
+  - RAG supprimé #8030_21_PATAY_SINISTRE_DDE_SDC_21_R_DE_PATAY_2020 [lese=SDC 21 R DE PATAY | nom=SINISTRE_DDE SDC 21 R DE PATAY | date=2020-09-24 | type=SINISTRE_DDE | ref=∅]
+      → absorbé par Airtable #AT_rec0ORN2xHw4wtteZ [lese=∅ | date=2020-09-24] via=date_type | champs copiés=['lese_nom', 'documents_lies', 'resume_ia', 'etapes', 'pieces_requises', 'assureur']
+
+[8050] 131 dossiers avant → 0 fusion(s)
+
+TOTAL : 13 fusion(s) sur 10 copro(s).
