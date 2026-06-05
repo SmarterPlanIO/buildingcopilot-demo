@@ -353,6 +353,30 @@ cur.execute("CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated ON chat_sessio
 conn.commit()
 print("✅ Table chat_sessions créée (persistance conversations mobile)")
 
+# ── Table copro_synthese : fiche pré-calculée par copro (narratif Haiku + faits SQL) ──
+# Générée par 09_copro_synthese.py après 08_airtable_sync.py. Lue par le tool MCP
+# PALIM_copro_overview (lookup direct). nb_documents/dernier_pv_date = watermark de
+# fraîcheur : le tool compare au compte live pour flaguer une fiche périmée (stale).
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS copro_synthese (
+        code_ncg            TEXT PRIMARY KEY,
+        nom                 TEXT,
+        narratif            TEXT,            -- synthèse Haiku (derniers PV_AG + dossiers)
+        faits               JSONB DEFAULT '{}'::jsonb,  -- agrégats SQL (inventaire, dossiers)
+        nb_documents        INTEGER,         -- watermark RAG : compte docs à la génération
+        nb_chunks           INTEGER,
+        nb_dossiers         INTEGER,         -- total dossiers en DB (RAG + Airtable)
+        nb_sinistres_assynco INTEGER,        -- watermark Airtable : dossiers airtable-sourcés (post-08)
+        dernier_pv_date     DATE,            -- date du PV_AG le plus récent couvert
+        pv_sources          TEXT[] DEFAULT '{}',  -- source_file des PV_AG utilisés
+        model_used          TEXT,
+        cost_usd            NUMERIC,
+        generated_at        TIMESTAMP DEFAULT NOW()
+    );
+""")
+conn.commit()
+print("✅ Table copro_synthese créée (ou déjà existante)")
+
 cur.close()
 conn.close()
 print("\n✅ Base de données initialisée avec succès")

@@ -29,6 +29,7 @@ from PALIM_discovery import discover_copros
 from PALIM_copros import list_copros as _list_copros
 from PALIM_dossiers import search_dossiers as _search_dossiers
 from PALIM_visites import match_visites as _match_visites
+from PALIM_overview import get_overview as _get_overview
 import PALIM_assynco as assynco
 
 # ── Clients singletons (réutilisés sur invocations warm) ──
@@ -594,6 +595,72 @@ def PALIM_assynco_search_sinistres(code_ncg: str, query: str | None = None,
                         metadata={"latency_ms": int((time.time() - t0) * 1000)})
         return {"ok": True, "code_ncg": code, "n_results": len(sinistres),
                 "warnings": warnings, "sinistres": sinistres}
+    finally:
+        lf.flush()
+
+
+@mcp.tool()
+def PALIM_copro_overview(code_ncg: str) -> dict:
+    """Fiche synthèse d'une copropriété en un appel : narratif (PV d'AG + dossiers) + faits + assurance live.
+
+    Vue d'ensemble RAPIDE et HOLISTIQUE, à privilégier AVANT d'enchaîner des recherches :
+    narratif de situation (décisions d'AG récentes, dossiers en cours), inventaire
+    documentaire, et synthèse assurance Assynco LIVE.
+
+    Le narratif est pré-calculé (lookup direct, pas de génération à la volée). Le champ
+    `freshness.stale` signale une fiche périmée (nouveaux documents/PV, ou nouveaux
+    sinistres Assynco depuis la génération) : le narratif reste exploitable, mais le
+    signaler à l'utilisateur. Si la fiche n'est pas encore calculée, `precomputed=false` :
+    les faits et l'assurance restent fournis, sans narratif.
+
+    Pour le détail (passages sourcés, dossiers, polices), enchaîner sur PALIM_search_chunks,
+    PALIM_search_dossiers ou PALIM_assynco_list_polices.
+
+    Args:
+        code_ncg: Code NCG de la copropriété (ex: "5390"). Utiliser PALIM_list_copros pour le trouver.
+
+    Returns:
+        {ok, code_ncg, precomputed, nom, narratif, faits, assurance, freshness, generated_at}.
+        narratif=null si non pré-calculé ; assurance=null si Assynco indisponible/désactivé.
+    """
+    t0 = time.time()
+    codes = scope.normalize_copro_codes(code_ncg)
+    tr = lf.start_trace("PALIM_copro_overview", input={"code_ncg": code_ncg},
+                        tags=["mcp", "copro_overview"])
+    try:
+        if not codes:
+            err = {"ok": False, "error_type": "MISSING_COPRO_SCOPE",
+                   "message": "code_ncg requis (ex: '5390'). Utiliser PALIM_list_copros pour le trouver."}
+            lf.update_trace(tr, output=err, metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return err
+        code = codes[0]
+
+        # Synthèse assurance LIVE (best-effort). Sert aussi de watermark sinistres Airtable
+        # pour détecter un incident déclaré entre deux runs du pipeline.
+        assurance, assynco_nb_sin = None, None
+        if cfg.ENABLE_ASSYNCO:
+            try:
+                assurance = assynco.get_copro(code)
+                if assurance:
+                    assynco_nb_sin = assurance.get("nb_sinistres")
+            except Exception:
+                assurance = None  # fail-open : la fiche reste utile sans l'assurance
+
+        try:
+            res = _get_overview(get_conn(), code, assynco_nb_sinistres=assynco_nb_sin)
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_copro_overview", exc)
+
+        res["assurance"] = assurance
+        fresh = res.get("freshness", {})
+        _log("PALIM_copro_overview", code_ncg=code, precomputed=res.get("precomputed"),
+             stale=fresh.get("stale"), latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"precomputed": res.get("precomputed"),
+                                    "stale": fresh.get("stale"), "reasons": fresh.get("reasons")},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        return res
     finally:
         lf.flush()
 
