@@ -45,6 +45,7 @@ MAX_CHUNKS_CAP = 30
 MAX_RESULTS_CAP = 50
 MAX_CHARS_CAP = 50000
 GET_FULL_DOC_DEFAULT_CHARS = 20000
+GET_CHUNKS_CAP = 20          # rappel de passages par id (sourçage), anti-aspiration
 
 # ── Découverte documentaire ──
 DISCOVERY_TOP_K = 10

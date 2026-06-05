@@ -24,7 +24,7 @@ import PALIM_config as cfg
 import PALIM_scope as scope
 import PALIM_tracing as lf
 from PALIM_db import get_conn
-from PALIM_retrieval import hybrid_search
+from PALIM_retrieval import hybrid_search, get_chunks_by_id as _get_chunks_by_id
 from PALIM_discovery import discover_copros
 from PALIM_copros import list_copros as _list_copros
 from PALIM_dossiers import search_dossiers as _search_dossiers
@@ -142,6 +142,8 @@ def PALIM_search_chunks(
 
     Returns:
         {ok, inferred_scope, copro_codes, query_used, filters_applied, warnings, results[]}.
+        Chaque result porte un objet `citation` (chunk_id, doc, doc_type, date, copro,
+        source_file, chunk_index, snippet) destiné au sourçage à la demande (cf. PALIM_get_chunks).
     """
     t0 = time.time()
     codes = scope.normalize_copro_codes(copro_codes)
@@ -357,6 +359,59 @@ def PALIM_get_full_document(
         return {"ok": True, "source_file": sf, "metadata": meta, "text": out_text,
                 "truncated": truncated, "max_chars": max_chars,
                 "total_chars_available": total, "chunks_returned": included}
+    finally:
+        lf.flush()
+
+
+@mcp.tool()
+def PALIM_get_chunks(chunk_ids: list[str], reason: str | None = None) -> dict:
+    """Rematérialise le TEXTE EXACT de passages déjà identifiés, par identifiant, pour justifier/afficher les sources d'une réponse DÉJÀ rédigée.
+
+    QUAND L'APPELER (seul cas d'usage) : quand l'utilisateur demande à voir ou vérifier les
+    sources d'arguments que tu as DÉJÀ avancés, et que le texte de ces passages n'est plus
+    disponible dans la conversation. Les chunk_ids doivent provenir de résultats de
+    PALIM_search_chunks obtenus plus tôt dans le MÊME fil (champ citation.chunk_id).
+
+    QUAND NE PAS L'APPELER :
+    - Jamais pour RÉPONDRE à une nouvelle question ou un nouvel aspect → PALIM_search_chunks scopé.
+    - Jamais pour « recharger du contexte » et composer une réponse plus riche : ce tool ne
+      remplace ni le fil de la conversation ni le raisonnement déjà fait. Il EXPOSE une
+      provenance, il ne produit aucun argument neuf.
+    - Jamais avec des identifiants inventés ou devinés.
+
+    Ce n'est PAS un outil de recherche : pas de requête, pas de classement, pas de scope à
+    fournir. Lookup déterministe, plafonné (anti-aspiration).
+
+    Args:
+        chunk_ids: Identifiants exacts (citation.chunk_id issus d'une recherche antérieure). Plafonné serveur.
+        reason: Raison de la demande (traçabilité, optionnel).
+
+    Returns:
+        {ok, n, chunks[], not_found[]} ; chaque chunk : chunk_id, doc, doc_type, date, copro,
+        code_ncg, source_file, chunk_index, text. not_found = ids sans correspondance.
+    """
+    t0 = time.time()
+    tr = lf.start_trace("PALIM_get_chunks",
+                        input={"n_ids": len(chunk_ids or []), "reason": reason},
+                        tags=["mcp", "get_chunks"])
+    try:
+        ids = [str(c).strip() for c in (chunk_ids or []) if str(c).strip()][:cfg.GET_CHUNKS_CAP]
+        if not ids:
+            res = {"ok": False, "error_type": "EMPTY_IDS",
+                   "message": "Fournir au moins un chunk_id issu d'une recherche antérieure."}
+            lf.update_trace(tr, output=res, metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return res
+        try:
+            chunks, not_found = _get_chunks_by_id(get_conn(), ids)
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_get_chunks", exc)
+        _log("PALIM_get_chunks", n_requested=len(ids), n_found=len(chunks),
+             n_not_found=len(not_found), latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"n_found": len(chunks), "n_not_found": len(not_found)},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        return {"ok": True, "n": len(chunks), "chunks": chunks, "not_found": not_found}
     finally:
         lf.flush()
 

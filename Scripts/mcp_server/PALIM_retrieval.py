@@ -19,7 +19,7 @@ import PALIM_tracing as lf
 
 # Index des colonnes du SELECT final (ordre figé ci-dessous)
 _C_CHUNK_ID, _C_CODE_NCG, _C_COPRO, _C_SRC, _C_FILE, _C_DOCTYPE, \
-    _C_TEXT, _C_CHUNK_IDX, _C_VEC, _C_BM25, _C_RRF, _C_RESCAT = range(12)
+    _C_TEXT, _C_CHUNK_IDX, _C_VEC, _C_BM25, _C_RRF, _C_RESCAT, _C_DATE = range(13)
 
 # Rerank Cohere : réutilise rerank_rows de l'app (source unique de vérité pour
 # l'appel Cohere + le score hybride RRF×Cohere). Même pattern d'import que
@@ -119,6 +119,29 @@ def _balance_by_copro(rows, copro_codes, max_chunks):
     return picked[:max_chunks]
 
 
+def _clean_snippet(text, n=240):
+    """Extrait verbatim court (espaces normalisés) pour pré-remplir une citation."""
+    s = " ".join((text or "").split())
+    return s[:n] + ("…" if len(s) > n else "")
+
+
+def _citation(r):
+    """Handle de citation prêt à afficher (cf. Bloc 8bis des Project Instructions).
+    chunk_id = ancre stable pour le rappel par identifiant (PALIM_get_chunks)."""
+    date = r[_C_DATE]
+    return {
+        "chunk_id": r[_C_CHUNK_ID],
+        "doc": r[_C_FILE],
+        "doc_type": r[_C_DOCTYPE],
+        "date": str(date) if date else None,
+        "copro": r[_C_COPRO],
+        "code_ncg": r[_C_CODE_NCG],
+        "source_file": r[_C_SRC],
+        "chunk_index": r[_C_CHUNK_IDX],
+        "snippet": _clean_snippet(r[_C_TEXT]),
+    }
+
+
 def _row_to_dict(r, rank):
     return {
         "chunk_id": r[_C_CHUNK_ID],
@@ -133,6 +156,7 @@ def _row_to_dict(r, rank):
         "vec_similarity": round(float(r[_C_VEC]), 4),
         "bm25_score": round(float(r[_C_BM25]), 4),
         "source_rank": rank,
+        "citation": _citation(r),
     }
 
 
@@ -192,6 +216,7 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
             WITH base AS (
                 SELECT c.chunk_id, c.code_ncg, c.copropriete, c.source_file, c.nom_fichier,
                        c.doc_type, c.text, c.chunk_index, c.resolution_category,
+                       d.date_document,
                        COALESCE(d.groupe_doc, c.source_file) AS groupe_doc,
                        1 - (c.embedding <=> %s::vector) AS vec_similarity,
                        ts_rank(c.text_search, plainto_tsquery('french', %s), 32) AS bm25_score,
@@ -219,7 +244,8 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
                 FROM with_rrf
             )
             SELECT chunk_id, code_ncg, copropriete, source_file, nom_fichier, doc_type,
-                   text, chunk_index, vec_similarity, bm25_score, rrf_score, resolution_category
+                   text, chunk_index, vec_similarity, bm25_score, rrf_score, resolution_category,
+                   date_document
             FROM diversified
             WHERE rank_in_source <= %s AND vec_similarity >= %s
             ORDER BY rrf_score DESC
@@ -293,3 +319,41 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
             top.sort(key=lambda r: r[_C_RRF], reverse=True)
 
     return [_row_to_dict(r, i + 1) for i, r in enumerate(top)]
+
+
+def get_chunks_by_id(conn, chunk_ids):
+    """Lookup déterministe de chunks par identifiant (justification de sources déjà citées).
+
+    Pas de recherche, pas de ranking, pas de scope : on rematérialise le texte exact de
+    passages déjà retournés par une recherche antérieure (cf. Bloc 8bis). Retourne
+    (chunks, not_found) ; chunks dans l'ordre des ids demandés, not_found = ids absents.
+    """
+    ids, seen = [], set()
+    for c in (chunk_ids or []):
+        s = str(c).strip()
+        if s and s not in seen:
+            seen.add(s)
+            ids.append(s)
+    if not ids:
+        return [], []
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT c.chunk_id, c.code_ncg, c.copropriete, c.source_file, c.nom_fichier,
+                   c.doc_type, c.text, c.chunk_index, d.date_document
+            FROM chunks c
+            LEFT JOIN documents d ON c.source_file = d.source_file
+            WHERE c.chunk_id = ANY(%s)
+        """, (ids,))
+        rows = cur.fetchall()
+    found = {}
+    for r in rows:
+        date = r[8]
+        found[r[0]] = {
+            "chunk_id": r[0], "code_ncg": r[1], "copro": r[2],
+            "source_file": r[3], "doc": r[4], "doc_type": r[5],
+            "chunk_index": r[7], "date": str(date) if date else None,
+            "text": r[6],
+        }
+    ordered = [found[i] for i in ids if i in found]
+    not_found = [i for i in ids if i not in found]
+    return ordered, not_found
