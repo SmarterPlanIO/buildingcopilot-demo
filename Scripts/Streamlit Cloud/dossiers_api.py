@@ -183,6 +183,71 @@ def search_dossiers_for_query(conn, query: str, copropriete: Optional[Union[str,
         return []
 
 
+def list_dossiers_for_copro(conn, copropriete, query: str = None, max_results: int = 50) -> Tuple[List[Dict], int]:
+    """Énumère les dossiers d'une/des copro(s) scopée(s), classés par pertinence.
+
+    Pensée pour l'ÉNUMÉRATION (lister les sinistres d'une copro), à l'inverse de
+    search_dossiers_for_query qui est une recherche mots-clés (ET strict) pour la
+    découverte cross-copro. Ici on part de TOUS les dossiers de la copro (comme
+    get_dossiers en sidebar Streamlit), puis on applique les tokens de query comme
+    simple score de tri : un dossier sans match reste listé, juste classé après.
+    Donc jamais de faux négatif "aucun sinistre" sur une requête multi-mots.
+
+    Args:
+        conn: Connexion psycopg2 active.
+        copropriete: code_ncg (str) ou liste de codes. Requis (sinon ([], 0)).
+        query: Texte optionnel pour le ranking (peut être vide).
+        max_results: Plafond de lignes retournées.
+
+    Returns:
+        (rows, total) : rows = list[dict] complets triés (pertinence, statut, date),
+        tronqués à max_results ; total = nb total de dossiers des copros AVANT troncature.
+    """
+    _pred, _pparams = _code_ncg_predicate(copropriete, "code_ncg")
+    if not _pred:
+        return [], 0
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM dossiers WHERE {_pred}", _pparams)
+            total = cur.fetchone()[0]
+
+            # Score = refs A/I (poids 3) + noms propres (poids 2) + tokens NL (poids 1).
+            # Aucun filtre sur le score : on classe, on n'exclut pas.
+            score_terms, score_params = [], []
+            q = query or ""
+            for ref in re.findall(r'\b[AI]\d{5,}[A-Z]*\b', q, re.IGNORECASE):
+                score_terms.append(
+                    "(CASE WHEN (nom_dossier ILIKE %s OR ref_cie ILIKE %s "
+                    "OR ref_assynco ILIKE %s OR ref_sinistre_client ILIKE %s) THEN 3 ELSE 0 END)"
+                )
+                rp = f"%{ref}%"
+                score_params.extend([rp, rp, rp, rp])
+            for name in re.findall(r'\b[A-Z][a-zéèêëàâùûôîïç]{2,}\b', q):
+                score_terms.append("(CASE WHEN (lese_nom ILIKE %s OR nom_dossier ILIKE %s) THEN 2 ELSE 0 END)")
+                np = f"%{name}%"
+                score_params.extend([np, np])
+            for tok in _nl_tokens(q):
+                score_terms.append(f"(CASE WHEN {_DOSSIER_HAYSTACK_SQL} ILIKE %s THEN 1 ELSE 0 END)")
+                score_params.append(f"%{tok}%")
+            score_sql = " + ".join(score_terms) if score_terms else "0"
+
+            params = list(score_params) + list(_pparams) + [max_results]
+            cur.execute(f"""
+                SELECT *, ({score_sql}) AS _score
+                FROM dossiers
+                WHERE {_pred}
+                ORDER BY _score DESC,
+                    CASE statut WHEN 'EN_ATTENTE' THEN 1 WHEN 'EN_COURS' THEN 2 ELSE 3 END,
+                    date_ouverture DESC NULLS LAST
+                LIMIT %s
+            """, params)
+            cols = [desc[0] for desc in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            return rows, total
+    except Exception:
+        return [], 0
+
+
 # ──────────────────────────────────────────────────────────────
 # CONSTRUCTION DU CHUNK VIRTUEL RAG
 # ──────────────────────────────────────────────────────────────

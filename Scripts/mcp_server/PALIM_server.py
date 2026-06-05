@@ -374,8 +374,9 @@ def PALIM_search_dossiers(
         max_results: Nombre max de dossiers (plafonné à 50).
 
     Returns:
-        {ok, inferred_scope, copro_codes, warnings, results[]} ; chaque dossier :
-        dossier_id, code_ncg, copropriete, type, statut, lese, montant, source.
+        {ok, inferred_scope, copro_codes, n_returned, n_total, warnings, results[]} ;
+        n_total = nb total de dossiers du périmètre (avant troncature à max_results) ;
+        chaque dossier : dossier_id, code_ncg, copropriete, type, statut, lese, montant, source.
     """
     t0 = time.time()
     codes = scope.normalize_copro_codes(copro_codes)
@@ -389,17 +390,24 @@ def PALIM_search_dossiers(
         if inferred == "global":
             warnings.append("Recherche dossiers sans copro : résultats candidats, à confirmer par scope.")
         try:
-            results = _search_dossiers(get_conn(), query, copro_codes=codes, max_results=max_results)
+            results, n_total = _search_dossiers(get_conn(), query, copro_codes=codes, max_results=max_results)
         except Exception as exc:
             lf.update_trace(tr, output={"error_type": "INTERNAL"},
                             metadata={"latency_ms": int((time.time() - t0) * 1000)})
             return _internal_error("PALIM_search_dossiers", exc)
+        if n_total > len(results):
+            warnings.append(
+                f"{n_total} dossiers au total pour ce périmètre ; {len(results)} retournés "
+                f"(plafond max_results={max_results}). Relancer avec un max_results plus élevé "
+                f"pour la liste complète."
+            )
         _log("PALIM_search_dossiers", inferred_scope=inferred, copro_codes=codes,
-             n_results=len(results), latency_ms=int((time.time() - t0) * 1000))
-        lf.update_trace(tr, output={"n_results": len(results), "inferred_scope": inferred,
-                                    "warnings": warnings},
+             n_results=len(results), n_total=n_total, latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"n_results": len(results), "n_total": n_total,
+                                    "inferred_scope": inferred, "warnings": warnings},
                         metadata={"latency_ms": int((time.time() - t0) * 1000)})
         return {"ok": True, "inferred_scope": inferred, "copro_codes": codes,
+                "n_returned": len(results), "n_total": n_total,
                 "warnings": warnings, "results": results, "trace_ref": lf.trace_id(tr)}
     finally:
         lf.flush()

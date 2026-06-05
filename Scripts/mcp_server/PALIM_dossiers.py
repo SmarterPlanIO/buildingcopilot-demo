@@ -14,9 +14,15 @@ if _SC_DIR not in sys.path:
     sys.path.insert(0, _SC_DIR)
 
 try:
-    from dossiers_api import search_dossiers_for_query as _search_raw
+    from dossiers_api import (
+        search_dossiers_for_query as _search_raw,
+        list_dossiers_for_copro as _list_scoped,
+    )
 except Exception:  # packaging Lambda : dossiers_api vendorisé dans le même dossier
-    from dossiers_api_vendored import search_dossiers_for_query as _search_raw  # type: ignore
+    from dossiers_api_vendored import (  # type: ignore
+        search_dossiers_for_query as _search_raw,
+        list_dossiers_for_copro as _list_scoped,
+    )
 
 
 def _project(d):
@@ -35,21 +41,19 @@ def _project(d):
 
 def search_dossiers(conn, query, copro_codes=None, max_results=20):
     """
-    copro_codes vide/None -> découverte (toutes copros, plafonné).
-    1 code -> single. >=2 -> multi équilibré.
-    Retourne une liste de dicts projetés.
+    copro_codes vide/None -> découverte (toutes copros, recherche mots-clés, plafonné).
+    Sinon -> énumération scopée : TOUS les dossiers des copros, rankés par query
+    (pas d'exclusion sur les mots-clés -> jamais de faux négatif).
+
+    Retourne (results, n_total) : results = liste de dicts projetés (<= max_results) ;
+    n_total = nb total de dossiers des copros AVANT troncature (== len(results) en
+    mode découverte, où le total exact n'est pas calculé).
     """
     codes = [c for c in (copro_codes or []) if c]
     if not codes:
         rows = _search_raw(conn, query, None)
-        return [_project(d) for d in rows[:max_results]]
+        out = [_project(d) for d in rows[:max_results]]
+        return out, len(out)
 
-    per_copro = max(1, max_results // len(codes))
-    out, seen = [], set()
-    for code in codes:
-        for d in _search_raw(conn, query, code)[:per_copro]:
-            did = d.get("dossier_id")
-            if did and did not in seen:
-                seen.add(did)
-                out.append(_project(d))
-    return out[:max_results]
+    rows, total = _list_scoped(conn, codes, query=query, max_results=max_results)
+    return [_project(d) for d in rows], total
