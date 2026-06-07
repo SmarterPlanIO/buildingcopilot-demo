@@ -96,10 +96,11 @@ aws lambda update-function-code \
 aws lambda wait function-updated --function-name palim-mcp --region eu-west-1
 ```
 
-Verifier que la Lambda pointe bien sur v7 :
+Verifier que la Lambda pointe bien sur v7 (NB : c'est get-function, pas
+get-function-configuration : le bloc Code n'est pas dans la config) :
 
 ```bash
-aws lambda get-function-configuration --function-name palim-mcp \
+aws lambda get-function --function-name palim-mcp \
   --region eu-west-1 --query 'Code.ImageUri' --output text
 ```
 
