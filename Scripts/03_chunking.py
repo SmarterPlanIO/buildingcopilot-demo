@@ -1237,7 +1237,11 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
         
         # Écrire chaque chunk avec ses métadonnées
         for i, chunk_text in enumerate(chunks):
-            chunk_id = hashlib.md5(f"{doc['source_file']}_{i}".encode()).hexdigest()[:12]
+            # chunk_id CONTENT-ADDRESSED (Option A) : le texte entre dans le hash.
+            # Chunk inchangé -> meme id (05 saute le re-embedding) ; chunk modifie ->
+            # nouvel id (05 re-embedde, 06b --copro remplace l'ancien). C'est ce qui
+            # propage le U (modification de doc) jusqu'aux embeddings et au RAG.
+            chunk_id = hashlib.md5(f"{doc['source_file']}_{i}_{chunk_text}".encode()).hexdigest()[:12]
             
             # Classification résolution PV_AG (Phase 1a)
             res_cat = classify_resolution_category(chunk_text, doc_type, i)

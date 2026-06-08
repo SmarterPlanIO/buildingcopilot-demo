@@ -126,17 +126,31 @@ stats = {
 # =====================================================
 # CHECKPOINT : reprise après interruption
 # =====================================================
+def sig_for(rel_path):
+    """Signature de contenu bon marche (taille:mtime_ns) du fichier source de rel_path.
+    Change si le doc est modifie (meme nom) -> declenche la re-extraction (U du CRUD)."""
+    try:
+        st = os.stat(os.path.join(FILTERED_DIR, rel_path))
+        return f"{st.st_size}:{st.st_mtime_ns}"
+    except OSError:
+        return None
+
 def load_checkpoint():
-    completed = set()
-    # 1. Charger depuis le JSON statique au cas où
+    """Retourne {rel_path: signature}. signature=None => extraction d'avant le suivi
+    par signature : baseline adoptee au prochain passage SANS re-extraire."""
+    sigs = {}
+    # 1. Charger le checkpoint (nouveau format {sigs:{...}} ou ancien {completed:[...]})
     if os.path.exists(CHECKPOINT_FILE):
         try:
             with open(CHECKPOINT_FILE, "r") as f:
-                completed.update(json.load(f).get("completed", []))
-        except:
+                data = json.load(f)
+            if isinstance(data.get("sigs"), dict):
+                sigs.update(data["sigs"])               # nouveau format {rel_path: sig}
+            for rp in data.get("completed", []):         # ancien format (liste) -> sig inconnue
+                sigs.setdefault(rp, None)
+        except Exception:
             pass
-            
-    # 2. Scanner le dossier d'output pour voir ce qui est VRAIMENT fait
+    # 2. Scanner l'output pour ce qui est VRAIMENT fait (JSON present, sig inconnue)
     if os.path.exists(OUTPUT_DIR):
         for root, dirs, files in os.walk(OUTPUT_DIR):
             for file in files:
@@ -144,12 +158,12 @@ def load_checkpoint():
                     rel_json_path = os.path.relpath(os.path.join(root, file), OUTPUT_DIR)
                     rel_source_path = rel_json_path[:-5] # enlever '.json'
                     if rel_source_path != "extraction_checkpoint":
-                        completed.add(rel_source_path)
-    return completed
+                        sigs.setdefault(rel_source_path, None)
+    return sigs
 
-def save_checkpoint(completed_set):
+def save_checkpoint(sigs):
     with open(CHECKPOINT_FILE, "w") as f:
-        json.dump({"completed": list(completed_set)}, f)
+        json.dump({"sigs": sigs}, f)
 
 completed_files = load_checkpoint()
 if completed_files:
@@ -339,16 +353,39 @@ def triage_files():
             rel_path = os.path.relpath(filepath, FILTERED_DIR)
             ext = Path(fname).suffix.lower()
 
-            # Au lieu de se fier uniquement au checkpoint, on vérifie si le JSON final existe
+            # Skip sensible au CONTENU (U du CRUD) : on saute seulement si le JSON
+            # existe ET la signature du fichier source est inchangee. Signature
+            # differente = modification sur place -> re-extraction.
             output_json_path = os.path.join(OUTPUT_DIR, rel_path + ".json")
-            if os.path.exists(output_json_path):
+            json_exists = os.path.exists(output_json_path)
+            cur_sig = sig_for(rel_path)
+            if json_exists and rel_path in completed_files:
+                prev_sig = completed_files[rel_path]
+                if prev_sig is None:
+                    # Migration : JSON present, sig inconnue -> adopter le contenu actuel
+                    # comme baseline, sans re-extraire (pas de re-OCR du corpus existant).
+                    completed_files[rel_path] = cur_sig
+                    stats["skipped_checkpoint"] += 1
+                    continue
+                if prev_sig == cur_sig:
+                    stats["skipped_checkpoint"] += 1
+                    continue
+                # Signature differente -> MODIFICATION -> re-extraire (purge l'ancien JSON).
+                log.info(f"Modif detectee, re-extraction : {rel_path}")
+                try:
+                    os.remove(output_json_path)
+                except OSError:
+                    pass
+                completed_files.pop(rel_path, None)
+            elif json_exists:
+                # JSON present mais inconnu du checkpoint -> adopter baseline, skip.
+                completed_files[rel_path] = cur_sig
                 stats["skipped_checkpoint"] += 1
-                completed_files.add(rel_path)
                 continue
-            else:
-                if rel_path in completed_files:
-                    log.info(f"Fichier cible manquant, re-traitement forcé : {rel_path}")
-                    completed_files.remove(rel_path)
+            elif rel_path in completed_files:
+                # JSON manquant mais dans le checkpoint -> re-traitement force.
+                log.info(f"Fichier cible manquant, re-traitement force : {rel_path}")
+                completed_files.pop(rel_path, None)
 
             if ext in DIRECT_EXT_MAP:
                 direct_files.append((filepath, rel_path, ext, DIRECT_EXT_MAP[ext]))
@@ -378,7 +415,7 @@ def run_direct_extraction(direct_files):
 
         if save_extracted(rel_path, ext, text, OUTPUT_DIR):
             stats[etype] += 1
-            completed_files.add(rel_path)
+            completed_files[rel_path] = sig_for(rel_path)
         else:
             if not text or len(text.strip()) < 20:
                 pass  # déjà compté dans save_extracted
@@ -707,7 +744,7 @@ def main():
     for rel_path, (text, ext) in sync_results.items():
         if save_extracted(rel_path, ext, text, OUTPUT_DIR):
             stats["image_ocr"] += 1
-            completed_files.add(rel_path)
+            completed_files[rel_path] = sig_for(rel_path)
     save_checkpoint(completed_files)
 
     # ── Phase 4 : Polling async ──
@@ -719,7 +756,7 @@ def main():
                     stats["pdf_ocr"] += 1
                 else:
                     stats["image_ocr"] += 1
-                completed_files.add(rel_path)
+                completed_files[rel_path] = sig_for(rel_path)
         stats["erreurs"] += len(poll_failed) + len(launch_failed)
         save_checkpoint(completed_files)
 
