@@ -181,6 +181,8 @@ cur.execute("""
         responsable_lot     TEXT,
         expert_nom          TEXT,
         assureur            TEXT,
+        num_sinistre        TEXT,
+        num_police          TEXT,
         etapes              JSONB DEFAULT '[]'::jsonb,
         pieces_requises     TEXT[] DEFAULT '{}',
         pieces_fournies     TEXT[] DEFAULT '{}',
@@ -194,6 +196,11 @@ cur.execute("""
 """)
 conn.commit()
 print("✅ Table dossiers créée (ou déjà existante)")
+
+# A2 : références extraites du RAG (05c) — idempotent pour table existante
+for _col in ("num_sinistre", "num_police"):
+    cur.execute(f"ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS {_col} TEXT;")
+conn.commit()
 
 cur.execute("CREATE INDEX IF NOT EXISTS idx_dossiers_copro ON dossiers (copropriete);")
 cur.execute("CREATE INDEX IF NOT EXISTS idx_dossiers_type ON dossiers (type_dossier);")

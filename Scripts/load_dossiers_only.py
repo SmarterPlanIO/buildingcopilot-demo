@@ -89,6 +89,8 @@ with open(DOSSIERS_FILE, "r", encoding="utf-8") as f:
             clean(rec.get("responsable_lot") or ""),
             clean(rec.get("expert_nom") or ""),
             clean(rec.get("assureur") or ""),
+            clean(rec.get("num_sinistre") or ""),
+            clean(rec.get("num_police") or ""),
             json.dumps(rec.get("etapes", []), ensure_ascii=False),
             rec.get("pieces_requises", []),
             rec.get("pieces_fournies", []),
@@ -106,12 +108,14 @@ if dossier_batch:
         (dossier_id, copropriete, type_dossier, nom_dossier, statut,
          date_ouverture, date_cloture,
          lese_nom, lese_lot, responsable_nom, responsable_lot,
-         expert_nom, assureur,
+         expert_nom, assureur, num_sinistre, num_police,
          etapes, pieces_requises, pieces_fournies,
          montant_estime, montant_reel, documents_lies, resume_ia, code_ncg)
         VALUES %s
         ON CONFLICT (dossier_id) DO UPDATE SET
             statut = EXCLUDED.statut,
+            num_sinistre = EXCLUDED.num_sinistre,
+            num_police = EXCLUDED.num_police,
             etapes = EXCLUDED.etapes,
             pieces_fournies = EXCLUDED.pieces_fournies,
             montant_estime = EXCLUDED.montant_estime,
