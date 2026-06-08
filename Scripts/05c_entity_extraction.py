@@ -13,6 +13,7 @@ Cout estime : ~100 documents x $0.0001 = ~$0.02
 import os
 import json
 import re
+import argparse
 import boto3
 import time
 import threading
@@ -22,18 +23,33 @@ from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
+import pipeline_config as pcfg
+
 # =====================================================
 # CONFIGURATION
 # =====================================================
-INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings_sq.jsonl"
-OUTPUT_DOSSIERS = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\dossiers.jsonl"
-OUTPUT_CHUNKS = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings_sq.jsonl"
 AWS_REGION = "eu-west-1"
-
 HAIKU_MODEL = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
-
 MAX_WORKERS = 10
 MAX_RETRIES = 3
+
+# Mode per-copro (--copro <code>) : lit/ecrit dans per_copro/<code>/ (shard, RAM
+# ~constante via streaming). Sans --copro : mode legacy (monolithe global, retro-
+# compatible). parse_known_args -> import-safe (pas d'erreur si importe).
+_parser = argparse.ArgumentParser(description="Extraction entites sinistre + dossiers d'une copropriete.")
+_parser.add_argument("--copro", help="Code NCG (ex: 8050). Absent = mode legacy global.")
+_args, _ = _parser.parse_known_args()
+
+if _args.copro:
+    _p = pcfg.paths_for(_args.copro)
+    _p["per_copro"].mkdir(parents=True, exist_ok=True)
+    INPUT_FILE = str(_p["embeddings_sq_jsonl"])
+    OUTPUT_DOSSIERS = str(_p["dossiers_jsonl"])
+    print(f"📌 Mode per-copro : {_args.copro} ({_p['folder_name']})")
+else:
+    _RESULTS = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts"
+    INPUT_FILE = os.path.join(_RESULTS, "chunks_avec_embeddings_sq.jsonl")
+    OUTPUT_DOSSIERS = os.path.join(_RESULTS, "dossiers.jsonl")
 
 # =====================================================
 # Workflow template SINISTRE_DDE
@@ -320,21 +336,22 @@ if __name__ == "__main__":
     print("EXTRACTION D'ENTITES SINISTRE (Module Dossiers)")
     print("=" * 50)
 
-    # Charger tous les chunks
-    print(f"\nChargement de {INPUT_FILE}...")
-    all_chunks = []
+    # Streaming : on ne retient QUE les chunks SINISTRE (RAM ~constante, ne charge
+    # jamais tout le corpus en memoire). Les autres chunks sont lus puis jetes.
+    if not os.path.exists(INPUT_FILE):
+        print(f"❌ Fichier introuvable : {INPUT_FILE}")
+        exit(1)
+    print(f"\nLecture en streaming de {INPUT_FILE}...")
+    sinistre_docs = defaultdict(list)
+    n_chunks = 0
     with open(INPUT_FILE, "r", encoding="utf-8") as f:
         for line in f:
-            all_chunks.append(json.loads(line))
-    print(f"  {len(all_chunks)} chunks charges")
+            chunk = json.loads(line)
+            n_chunks += 1
+            if chunk.get("doc_type") == "SINISTRE":
+                sinistre_docs[chunk["source_file"]].append(chunk)
 
-    # Grouper les chunks SINISTRE par source_file
-    sinistre_docs = defaultdict(list)
-    for chunk in all_chunks:
-        if chunk.get("doc_type") == "SINISTRE":
-            sinistre_docs[chunk["source_file"]].append(chunk)
-
-    print(f"  {len(sinistre_docs)} documents SINISTRE trouves")
+    print(f"  {n_chunks} chunks lus, {len(sinistre_docs)} documents SINISTRE trouves")
 
     if not sinistre_docs:
         print("Aucun document sinistre. Rien a extraire.")
@@ -390,7 +407,6 @@ if __name__ == "__main__":
 
     # Construire les dossiers
     dossiers = []
-    chunk_to_dossier = {}  # chunk_id -> dossier_id
     type_audit = []  # dossiers tombes en AUTRE par egalite stricte (a inspecter au run)
 
     for (copro, lese_slug), docs_entities in dossier_groups.items():
@@ -528,10 +544,6 @@ if __name__ == "__main__":
         }
         dossiers.append(dossier)
 
-        # Mapper les chunks au dossier
-        for cid in all_chunk_ids:
-            chunk_to_dossier[cid] = dossier_id
-
     # Ecrire dossiers.jsonl
     print(f"\nEcriture de {OUTPUT_DOSSIERS}...")
     with open(OUTPUT_DOSSIERS, "w", encoding="utf-8") as f:
@@ -548,30 +560,10 @@ if __name__ == "__main__":
     else:
         print("\n  ✓ Aucun type ambigu (egalite stricte) detecte")
 
-    # Enrichir les chunks avec dossier_id et reecrire le fichier
-    enriched_count = 0
-    print(f"\nEnrichissement des chunks avec dossier_id...")
-    enriched_chunks = []
-    for chunk in all_chunks:
-        cid = chunk.get("chunk_id")
-        if cid in chunk_to_dossier:
-            chunk["dossier_id"] = chunk_to_dossier[cid]
-            enriched_count += 1
-        enriched_chunks.append(chunk)
-
-    print(f"  {enriched_count} chunks enrichis avec dossier_id")
-
-    # Reecrire le fichier chunks de facon ATOMIQUE : on ecrit un temp dans le meme
-    # dossier puis os.replace. L'original (3.9 Go) reste intact tant que le temp
-    # n'est pas complet -> pas de corruption si interruption en cours d'ecriture.
-    print(f"Ecriture de {OUTPUT_CHUNKS}...")
-    _tmp_chunks = OUTPUT_CHUNKS + ".tmp"
-    with open(_tmp_chunks, "w", encoding="utf-8") as f:
-        for chunk in enriched_chunks:
-            f.write(json.dumps(chunk, ensure_ascii=False, default=str) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(_tmp_chunks, OUTPUT_CHUNKS)
+    # NB : on ne reecrit PLUS le fichier chunks. Le champ dossier_id sur les chunks
+    # est donnee morte en aval (aucun retrieval ne le lit) ; l'eviter supprime une
+    # reecriture de ~145 Mo/copro (et du monolithe 3,9 Go en legacy), gain disque/IO
+    # cle du scale. Cf. PLAN_SCALE_150_COPROS.md.
 
     # Resume
     print("\n" + "=" * 50)
@@ -586,6 +578,5 @@ if __name__ == "__main__":
               f"{pieces_ok}/{pieces_total} pieces | "
               f"{len(d['documents_lies'])} docs")
 
-    print(f"\nTotal : {len(dossiers)} dossiers, {enriched_count} chunks lies")
-    print(f"Fichiers : {OUTPUT_DOSSIERS}")
-    print(f"           {OUTPUT_CHUNKS}")
+    print(f"\nTotal : {len(dossiers)} dossiers")
+    print(f"Fichier : {OUTPUT_DOSSIERS}")
