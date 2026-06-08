@@ -18,6 +18,7 @@ import boto3
 import time
 import threading
 import unicodedata
+import hashlib
 from collections import defaultdict, Counter
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -43,7 +44,10 @@ _args, _ = _parser.parse_known_args()
 if _args.copro:
     _p = pcfg.paths_for(_args.copro)
     _p["per_copro"].mkdir(parents=True, exist_ok=True)
-    INPUT_FILE = str(_p["embeddings_sq_jsonl"])
+    # On lit chunks.jsonl (sortie de 03 : texte + doc_type, SANS embeddings) et non le
+    # shard SQ : 05c n'a besoin que du texte/doc_type, ça divise l'I/O par ~12 (96 Mo
+    # vs 1,2 Go). Les chunk_id/doc_type y sont identiques au shard (même pipeline).
+    INPUT_FILE = str(_p["chunks_jsonl"])
     OUTPUT_DOSSIERS = str(_p["dossiers_jsonl"])
     print(f"📌 Mode per-copro : {_args.copro} ({_p['folder_name']})")
 else:
@@ -357,39 +361,76 @@ if __name__ == "__main__":
         print("Aucun document sinistre. Rien a extraire.")
         exit(0)
 
-    # Preparer les taches d'extraction (1 par document, pas par chunk)
+    # Preparer les taches d'extraction (1 par document, pas par chunk).
+    # cache_key = hash(texte + filename + folder) -> content-addressed : un doc au
+    # texte inchange donne la meme cle (cache hit, pas de Haiku) ; un doc modifie
+    # donne une nouvelle cle (re-extraction). Gere create + update incrementaux.
     tasks = []
     for source_file, chunks in sinistre_docs.items():
-        # Concatener les textes des chunks (premiers 3000 chars)
         full_text = "\n---\n".join(c["text"] for c in sorted(chunks, key=lambda x: x.get("chunk_index", 0)))
         filename = chunks[0].get("nom_fichier", os.path.basename(source_file))
-        # A1 : dossier parent depuis le chemin (detection corrigee + skip categories)
-        folder_name = extract_dossier_folder(source_file)
-        tasks.append((source_file, full_text, filename, folder_name, [c["chunk_id"] for c in chunks]))
+        folder_name = extract_dossier_folder(source_file)  # A1
+        cache_key = hashlib.md5(
+            (full_text + "||" + filename + "||" + (folder_name or "")).encode("utf-8")
+        ).hexdigest()
+        tasks.append((source_file, full_text, filename, folder_name,
+                      [c["chunk_id"] for c in chunks], cache_key))
 
-    print(f"  {len(tasks)} documents a traiter")
-    print(f"  Cout estime : ~${len(tasks) * 0.0001:.4f}")
+    # Cache d'extraction cross-run (content-addressed), calque sur metadata_cache de 04.
+    CACHE_FILE = os.path.join(os.path.dirname(OUTPUT_DOSSIERS), "entity_cache.json")
+    entity_cache = {}
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as fc:
+                entity_cache = json.load(fc)
+        except Exception:
+            entity_cache = {}
+    print(f"  {len(tasks)} documents a traiter ; cache d'extraction : {len(entity_cache)} entrees")
 
-    # Extraction parallele
     extraction_results = {}  # source_file -> dict entites
+    hits = 0
+    misses = []
+    for source_file, text, filename, folder, chunk_ids, key in tasks:
+        cached = entity_cache.get(key)
+        if cached is not None:
+            ent = dict(cached)  # sortie Haiku brute mise en cache
+            ent["_source_file"] = source_file
+            ent["_chunk_ids"] = chunk_ids
+            ent["_folder_name"] = folder
+            extraction_results[source_file] = ent
+            hits += 1
+        else:
+            misses.append((source_file, text, filename, folder, chunk_ids, key))
 
-    print(f"\nExtraction en cours ({MAX_WORKERS} workers)...")
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {}
-        for source_file, text, filename, folder, chunk_ids in tasks:
-            future = executor.submit(extract_entities, text, filename, folder)
-            futures[future] = (source_file, chunk_ids, folder)
+    print(f"  {hits} cache hits, {len(misses)} a extraire via Haiku (~${len(misses) * 0.0001:.4f})")
+    if misses:
+        print(f"\nExtraction en cours ({MAX_WORKERS} workers)...")
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {}
+            for source_file, text, filename, folder, chunk_ids, key in misses:
+                future = executor.submit(extract_entities, text, filename, folder)
+                futures[future] = (source_file, chunk_ids, folder, key)
 
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Extraction entites"):
-            source_file, chunk_ids, folder = futures[future]
-            entities = future.result()
-            if entities:
-                entities["_source_file"] = source_file
-                entities["_chunk_ids"] = chunk_ids
-                entities["_folder_name"] = folder
-                extraction_results[source_file] = entities
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Extraction entites"):
+                source_file, chunk_ids, folder, key = futures[future]
+                entities = future.result()
+                if entities:
+                    entity_cache[key] = dict(entities)  # stocker la sortie Haiku brute
+                    entities["_source_file"] = source_file
+                    entities["_chunk_ids"] = chunk_ids
+                    entities["_folder_name"] = folder
+                    extraction_results[source_file] = entities
 
-    print(f"\n  {len(extraction_results)} documents extraits avec succes")
+    # Sauver le cache (pruning : on ne garde que les cles des docs courants -> les
+    # entrees de docs supprimes/changes disparaissent). Ecriture atomique.
+    current_keys = {t[5] for t in tasks}
+    entity_cache = {k: v for k, v in entity_cache.items() if k in current_keys}
+    _tmp_cache = CACHE_FILE + ".tmp"
+    with open(_tmp_cache, "w", encoding="utf-8") as fc:
+        json.dump(entity_cache, fc, ensure_ascii=False)
+    os.replace(_tmp_cache, CACHE_FILE)
+
+    print(f"\n  {len(extraction_results)} documents extraits ({hits} cache, {len(misses)} Haiku)")
 
     # Grouper par dossier — utiliser le folder_name (sous-dossier SINISTRE) comme cle primaire
     # car il est stable (ex: "DDE MARROUNI") alors que le lese_nom extrait par Haiku varie
