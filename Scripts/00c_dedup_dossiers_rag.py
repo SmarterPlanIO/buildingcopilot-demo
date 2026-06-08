@@ -36,6 +36,8 @@ import unicodedata
 from collections import defaultdict
 from datetime import date
 
+import pipeline_config as pcfg
+
 BASE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts"
 INPUT_FILE = os.path.join(BASE, "dossiers.jsonl")
 OUTPUT_FILE = os.path.join(BASE, "dossiers_dedup.jsonl")
@@ -206,12 +208,26 @@ def merge_cluster(recs):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--copro", default="8050", help="Code copro détaillé dans le rapport")
+    ap.add_argument("--copro", default=None,
+                    help="Code copro -> mode per-copro : dédup EN PLACE du shard "
+                         "per_copro/<code>/dossiers.jsonl (le driver enchaîne sur 06b qui le lit). "
+                         "Absent = mode global (dossiers.jsonl -> dossiers_dedup.jsonl).")
     args = ap.parse_args()
+
+    if args.copro:
+        _p = pcfg.paths_for(args.copro)
+        in_file = str(_p["dossiers_jsonl"])
+        out_file = in_file  # dédup EN PLACE (atomique) : 06b --copro lira ce fichier
+        report_file = str(_p["per_copro"] / "dossiers_dedup_report.txt")
+        focus_code = args.copro
+        print(f"📌 Mode per-copro : {args.copro} (dédup en place de {in_file})")
+    else:
+        in_file, out_file, report_file = INPUT_FILE, OUTPUT_FILE, REPORT_FILE
+        focus_code = "8050"  # focus rapport par défaut (mode global)
 
     by_copro = defaultdict(list)
     total_in = 0
-    with open(INPUT_FILE, encoding="utf-8") as f:
+    with open(in_file, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -236,7 +252,7 @@ def main():
         for idx in clusters:
             members = [recs[i] for i in idx]
             merged = merge_cluster(members)
-            if code == args.copro and len(members) > 1:
+            if code == focus_code and len(members) > 1:
                 names = " + ".join(f"{m.get('lese_nom') or '?'}[{m.get('type_dossier','')[:12]}/"
                                    f"{m.get('date_ouverture') or '?'}/lot {m.get('lese_lot') or '-'}]"
                                    for m in members)
@@ -247,24 +263,31 @@ def main():
                 merged.pop(k, None)
             out_records.append(merged)
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    # Ecriture atomique (temp + os.replace) : permet le dédup EN PLACE en per-copro
+    # sans risque de corruption si interruption (l'original reste tant que le .tmp
+    # n'est pas complet).
+    _tmp = out_file + ".tmp"
+    with open(_tmp, "w", encoding="utf-8") as f:
         for rec in out_records:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(_tmp, out_file)
 
     report.append(f"DÉDUP DOSSIERS RAG — {total_in} dossiers en entrée -> {len(out_records)} en sortie "
                   f"({total_in - len(out_records)} fusionnés)\n")
     report.append("Copros impactées (avant -> après) :")
     for code, b, a in sorted(per_copro_stats, key=lambda x: x[1] - x[2], reverse=True):
         report.append(f"  {code:8} {b:4} -> {a:4}  (-{b - a})")
-    foc = [r for r in out_records if copro_code(r) == args.copro]
-    report.append(f"\n=== FOCUS COPRO {args.copro} : {len(foc)} dossiers après dédup ===")
+    foc = [r for r in out_records if copro_code(r) == focus_code]
+    report.append(f"\n=== FOCUS COPRO {focus_code} : {len(foc)} dossiers après dédup ===")
     report.extend(focus_lines or ["  (aucune fusion)"])
 
     text = "\n".join(report)
-    with open(REPORT_FILE, "w", encoding="utf-8") as f:
+    with open(report_file, "w", encoding="utf-8") as f:
         f.write(text + "\n")
     print(text)
-    print(f"\n-> {OUTPUT_FILE}\n-> {REPORT_FILE}")
+    print(f"\n-> {out_file}\n-> {report_file}")
 
 
 if __name__ == "__main__":

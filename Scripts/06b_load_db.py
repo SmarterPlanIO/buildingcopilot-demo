@@ -5,15 +5,31 @@ Lance : python 06b_load_db.py
 import json
 import os
 import re
+import argparse
 from datetime import date as dt_date
 import psycopg2
 from psycopg2.extras import execute_values
 from tqdm import tqdm
 
+import pipeline_config as pcfg
+
 # =====================================================
 # CONFIGURATION
 # =====================================================
-INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings_sq.jsonl"  # Phase 1a : fichier enrichi avec questions synthétiques
+# Mode per-copro (--copro) : lit le shard per_copro/<code>/ et fait un UPSERT
+# (DELETE WHERE code_ncg + INSERT) au lieu d'un TRUNCATE global -> scale + incremental.
+# parse_known_args = import-safe. Sans --copro : mode legacy (monolithe + TRUNCATE).
+_parser = argparse.ArgumentParser(description="Chargement DB chunks/documents/dossiers.")
+_parser.add_argument("--copro", help="Code NCG (ex: 8050). Absent = legacy global (TRUNCATE).")
+_args, _ = _parser.parse_known_args()
+COPRO = _args.copro
+
+if COPRO:
+    INPUT_FILE = str(pcfg.paths_for(COPRO)["embeddings_sq_jsonl"])
+    print(f"📌 Mode per-copro : {COPRO} — upsert (DELETE+INSERT par copro)")
+else:
+    INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings_sq.jsonl"  # Phase 1a : fichier enrichi avec questions synthétiques
+    print("📌 Mode legacy : monolithe global (TRUNCATE complet)")
 DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"  # ← MODIFIER
 DB_PORT = 5432
 DB_NAME = "postgres"
@@ -42,12 +58,22 @@ print(f"{total} chunks à charger dans PostgreSQL\n")
 # =====================================================
 # Chargement par batch
 # =====================================================
-print("⏳ Vidage des tables avant rechargement...")
-cur.execute("TRUNCATE TABLE chunks;")
-print("✅ Table chunks vidée")
-cur.execute("TRUNCATE TABLE documents;")
-conn.commit()
-print("✅ Table documents vidée")
+if COPRO:
+    print(f"⏳ Purge des lignes de la copro {COPRO} avant reload (upsert)...")
+    cur.execute("DELETE FROM chunks WHERE code_ncg = %s", (COPRO,))
+    print(f"✅ chunks {COPRO} purgés ({cur.rowcount})")
+    cur.execute("DELETE FROM documents WHERE code_ncg = %s", (COPRO,))
+    print(f"✅ documents {COPRO} purgés ({cur.rowcount})")
+    conn.commit()
+    # NB : les chunks/dossiers virtuels Airtable de cette copro sont aussi supprimés
+    # -> relancer 08_airtable_sync pour cette copro APRÈS 06b (gere par le driver).
+else:
+    print("⏳ Vidage GLOBAL des tables avant rechargement...")
+    cur.execute("TRUNCATE TABLE chunks;")
+    print("✅ Table chunks vidée")
+    cur.execute("TRUNCATE TABLE documents;")
+    conn.commit()
+    print("✅ Table documents vidée")
 
 batch = []
 loaded = 0
@@ -305,6 +331,13 @@ DOSSIERS_FILE = os.path.join(os.path.dirname(INPUT_FILE), "dossiers.jsonl")
 
 if os.path.exists(DOSSIERS_FILE):
     print(f"\nChargement des dossiers depuis {DOSSIERS_FILE}...")
+    if COPRO:
+        # Upsert : retirer d'abord les dossiers RAG de cette copro (PAS les dossiers
+        # Airtable, geres par 08) pour eviter les dossiers fantomes apres un
+        # re-groupage qui change les dossier_id.
+        cur.execute("DELETE FROM dossiers WHERE code_ncg = %s AND airtable_record_id IS NULL", (COPRO,))
+        print(f"  ✅ {cur.rowcount} dossiers RAG de {COPRO} purgés avant reload")
+        conn.commit()
     dossier_batch = []
     with open(DOSSIERS_FILE, "r", encoding="utf-8") as f:
         for line in f:
