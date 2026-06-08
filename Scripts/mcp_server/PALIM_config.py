@@ -77,6 +77,13 @@ AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
 AIRTABLE_PAT_SECRET_ARN = os.environ.get("AIRTABLE_PAT_SECRET_ARN", "")
 ASSYNCO_MAX_RECORDS_CAP = int(os.environ.get("ASSYNCO_MAX_RECORDS_CAP", "50"))
 ASSYNCO_HTTP_TIMEOUT = int(os.environ.get("ASSYNCO_HTTP_TIMEOUT", "15"))
+# Isolation tenant : la base Airtable est multi-syndic (base du courtier). Les
+# tools n'autorisent QUE les copros dont le champ `Syndic` correspond à une entité
+# NCG. Libellés (champ primaire Organisation) des entités NCG, séparés par virgule.
+# Fail-safe : si vidé, on retombe sur la liste par défaut (jamais sur un filtre ouvert).
+_DEFAULT_SYNDIC_NCG = "NCG IMMOBILIER,NCG GE,IMMOEXPRESS"
+ASSYNCO_SYNDIC_NCG = (os.environ.get("ASSYNCO_SYNDIC_NCG", _DEFAULT_SYNDIC_NCG).strip()
+                      or _DEFAULT_SYNDIC_NCG)
 
 # ── MCP ──
 MCP_URL_SLUG = os.environ.get("MCP_URL_SLUG", "mcp")  # slug secret en prod

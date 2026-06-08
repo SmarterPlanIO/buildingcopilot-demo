@@ -285,19 +285,41 @@ def _project_sinistre(rec, id_to_name):
 # ──────────────────────────────────────────────────────────────
 # Résolution copro (hub)
 # ──────────────────────────────────────────────────────────────
+def _ncg_syndic_clause():
+    """Sous-formule Airtable n'autorisant que les copros d'une entité NCG.
+
+    La base Assynco est multi-syndic ; sans ce filtre, un code d'un autre syndic
+    résoudrait et fuiterait ses données (cf. audit isolation tenant). Match substring
+    tolérant sur le champ lié `Syndic` (ARRAYJOIN → noms primaires Organisation),
+    insensible à la multi-valeur. Retourne None si aucun libellé configuré (jamais le
+    cas : cfg.ASSYNCO_SYNDIC_NCG est fail-safe sur une valeur par défaut non vide).
+    """
+    labels = [s.strip() for s in cfg.ASSYNCO_SYNDIC_NCG.split(",") if s.strip()]
+    if not labels:
+        return None
+    terms = ['FIND("' + lbl + '", ARRAYJOIN({Syndic}))' for lbl in labels]
+    return "OR(" + ",".join(terms) + ")"
+
+
 def _get_copro_record(code_ncg):
-    """Record Copropriété brut pour un code NCG, ou None.
+    """Record Copropriété brut pour un code NCG **appartenant à NCG**, ou None.
 
     Le code NCG vit dans le champ `Ref client` de la table Copropriétés (le `Nom`
     est l'adresse/nom d'immeuble). `code_ncg` est validé numérique → pas d'injection.
+    Le record n'est retourné que si son `Syndic` est une entité NCG (isolation tenant) :
+    une copro d'un autre syndic, ou un code en collision, renvoie None — indistinguable
+    d'un code inexistant côté tool (pas d'oracle d'énumération).
     NB : quelques codes matchent >1 record (ex. 5548, doublon Assynco) ; on retient
     le premier.
     """
     code = str(code_ncg).strip()
     if not code.isdigit():
         return None
+    ref_clause = '{Ref client}="' + code + '"'
+    ncg_clause = _ncg_syndic_clause()
+    formula = ref_clause if not ncg_clause else "AND(" + ref_clause + ", " + ncg_clause + ")"
     recs = _airtable_list(cfg.ASSYNCO_TABLE_COPRO,
-                          formula='{Ref client}="' + code + '"',
+                          formula=formula,
                           fields=_COPRO_FIELDS, max_records=1)
     return recs[0] if recs else None
 
