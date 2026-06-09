@@ -48,11 +48,13 @@ if _args.copro:
     _paths["per_copro"].mkdir(parents=True, exist_ok=True)
     OUTPUT_FILE = str(_paths["chunks_jsonl"])
     DOC_TYPE_CACHE_FILE = str(_paths["per_copro"] / "doc_type_cache.json")
+    RES_FORMAT_CACHE_FILE = str(_paths["per_copro"] / "resolution_format_cache.json")
     print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
 else:
     EXTRACTED_DIR = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Extraites"
     OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"
     DOC_TYPE_CACHE_FILE = os.path.join(os.path.dirname(OUTPUT_FILE), "doc_type_cache.json")
+    RES_FORMAT_CACHE_FILE = os.path.join(os.path.dirname(OUTPUT_FILE), "resolution_format_cache.json")
 
 # Taille cible des chunks (en caractères)
 CHUNK_TARGET_SIZE = 1500    # ~375 tokens français
@@ -480,10 +482,51 @@ def chunk_by_articles(text):
 
 _haiku_pattern_stats = {"calls": 0, "success": 0, "fail": 0}
 
+# Cache PERSISTANT du decoupage de resolutions PV_AG (content-addressed). Haiku
+# genere une separator_regex a la volee = output non deterministe -> meme PV
+# pourrait se decouper differemment d'un run a l'autre -> chunk_id instables.
+# On memorise le decoupage par md5(texte) : un PV inchange ressort toujours avec
+# les memes coupes (0 appel Haiku) ; un PV modifie change de cle -> re-decoupage.
+# Valeur = liste de chunks ([] = aucun format exploitable trouve, evite de
+# re-appeler Haiku sur un echec connu).
+_RES_FORMAT_CACHE = {}
+_RES_FORMAT_SEEN = set()
+
+
+def _load_res_format_cache():
+    global _RES_FORMAT_CACHE
+    if os.path.exists(RES_FORMAT_CACHE_FILE):
+        try:
+            with open(RES_FORMAT_CACHE_FILE, "r", encoding="utf-8") as _f:
+                _RES_FORMAT_CACHE = json.load(_f)
+        except Exception:
+            _RES_FORMAT_CACHE = {}
+
+
+def _save_res_format_cache():
+    # Elague aux cles vues ce run -> les docs disparus/modifies sortent du cache.
+    pruned = {k: v for k, v in _RES_FORMAT_CACHE.items() if k in _RES_FORMAT_SEEN}
+    try:
+        with open(RES_FORMAT_CACHE_FILE, "w", encoding="utf-8") as _f:
+            json.dump(pruned, _f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _rf_store(key, val):
+    _RES_FORMAT_CACHE[key] = val
+    return val
+
+
 def _detect_resolution_format_haiku(text):
     """Appelle Haiku pour identifier le format de numérotation des résolutions d'un PV d'AG.
-    Retourne une liste de chunks si réussi, [] sinon."""
-    
+    Retourne une liste de chunks si réussi, [] sinon. Résultat caché par md5(texte)."""
+
+    _key = hashlib.md5(text.encode("utf-8")).hexdigest()
+    _RES_FORMAT_SEEN.add(_key)
+    if _key in _RES_FORMAT_CACHE:
+        return list(_RES_FORMAT_CACHE[_key])
+
     # Envoyer les premiers ~3000 chars — suffisant pour voir le format
     sample = text[:3000]
     
@@ -534,19 +577,19 @@ Texte :
         
         if not result.get("format") or not result.get("separator_regex"):
             _haiku_pattern_stats["fail"] += 1
-            return []
-        
+            return _rf_store(_key, [])
+
         # Tester le regex retourné par Haiku
         haiku_regex = result["separator_regex"]
         parts = re.split(haiku_regex, text, flags=re.IGNORECASE | re.MULTILINE)
         meaningful = [p.strip() for p in parts if p and len(p.strip()) >= 30]
-        
+
         if len(meaningful) >= 3:
             _haiku_pattern_stats["success"] += 1
-            return meaningful
+            return _rf_store(_key, meaningful)
         else:
             _haiku_pattern_stats["fail"] += 1
-            return []
+            return _rf_store(_key, [])
     
     except (json.JSONDecodeError, re.error) as e:
         _haiku_pattern_stats["calls"] += 1
@@ -1202,6 +1245,7 @@ print(f"  ✅ {_dedup_stats['duplicates_found']} doublons éliminés sur {_dedup
 total_chunks = 0
 doc_type_stats = {}
 
+_load_res_format_cache()
 with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
     for json_path in tqdm(json_files, desc="Chunking"):
         with open(json_path, "r", encoding="utf-8") as f:
@@ -1282,12 +1326,19 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
             continue
         
         # Écrire chaque chunk avec ses métadonnées
+        # chunk_id CONTENT-ADDRESSED, INDÉPENDANT DE LA POSITION : ne dépend que de
+        # (source_file, texte du chunk). Éditer une phrase dans un chunk ne change
+        # que SON id ; les autres chunks du même doc gardent le leur (id stable sous
+        # édition locale, ne re-embedde que le chunk touché). L'index i n'entre PAS
+        # dans le hash. Deux chunks au texte identique dans le même doc sont
+        # désambiguïsés par un compteur d'occurrence déterministe (ordre d'apparition).
+        _dup_seen = {}
         for i, chunk_text in enumerate(chunks):
-            # chunk_id CONTENT-ADDRESSED (Option A) : le texte entre dans le hash.
-            # Chunk inchangé -> meme id (05 saute le re-embedding) ; chunk modifie ->
-            # nouvel id (05 re-embedde, 06b --copro remplace l'ancien). C'est ce qui
-            # propage le U (modification de doc) jusqu'aux embeddings et au RAG.
-            chunk_id = hashlib.md5(f"{doc['source_file']}_{i}_{chunk_text}".encode()).hexdigest()[:12]
+            _base = f"{doc['source_file']}||{chunk_text}"
+            _occ = _dup_seen.get(_base, 0)
+            _dup_seen[_base] = _occ + 1
+            _id_key = _base if _occ == 0 else f"{_base}#{_occ}"
+            chunk_id = hashlib.md5(_id_key.encode()).hexdigest()[:12]
             
             # Classification résolution PV_AG (Phase 1a)
             res_cat = classify_resolution_category(chunk_text, doc_type, i)
@@ -1309,6 +1360,8 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
             
             out.write(json.dumps(chunk_record, ensure_ascii=False) + "\n")
             total_chunks += 1
+
+_save_res_format_cache()
 
 # =====================================================
 # Rapport
