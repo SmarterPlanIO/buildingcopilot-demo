@@ -47,10 +47,12 @@ if _args.copro:
     EXTRACTED_DIR = str(_paths["extracted"])
     _paths["per_copro"].mkdir(parents=True, exist_ok=True)
     OUTPUT_FILE = str(_paths["chunks_jsonl"])
+    DOC_TYPE_CACHE_FILE = str(_paths["per_copro"] / "doc_type_cache.json")
     print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
 else:
     EXTRACTED_DIR = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Extraites"
     OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"
+    DOC_TYPE_CACHE_FILE = os.path.join(os.path.dirname(OUTPUT_FILE), "doc_type_cache.json")
 
 # Taille cible des chunks (en caractères)
 CHUNK_TARGET_SIZE = 1500    # ~375 tokens français
@@ -1059,27 +1061,71 @@ Extrait (début et fin du document) :
         return source_file, "PV_AG", "verify"
     
     MAX_CLASSIFY_WORKERS = 10
-    print(f"⏳ Haiku parallèle ({MAX_CLASSIFY_WORKERS} workers) : {len(files_needing_llm)} classifications + {len(files_needing_verify)} vérifications PV_AG...")
-    
+
+    # Cache de classification PERSISTANT (deterministe cross-run). Un doc au contenu
+    # inchange reutilise son doc_type precedent au lieu d'un nouvel appel Haiku (non
+    # deterministe) -> meme doc_type -> meme chunking -> memes chunk_id d'un run a
+    # l'autre. Cle = hash(source_file + contenu classifie). Content-addressed : un doc
+    # modifie change de cle -> re-classification.
+    _persist_cache = {}
+    if os.path.exists(DOC_TYPE_CACHE_FILE):
+        try:
+            with open(DOC_TYPE_CACHE_FILE, "r", encoding="utf-8") as _f:
+                _persist_cache = json.load(_f)
+        except Exception:
+            _persist_cache = {}
+
+    def _ck(sf, content):
+        return hashlib.md5((sf + "||" + (content or "")).encode("utf-8")).hexdigest()
+
+    # Separer les hits (repris du cache, pas de Haiku) des miss (a classifier).
+    _miss_classify, _miss_verify, _seen_keys, _cache_hits = [], [], set(), 0
+    for sf, excerpt in files_needing_llm:
+        k = _ck(sf, excerpt); _seen_keys.add(k)
+        if k in _persist_cache:
+            _doc_type_llm_cache[sf] = _persist_cache[k]; _cache_hits += 1
+        else:
+            _miss_classify.append((sf, excerpt, k))
+    for sf, excerpt in files_needing_verify:
+        k = _ck(sf, excerpt); _seen_keys.add(k)
+        if k in _persist_cache:
+            _doc_type_llm_cache[sf] = _persist_cache[k]; _cache_hits += 1
+        else:
+            _miss_verify.append((sf, excerpt, k))
+
+    print(f"⏳ Haiku pré-scan ({MAX_CLASSIFY_WORKERS} workers) : {_cache_hits} repris du cache, "
+          f"{len(_miss_classify)} classifications + {len(_miss_verify)} vérifications à faire...")
+
+    _key_by_sf = {}
     with ThreadPoolExecutor(max_workers=MAX_CLASSIFY_WORKERS) as executor:
         futures = {}
-        for sf, excerpt in files_needing_llm:
-            futures[executor.submit(_classify_one, sf, excerpt)] = sf
-        for sf, excerpt in files_needing_verify:
-            futures[executor.submit(_verify_pvag, sf, excerpt)] = sf
-        
+        for sf, excerpt, k in _miss_classify:
+            futures[executor.submit(_classify_one, sf, excerpt)] = sf; _key_by_sf[sf] = k
+        for sf, excerpt, k in _miss_verify:
+            futures[executor.submit(_verify_pvag, sf, excerpt)] = sf; _key_by_sf[sf] = k
+
         for future in tqdm(as_completed(futures), total=len(futures), desc="Haiku pré-scan"):
             sf, doc_type, task_type = future.result()
             with _classify_lock:
                 _doc_type_llm_cache[sf] = doc_type
+                _persist_cache[_key_by_sf[sf]] = doc_type
                 if task_type == "classify":
                     _llm_stats["calls"] += 1
                 else:
                     _verify_stats["verified"] += 1
                     if doc_type != "PV_AG":
                         _verify_stats["reclassified"] += 1
-    
-    print(f"  ✅ {len(files_needing_llm)} classifications + {_verify_stats['verified']} vérifications terminées")
+
+    # Sauvegarde du cache (elague aux cles vues ce run -> les docs disparus sortent).
+    _persist_cache = {k: v for k, v in _persist_cache.items() if k in _seen_keys}
+    try:
+        with open(DOC_TYPE_CACHE_FILE, "w", encoding="utf-8") as _f:
+            json.dump(_persist_cache, _f, ensure_ascii=False)
+    except Exception:
+        pass
+
+    print(f"  ✅ {len(_miss_classify)} classifications + {_verify_stats['verified']} vérifications terminées "
+          f"({_cache_hits} repris du cache)")
     if _verify_stats["reclassified"] > 0:
         reclassed = [(sf, _doc_type_llm_cache[sf]) for sf, _ in files_needing_verify if _doc_type_llm_cache.get(sf) != "PV_AG"]
         print(f"  🔄 {_verify_stats['reclassified']} PV_AG reclassifiés :")
