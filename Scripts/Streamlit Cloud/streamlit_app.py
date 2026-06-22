@@ -1547,6 +1547,21 @@ def linkify_sources(text, max_source_num, anchor_prefix=""):
         expand_source_range, linkified
     )
 
+    # Step 2bis: Normaliser le format [N] / [N, M, P] (dérive LLM) → "Source N" / "Source N, Source M, …"
+    # Garde-fou : ne transforme que si TOUS les nombres sont des références de sources valides
+    # (1..max_source_num), sinon on laisse intact (évite d'attraper [2024], [lot 150], etc.).
+    # Lit/écrit `linkified` pour préserver les étapes 1-2 et la conversion des tableaux.
+    def expand_bracket(match):
+        nums = re.findall(r'\d+', match.group(1))
+        if nums and all(1 <= int(n) <= max_source_num for n in nums):
+            return ", ".join(f"Source {n}" for n in nums)
+        return match.group(0)
+
+    linkified = re.sub(
+        r'\[(\d+(?:\s*,\s*\d+)*)\]',
+        expand_bracket, linkified
+    )
+
     # Step 3: Expand "Source N, N, N" and "Source N/N/N" lists
     # After normalization, bare numbers following a Source reference get expanded
     def expand_source_list(match):
