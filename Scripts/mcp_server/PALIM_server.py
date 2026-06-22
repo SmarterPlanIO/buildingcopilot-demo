@@ -1,12 +1,19 @@
 """
 PALIM_server.py — Serveur MCP FastMCP exposant le retrieval PALIM à Claude Teams.
 
-5 tools (cf. PLAN_ACTION §3) :
-  PALIM_search_chunks      — retrieval scopé (réponse finale), invariant non-dilution
-  PALIM_list_copros        — annuaire (identité, fuzzy nom/adresse/alias)
-  PALIM_discover_copros    — découverte documentaire (agrégat, final_answer_allowed=false)
-  PALIM_get_full_document  — drilldown plafonné (anti-aspiration)
-  PALIM_search_dossiers    — dossiers sinistres scopés
+12 tools @mcp.tool() :
+  PALIM_search_chunks         — retrieval scopé (réponse finale), invariant non-dilution
+  PALIM_list_copros           — annuaire (identité, fuzzy nom/adresse/alias)
+  PALIM_discover_copros       — découverte documentaire (agrégat, final_answer_allowed=false)
+  PALIM_get_full_document     — drilldown plafonné (anti-aspiration)
+  PALIM_get_chunks            — re-matérialise le texte exact d'un passage par chunk_id (sourçage)
+  PALIM_search_dossiers       — dossiers sinistres scopés
+  PALIM_get_visite_3d         — liens de visite 3D (jumeau numérique)
+  PALIM_assynco_get_copro     — fiche assurance Assynco (live)
+  PALIM_assynco_list_polices  — polices d'assurance (live)
+  PALIM_assynco_search_sinistres — sinistres Assynco (live)
+  PALIM_copro_overview        — fiche synthèse pré-calculée (narratif + faits + assurance)
+  PALIM_log_feedback          — feedback utilisateur (Langfuse)
 
 Invariants serveur : scope validé en amont, retours structurés {ok,...},
 aucune exception brute, jamais d'env var dans les messages, caps appliqués.
@@ -142,8 +149,10 @@ def PALIM_search_chunks(
 
     Returns:
         {ok, inferred_scope, copro_codes, query_used, filters_applied, warnings, results[]}.
-        Chaque result porte un objet `citation` (chunk_id, doc, doc_type, date, copro,
-        source_file, chunk_index, snippet) destiné au sourçage à la demande (cf. PALIM_get_chunks).
+        Chaque result porte le `text` intégral du passage (VERBATIM citable directement tant
+        qu'il est en contexte) et un objet `citation` (métadonnées de provenance : chunk_id,
+        doc, doc_type, date, copro, source_file, chunk_index). Le `chunk_id` sert à
+        re-matérialiser le texte exact via PALIM_get_chunks si le passage a quitté le contexte.
     """
     t0 = time.time()
     codes = scope.normalize_copro_codes(copro_codes)

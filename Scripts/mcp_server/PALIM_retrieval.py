@@ -119,15 +119,13 @@ def _balance_by_copro(rows, copro_codes, max_chunks):
     return picked[:max_chunks]
 
 
-def _clean_snippet(text, n=240):
-    """Extrait verbatim court (espaces normalisés) pour pré-remplir une citation."""
-    s = " ".join((text or "").split())
-    return s[:n] + ("…" if len(s) > n else "")
-
-
 def _citation(r):
-    """Handle de citation prêt à afficher (cf. Bloc 8bis des Project Instructions).
-    chunk_id = ancre stable pour le rappel par identifiant (PALIM_get_chunks)."""
+    """Métadonnées de provenance d'un passage (cf. Bloc 10 des Project Instructions).
+
+    Le VERBATIM citable est le champ `text` du résultat (déjà renvoyé par search_chunks),
+    pas un extrait. `chunk_id` = ancre stable pour re-matérialiser le texte exact via
+    PALIM_get_chunks si le passage a quitté le contexte. On ne renvoie volontairement aucun
+    extrait tronqué ici : il poussait à compléter de mémoire et fabriquait des citations infidèles."""
     date = r[_C_DATE]
     return {
         "chunk_id": r[_C_CHUNK_ID],
@@ -138,7 +136,6 @@ def _citation(r):
         "code_ncg": r[_C_CODE_NCG],
         "source_file": r[_C_SRC],
         "chunk_index": r[_C_CHUNK_IDX],
-        "snippet": _clean_snippet(r[_C_TEXT]),
     }
 
 
