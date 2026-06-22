@@ -1,11 +1,13 @@
 # Guide complet — Prototype RAG pour archives de copropriété sur AWS
 
 **Projet :** PALIM — Building Copilot — RAG multi-copropriétés
-**Dernière mise à jour :** 3 avril 2026
-**Version :** v0.5.1
-**Volume :** 9 GO, 1 430 dossiers, 11 000 fichiers, 24 482 chunks
+**Dernière mise à jour :** 19 juin 2026
+**Version :** harness Streamlit v0.7.1 · backend MCP image v8 · Project Instructions client v1.9
+**Volume (DB live) :** 10 copros, ~166 000 chunks, ~316 dossiers sinistres
 **Profil :** Non-développeur, copier/coller dans VS Code ou Antigravity
-**Stack :** Full AWS (Textract, Bedrock, RDS pgvector) + Streamlit Cloud + Langfuse
+**Stack :** Full AWS (Textract, Bedrock, RDS pgvector) + serveur MCP (Lambda) + Streamlit (harness de debug) + Langfuse
+
+> ⚠️ **Bascule produit (mai-juin 2026).** Ce guide documentait à l'origine l'app Streamlit comme produit (sections 0 à 11, ère v0.5.1). Le produit livré au client est désormais un **backend de tools MCP** que le LLM du client (Claude Teams / Cowork) interroge ; l'app Streamlit est devenue un banc de test interne. Les **sections 0 à 11 restent valides** pour le pipeline d'ingestion et le RAG (le socle). Les **sections 12 et suivantes** documentent tout ce qui a été construit depuis le 3 avril 2026 : backend MCP, livrable client, pipeline per-copro incrémental, rerank Cohere, route analytique, modèle de coût, sécurité.
 
 ---
 
@@ -3362,5 +3364,142 @@ Les deux ensembles sont fusionnés (déduplication par `chunk_id`), puis étique
 - CSS POINT 1 : tous les labels sidebar en blanc `#e2e8f0` sur fond bleu marine
 - Session persistée PostgreSQL (`chat_sessions`) avec UUID dans `st.query_params["sid"]` : résiste aux déconnexions mobiles
 - Tous les messages contextuels (§11.1) incluent `(☰ sur mobile)` pour guider vers le menu hamburger
+
+---
+
+# PARTIE II — Évolutions depuis le 3 avril 2026 (bascule produit MCP)
+
+> Cette partie documente tout ce qui a été construit après la version v0.5.1 du guide. Les sections 0 à 11 ci-dessus restent la référence du pipeline d'ingestion et du RAG. Les commits cités sont sur la branche `main` (repo `SmarterPlanIO/buildingcopilot-demo`).
+
+## Section 12 — Bascule produit : du Streamlit custom au backend MCP
+
+Le produit livré au client n'est plus l'app Streamlit. C'est un **backend de tools MCP** (modèle LillySalesBot) que le LLM du client (Claude Teams / Cowork) interroge, accompagné de **Project Instructions** et de **skills** fournis. L'app Streamlit reste comme banc de test interne (debug, validation de retrieval).
+
+Conséquences :
+- La **génération de réponse sort de la facture SmarterPlan** : c'est le LLM du client qui génère, donc le coût de génération (Sonnet) est porté par le client. Côté SmarterPlan il reste l'ingestion (one-shot), les embeddings Titan, le rerank Cohere et l'infra Lambda/RDS.
+- Le RAG, le schéma DB et le pipeline d'ingestion sont le **socle commun** aux deux surfaces.
+- Le serveur MCP réutilise au maximum le code de l'app (vendoring de `dossiers_api.py` et `rerank.py`) pour garantir la parité de comportement.
+
+## Section 13 — Backend MCP : architecture de déploiement
+
+Code dans `Scripts/mcp_server/`. Base posée commits `624076f` (serveur P0/P1) et `772c30e` (tracing Langfuse).
+
+- **Framework** : FastMCP (paquet `mcp[cli]>=1.2.0`), transport streamable HTTP. App ASGI exposée sous `app = mcp.streamable_http_app()` pour uvicorn. `FastMCP("PALIM", streamable_http_path="/"+MCP_URL_SLUG, transport_security=enable_dns_rebinding_protection=False, stateless_http=True)`.
+- **Compute** : AWS Lambda en **image container** + **Lambda Web Adapter** (extension `public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1` dans `/opt/extensions/lambda-adapter`), `AWS_LWA_INVOKE_MODE=response_stream`, `PORT=8000`. `CMD uvicorn PALIM_server:app --host 0.0.0.0 --port 8000`. Base image `public.ecr.aws/docker/library/python:3.12-slim` (la base lambda/python casse uvicorn, exit 142, commit `49ff4e7`).
+- **stateless_http=True** indispensable en Lambda (chaque requête est une invocation séparée ; le mode stateful échoue sur `mcp-session-id` "Session not found", commit `df1eb48`).
+- **DNS-rebinding protection désactivée** : FastMCP rejetait le domaine `*.lambda-url.*.on.aws` en 421 (commit `d6232f5`). Le check Content-Type des POST reste actif.
+- **Auth** : authless. Barrière = slug d'URL secret `MCP_URL_SLUG` (ex `mcp/9afac15aabd59767`) plus resource policy de la Function URL. Pas d'OAuth ni de bearer (contrainte claude.ai web).
+- **Secrets via AWS Secrets Manager** : `DB_SECRET_ARN` = `palim/mcp_ncg_reader` (mot de passe DB), `AIRTABLE_PAT_SECRET_ARN` = `palim/airtable_pat`. Fallback env (`DB_PASSWORD`, `AIRTABLE_PAT`) en dev seulement, jamais loggé. Compte AWS **046004768626**.
+- **Régions** : embeddings Titan V2 eu-west-1, rerank Cohere eu-central-1 (Francfort), Secrets Manager + RDS eu-west-1.
+- **DB** : RDS `sp-rag-ncg-copros...eu-west-1`, db `postgres`, user **lecture seule** `mcp_ncg_reader`, `sslmode=require`, `SET ivfflat.probes=10` par session (préserve le rappel ANN avec filtre `code_ncg`), singleton de connexion réutilisé warm.
+- **Packaging/build** : `build_and_push.sh <tag>` vendorise `dossiers_api.py` et `rerank.py` depuis `../Streamlit Cloud/` (en `*_vendored.py`), `COPY *.py` et `COPY visites_3d.txt`, build linux/amd64, push ECR. Deploy : `aws lambda update-function-code --function-name palim-mcp --image-uri 046004768626.dkr.ecr.eu-west-1.amazonaws.com/palim-mcp:vN` puis `aws lambda wait function-updated`. Vérif via `get-function` (PAS `get-function-configuration`). Runbook : `Scripts/mcp_server/RUNBOOK_DEPLOY_V7.md`. Image courante **v8**. Rollback = repointer sur l'image précédente.
+- **Tracing** : `PALIM_tracing.py`, no-op si `LANGFUSE_*` absentes, `langfuse==2.60.4` (v3 casse `.trace()`/`.span()`). Client singleton lazy, `flush()` par appel de tool (Lambda peut geler après réponse). Spans `embed_query` / `sql_retrieval` / `rerank_cohere`. `trace_ref` renvoyé par `search_chunks`/`search_dossiers` pour rattacher le feedback.
+
+Constantes (`PALIM_config.py`) : `EMBEDDING_MODEL=amazon.titan-embed-text-v2:0`, `EMBED_DIM=1024`, `RRF_K=60`, `SIMILARITY_THRESHOLD=0.15`, `MAX_CHUNKS_PER_SOURCE=3`, `RERANK_CANDIDATES=200`, `RCP_MIN_SLOTS=3`. Caps serveur : `MAX_CHUNKS_CAP=30`, `MAX_RESULTS_CAP=50`, `MAX_CHARS_CAP=50000`, `GET_FULL_DOC_DEFAULT_CHARS=20000`, `GET_CHUNKS_CAP=20`, `DISCOVERY_TOP_K=10`. Modes : `cible` (2 / sim 0.20), `equilibre` (3 / 0.15), `inventaire` (6 / 0.10).
+
+## Section 14 — Les 12 tools MCP
+
+Décorateurs `@mcp.tool()` dans `PALIM_server.py`. Tous renvoient un dict `{ok, ...}` (jamais d'exception brute). Le scope est dérivé serveur-side via `PALIM_scope` (jamais reçu de Claude).
+
+1. **`PALIM_search_chunks`**`(query, copro_codes, doc_type?, year_min?, year_max?, statut?, sous_type?, retrieval_mode="equilibre", max_chunks=12, include_bordereau_ar?, include_legal_context?)` : recherche de passages. Invariant ≥1 `code_ncg` sinon `MISSING_COPRO_SCOPE`. Renvoie `results[]` : chaque result porte le `text` intégral du passage (verbatim citable directement) et un objet `citation{chunk_id, doc, doc_type, date, copro, source_file, chunk_index}` (métadonnées de provenance, sans extrait tronqué), plus `trace_ref`.
+2. **`PALIM_list_copros`**`(query?)` : annuaire des copros (identité), pour choisir la bonne copro sans lancer de recherche. Renvoie `code_ncg, nom, nb_documents, nb_chunks, doc_types_available, has_rcp, has_pv_ag, has_dossiers`.
+3. **`PALIM_discover_copros`**`(query, doc_type?, year_min?, year_max?, top_k=10)` : découverte documentaire (triage), identifie les copros pertinentes SANS produire de réponse (`final_answer_allowed=false`).
+4. **`PALIM_get_full_document`**`(source_file, max_chars=20000, chunk_start?, chunk_end?, reason?)` : texte intégral concaténé et plafonné (anti-aspiration, cap 50000, refuse `%` et `*`).
+5. **`PALIM_get_chunks`**`(chunk_ids, reason?)` : re-matérialise le **texte exact** d'un passage par son `chunk_id` (lookup déterministe, cap 20). Sert au sourçage **quand le passage a quitté le contexte** ; tant qu'il est en contexte, le verbatim se cite directement depuis `result.text`.
+6. **`PALIM_search_dossiers`**`(query, copro_codes?, max_results=20)` : dossiers sinistres/travaux/contentieux (RAG + Airtable). Scope 0=découverte / 1=single / ≥2=équilibré. Renvoie `n_returned, n_total, results[], trace_ref`.
+7. **`PALIM_get_visite_3d`**`(query)` : liens de visite 3D (jumeau numérique SmarterPlan), matching substring sur mots-clés (`visites_3d.txt` : LEMEAU, EXTINCTEUR).
+8. **`PALIM_assynco_get_copro`**`(code_ncg)` : fiche copro dans l'ERP assurance Assynco (live Airtable). Identité, primes, total sinistres, nb polices.
+9. **`PALIM_assynco_list_polices`**`(code_ncg, max_results=20)` : polices souscrites (live), garanties, franchises, primes, dates effet/résiliation, assureur, `type_contrat`.
+10. **`PALIM_assynco_search_sinistres`**`(code_ncg, query?, max_results=20)` : sinistres dans Assynco (live, plus riche que la table `dossiers`), filtre texte insensible casse/accents.
+11. **`PALIM_copro_overview`**`(code_ncg)` : fiche synthèse en un appel (narratif PV/dossiers pré-calculé via `09_copro_synthese.py` + faits SQL + assurance Assynco live), avec flag `freshness.stale`. `narratif=null` si non pré-calculé.
+12. **`PALIM_log_feedback`**`(rating, comment?, question?, copro_codes?, mode?, utilisateur?, trace_ref?)` : enregistre un retour utilisateur (score Langfuse `utile`/`a_ameliorer`), rattaché à la trace via `trace_ref`.
+
+Commits clés : `64a2a4d` (Project Instructions + 5 tools), `337bb75` (visite 3D en tool), `75ccf5b` (search_dossiers en énumération scopée, fin faux négatif), `9be2fa2` (get_chunks + sourçage), `5894d25` (copro_overview), `62c662a` (log_feedback), `e3ab09e` (Assynco R1 : 3 tools).
+
+> NB : le docstring d'en-tête de `PALIM_server.py` annonce encore "5 tools" (obsolète, 12 décorateurs présents).
+
+## Section 15 — Livrable client : Project Instructions v1.9 + 3 skills
+
+**Project Instructions** (`Scripts/mcp_server/INSTRUCTIONS_NCG_PROJECT.md`, header **v1.9** du 2026-06-22) à coller dans le Projet Claude du client. 12 blocs (Bloc 0 à Bloc 11), adaptés du modèle LillySalesBot, calés sur les tools réellement exposés.
+
+- **Cadre à 2 axes**, annoncé en une ligne avant toute réponse non triviale (ex. "Mode : interne / analyse juridique") :
+  - Axe 1 Destinataire : **Interne** (par défaut) / **Externe** (gate de sécurité, nettoyage du jargon, logo NCG).
+  - Axe 2 Type de tâche : **Factuel** (par défaut) / **Analyse juridique** / **Synthèse de dossier** / **Rédaction de livrable**.
+- **Invariant de périmètre** : jamais de réponse "toutes copros confondues" (en attendant la route analytique MCP, cf. Section 18).
+- **Garde-fou anti-hallucination** (Bloc 4) : tags `[À VÉRIFIER]` et `[CADRE LÉGAL GÉNÉRAL — à valider]` parcimonieux, pas de `[CONFIRMÉ]`.
+- **Bloc 10 (sourçage, réaligné v1.9)** : réponses propres par défaut. Sur demande de vérification, le LLM republie la réponse annotée `(S1)`,`(S2)` plus un tableau N°/Document/Extrait verbatim. Le verbatim se recopie depuis le `text` du passage renvoyé par `search_chunks` tant qu'il est en contexte ; `get_chunks` re-matérialise le texte exact par `chunk_id` quand le passage a quitté le contexte. Root cause du bug v1.8 (commit `90a0238`) : `get_chunks` était exigé **même en contexte** (redondant avec `result.text` déjà présent), donc Claude le sautait ; et le `citation.snippet` tronqué poussait à compléter de mémoire. Fix v1.9 : doctrine alignée sur `result.text`, `snippet` retiré du tool (`PALIM_retrieval._citation`). Fidélité stricte, aucune relance de recherche.
+- **Bloc 11 (visite 3D, durci v1.7, commit `ab8ab3c`)** : appel `get_visite_3d` OBLIGATOIRE dès qu'un mot-clé apparaît (même question documentaire), en plus de la recherche, URL jamais modifiée.
+- **Style** (Bloc 3) : jamais nommer un outil MCP dans la réponse visible (commit `afcc878`).
+
+**3 skills** (`Scripts/mcp_server/skills/`) :
+- **`ncg-redaction-livrable`** : mise en forme (pas de recherche) d'un contenu déjà sourcé en livrable propre. 4 gabarits (`templates.md`) : `note_interne`, `courrier_externe`, `note_conseil_syndical`, `email_prestataire`. Compteur de cohérence (alerte si >20% `[À VÉRIFIER]`), identité visuelle NCG (logo `logo NCG.png` en en-tête des livrables externes et exports Word), proposition d'export `.docx`.
+- **`ncg-note-juridique`** : analyse juridique copropriété (interprétation RCP/EDD, majorités art. 24/25/25-1/26 loi 1965, délais de contestation art. 42, décret 17/03/1967). Méthode en 3 couches : (1) documents de la copro sourcés et primants, (2) cadre légal général à valider, (3) interprétation signalée. Active `include_legal_context=true`. Conclusion toujours nuancée plus rappel que ce n'est pas un avis juridique.
+- **`assynco-erp`** : accès lecture aux données d'assurance Assynco via les 3 tools `PALIM_assynco_*`. Workflow obligatoire : résoudre d'abord le code NCG via `PALIM_list_copros`.
+
+**Runbook de déploiement** : `RUNBOOK_DEPLOY_V7.md` (5 étapes CloudShell, image v6→v7, déploiement de code pur sans nouveau secret/IAM/env).
+
+> Version alignée en **v1.9** (2026-06-22) : header et Bloc 0 = v1.9. L'ancien drift v1.6/v1.8 est résolu.
+
+## Section 16 — Pipeline d'ingestion per-copro incrémental + CRUD documents
+
+Redesign pour scaler à 150 copros (~2,5 M chunks) sur un laptop (RAM/disque) et accepter l'ajout quotidien de documents. Plan directeur : `Scripts/PLAN_SCALE_150_COPROS.md`. Source de vérité des paths : `pipeline_config.py` (`INCLUDED_COPROS`, `paths_for(code)`). Chaque shard vit dans `Résultats bruts/per_copro/<code>/`.
+
+**10 copros en DB** (`INCLUDED_COPROS`) : 5033, 5354, 5390, 5427, 5480, 5499, 5548, 5553, 8030, 8050 (5412 TOUR LYON BERCY exclu pour son volume).
+
+- **Mode per-copro** (commits `5fd8fa0`, `196235e`) : 01 à 05b acceptent `--copro <code>` et écrivent dans le shard. `run_pipeline_per_copro.py` enchaîne 01→05b (flags `--from / --only / --skip`). Parallélisable (1 process par copro).
+- **CRUD documents** (le cœur de l'incrémental) :
+  - **C/U via `02`** (commit `037c1ca`) : checkpoint par signature `taille:mtime_ns`. Un PDF remplacé sur place (même nom, contenu modifié) est détecté et ré-extrait.
+  - **U déterministe via `03`** (commits `2afd2f8`, `6f94c9d`) : `chunk_id = md5(source_file + "||" + chunk_text)[:12]`, INDÉPENDANT de la position. Éditer une phrase ne change que l'id du chunk touché, donc `05` ne ré-embedde que lui. Caches persistants `doc_type_cache.json` (chunking déterministe cross-run, évite Haiku non-déterministe) et `resolution_format_cache.json` (découpe résolutions PV_AG stable).
+  - **D via `06b`** : un doc absent du shard est retiré de la DB (DELETE per-copro).
+- **`05c` streaming + cache content-addressed** (commit `cf2d93f`) : lit `chunks.jsonl` (texte+doc_type, sans embeddings) en streaming, ne retient que `doc_type==SINISTRE`, RAM ~constante. Cache `entity_cache.json` (clé = md5(texte+filename+folder)). Ne réécrit plus le fichier chunks (`dossier_id` = donnée morte en aval).
+- **`06b` UPSERT per-copro** (commit `0a759c3`) : `DELETE FROM chunks/documents WHERE code_ncg=%s` puis INSERT `ON CONFLICT` (chunks DO NOTHING, documents DO UPDATE). Dossiers : `DELETE WHERE code_ncg=%s AND airtable_record_id IS NULL` (préserve les dossiers Airtable) puis INSERT `ON CONFLICT DO UPDATE`. Remplace le TRUNCATE global. **08 obligatoire ensuite** (le DELETE retire les chunks/dossiers virtuels Airtable).
+- **Driver `ingest.py`** (commit `c45d61d`) : ingère 1 copro (`--copro`) ou `--all`, avec `--dry-run` et `--keep-shards`. Flux : snapshot DB avant → 01 → suppressions (docs en DB absents de la source vivante) → Tier-1 02→05b → calcul du delta → **Tier-2 gaté par doc_type** (`05c`+`00c` si SINISTRE touché, `09_copro_synthese` si PV_AG ou SINISTRE touché) → `06b` upsert → `08` (relancé en global si la copro a des dossiers Airtable). Atomicité par `.tmp`+`os.replace`. DB via user `ragadmin`.
+
+Cadence cible : batch de nuit 2-3 fois/semaine (coût delta ~1-3 $/nuit, nuit pour éviter les users pendant le reload 06b).
+
+## Section 17 — Rerank Cohere 3.5 (cloud) + retrieval multi-valeur / multi-copro
+
+- **Rerank Cohere** (`Scripts/Streamlit Cloud/rerank.py`, commit `096ca53`, VERSION 0.7.0) : Cohere Rerank 3.5 (`arn:aws:bedrock:eu-central-1::foundation-model/cohere.rerank-v3-5:0`) via `bedrock-agent-runtime.rerank()`, appelé cross-region Irlande→Francfort (eu-west-1 n'a aucun modèle rerank). `rerank_rows(query, rows, client, rrf_weight, stats)` réordonne les candidats. Chaque passage est préfixé d'un en-tête `[DOC_TYPE] nom_fichier` (signal fort quand l'OCR est illisible) puis tronqué à 1900 car. Score hybride = `alpha*RRF_norm + (1-alpha)*Cohere`, `alpha=RERANK_RRF_WEIGHT=0.25` (75% Cohere, 25% filet lexical RRF). Pool borné à `MAX_RERANK_DOCS=200`. **Fallback silencieux sur l'ordre RRF** si client absent / ≤1 row / exception (une requête ne casse jamais sur un incident rerank).
+- **Bypass conditionnel** : le rerank n'est appelé que si le pré-filtrage document est inactif et `len(deduped)>1`. Quand le pré-filtrage est actif (les bons docs sont déjà sélectionnés), un cap par source sur l'ordre RRF est appliqué (le rerank pénaliserait des chunks OCR bruités déjà filtrés).
+- **Span Langfuse `rerank_cohere`** (commit `3e7c94a`, VERSION 0.7.1) : `applied / ok / fallback_reason / n_in / n_results / latency_ms`, pour distinguer un vrai rerank d'un fallback RRF (sinon le fail-open serait invisible).
+- **Parité MCP** : `PALIM_retrieval.hybrid_search` réutilise `rerank_rows()` vendorisé (commit `807a680`) comme source unique de vérité du score hybride.
+- **doc_type / sous_type multi-valeur** (commit `b6d9956`) : Haiku peut renvoyer un scalaire ou une liste (ex. `doc_type=["CONTRAT","FACTURE"]`). Helper SQL polymorphe `_sql_in_filter(col, value)` : `None/[]/""` = pas de clause, `str` = `col = %s`, `list` = `col IN (...)`.
+- **Support liste de copros** (commit `7ebcbc4`) : `dossiers_api.py` (`_code_ncg_predicate`) et `analytics.py` (`build_analytical_sql`) acceptent une copro (str), une liste (IN) ou aucune (tout le parc, GROUP BY `code_ncg`). Route identique pour 1, 10 ou 150 copros.
+
+## Section 18 — Route analytique inter-copro
+
+Module `Scripts/Streamlit Cloud/analytics.py` (commit `00184fb`, fix `1aab8ef`), en prod côté Streamlit. Le **LLM ne génère jamais de SQL brut** : il mappe vers une spec JSON sur **liste blanche**, un builder déterministe produit du SQL **paramétré**.
+
+- `detect_analytical_query(query, bedrock, model)` : Haiku route en spec JSON (liste blanche `_DETECT_SYSTEM`), `None` si non-analytique (fallback retrieval).
+- `build_analytical_sql(spec, copro_filter)` : builder déterministe SQL paramétré (psycopg2). `copro_filter=None` → GROUP BY `code_ncg` sur le parc entier, `str` → 1 copro, `list` → IN.
+- `run_analytical_route(...)` : exécute, formate via Haiku (`_FORMAT_SYSTEM`, phrase de synthèse + tableau), `_fallback_table` déterministe si échec LLM.
+- **Whitelist** sur 2 sources : `documents` (filters doc_type/sous_type/statut/annee, sum `montant_principal`) et `dossiers` (filters type_dossier/statut/annee, sum montants). Opérations : `count | sum | list`. Caps `_MAX_LIST_ROWS=5000`, `_MAX_ROWS_TO_LLM=300`. Règle de routage : `dossiers` = sinistres ; travaux/intervention par métier → `documents.sous_type`.
+
+**Priorité ferme (11/06/2026)** : refuser une analyse inter-copro est inacceptable. Le **wrapper MCP `PALIM_run_analytical_query`** est planifié (`Scripts/PLAN_ANALYTIQUE_INTER_COPRO.md`), RIEN CODÉ. Module cible `mcp_server/PALIM_analytics.py` (SQL pur read-only via `mcp_ncg_reader`, zéro Bedrock : en MCP c'est Claude qui construit la spec en arguments du tool et qui formate). Retour prévu : `rows` (cap 300), `coverage` (n_copros_avec_donnees / n_copros_en_base, annonce honnête), `facets` (concentration top-N, refine_suggestions). Pas de `validate_search_scope` (exemption assumée, traçabilité par GROUP BY `code_ncg`). Phase 2 = facette `gestionnaire` (dépend d'un registre `copros` à peupler par `08`).
+
+## Section 19 — Modèle de coût AWS et leviers de réduction
+
+Préflight `Scripts/00a_cost_preflight.py` (zéro appel AWS, commit `7550dca` pour le coût Haiku réel). Plan : `Scripts/PLAN_REDUCTION_COUT_COPRO.md`.
+
+- **Taux unitaires** (calibrés sur facture réelle du run 10 copros, mai 2026) : Haiku 4.5 = 1 $/M entrée, 5 $/M sortie, amorti ~**0,00053 $/chunk** ; Textract ~**0,0015 $/page** ; Titan ~négligeable.
+- **Run 10 copros** : Haiku 87,75 $ (~166 094 chunks), Textract 84,73 $ (~56 500 pages), Titan ~3,5 $, S3+Sonnet ~7,5 $ → **~183 $ HT**. Moyenne **~18 $ HT/copro** → ~2 700 $ pour 150 copros.
+- **BERCY 5412** (l'outlier le plus cher) : Textract ~31 $ + Haiku ~27 $ + divers ~3 $ = **~61 $ HT** (~73 € TTC). Dedup fichiers : 23,4% des fichiers / 29,6% des octets.
+- **Leviers** (plan finalisé, **rien codé**) : L1 dedup SHA-256 (`00b_dedup.py` à créer, -12 $, risque nul), L2 prompt caching sur `04` (préfixe statique ~2500 tokens, -8 à -10 $), L3 OCR page-level sur PDF mixtes (`02`, -3 à -7 $), L4 cache global inter-copro par hash, L5 Bedrock Batch (-50% Haiku, -8 $). Projection L1+L2+L3 ~35 $ HT (-42%), +L5 ~27 $ HT (-56%).
+- **Tranchés** : ZIP restent exclus (contenu technique) ; troncature 04 déjà faite (texte cappé 3500 car) ; `05b` n'est pas un levier coût (qualité).
+
+## Section 20 — Sécurité et dédup sinistres
+
+- **Isolation tenant Assynco** (commit `1d89660`, image v8) : la base Airtable Assynco est celle du courtier (multi-syndic). `_get_copro_record` filtre `Syndic ∈ {NCG IMMOBILIER, NCG GE, IMMOEXPRESS}` (`ASSYNCO_SYNDIC_NCG`, fail-safe non vide). Un code d'un autre syndic renvoie `None`, indistinguable d'un code inexistant (pas d'oracle d'énumération). Ferme une fuite RGPD de ~157 copros tierces. Applique aux 3 tools Assynco.
+- **Secrets / mots de passe RDS** : sweep du mot de passe `ragadmin` mort hors de 16 scripts (commits `6fe50a6`, `97a2822`), scrub des mots de passe RDS en clair au profit de variables d'env (`4c70756`), script `Scripts/rotate_ragadmin.py` (rotation via `ALTER ROLE`, `DB_PASSWORD`/`NEW_DB_PASSWORD` en env, commit `4330347`). Le MCP lit ses secrets via Secrets Manager, DB en lecture seule (`mcp_ncg_reader`).
+- **Dédup sinistres intra-RAG** (commit `2adc35a`, plan `Scripts/PLAN_05C_DEDUP_SINISTRES.md`) : `05c` groupe par dossier (2 conventions de folder : `5 - SINISTRES` et archive syndic `...\Dossiers\`), `00c` fusionne par nom/date (union-find par copro, fenêtre 30 jours, un sinistre non daté ne fusionne jamais). Sur 8050 : ~132 dossiers ramenés vers ~50-60 réels, 0 faux positif validé. Résidu connu hors scope : bruit "syndic pris pour lésé" (défaut de jugement Haiku sur "qui est le lésé").
+
+## Section 21 — Chantiers ouverts / résiduels
+
+- **Analytique MCP** : coder `mcp_server/PALIM_analytics.py` + `PALIM_run_analytical_query` + facettes (couverture, concentration, refine). Doctrine analytique (Instructions v1.9, Bloc 2 à scinder documentaire/analytique) à rédiger.
+- **Scale 150 copros** : gate chunk-level dans `ingest.py` (propager les pures modifications de doc existant, pas seulement les ajouts/suppressions) ; cleanup disque des shards (désactivé en V1) ; `08` per-copro (dérouler `COPRO_FILTERS` depuis `INCLUDED_COPROS`) ; registre `copros` jamais peuplé (à upserter par `08`) ; `01` incrémental (le rmtree+recopie ~10 Go par run est coûteux) ; cache `05b`.
+- **Coût** : tous les leviers L1-L5 non codés ; run 03/04 sur BERCY pour confirmer le compte de chunks réel.
+- **Alignements doc** : résolus le 22/06 (Project Instructions v1.9 header+Bloc 0 ; docstring d'en-tête `PALIM_server.py` corrigé en 12 tools).
+- **Tests live restants** : smoke test `PALIM_copro_overview` (Desktop/Langfuse) ; après déploiement de l'image MCP (v9 : retrait du `snippet`), recoller v1.9 des instructions côté Claude Desktop/Teams et retester le sourçage (verbatim depuis `result.text` en contexte, `get_chunks` pour re-fetch) + visite 3D.
+- **Refactoring `streamlit_app.py`** : sortir `search_chunks`/ranking restants dans des modules (`dossiers_api.py`, `analytics.py`, `rerank.py` déjà extraits).
 
 ---

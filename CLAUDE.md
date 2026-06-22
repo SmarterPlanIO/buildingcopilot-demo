@@ -2,7 +2,9 @@
 
 > Ce fichier compile toutes les regles, feedbacks et contexte du projet PALIM.
 > A coller en debut de session pour que Claude ait le meme contexte.
-> Derniere mise a jour : 2 avril 2026, v0.5.0
+> Derniere mise a jour : 22 juin 2026. Harness Streamlit v0.7.1, backend MCP image v8, Project Instructions client v1.9.
+>
+> **Bascule produit (mai-juin 2026)** : le produit livre au client est desormais un **backend de tools MCP** que le LLM du client (Claude Teams / Cowork) interroge, plus l'app Streamlit (devenue harness de debug interne). Carte du code a jour dans `AGENTS.md` (sections 10-11 = backend MCP + livrable client) ; memoire complete dans `Resultats bruts/rag-prototype-guide.md` (sections 12+).
 
 ---
 
@@ -21,22 +23,35 @@
 
 ## 2. Architecture du projet
 
-- **Frontend** : Streamlit Cloud (deploie depuis la branche `main` uniquement)
-- **LLM** : AWS Bedrock — Sonnet 4.6 (generation), Haiku 4.5 (strategie, classification, filtrage prompts)
-- **Embeddings** : Amazon Titan Embed Text V2 (1024 dims)
+### Produit : backend MCP interroge par le LLM du client
+- **Modele de livraison** : le client (NCG) utilise son propre LLM (Claude Teams / Cowork) avec des **Project Instructions** fournies (`Scripts/mcp_server/INSTRUCTIONS_NCG_PROJECT.md`, v1.9) et 3 **skills** (`ncg-redaction-livrable`, `ncg-note-juridique`, `assynco-erp`). Ce LLM se connecte au **serveur MCP PALIM** qui expose le RAG documentaire et l'ERP assurance en tools.
+- **Serveur MCP** : FastMCP (Python 3.12) sur **AWS Lambda** (image container + Lambda Web Adapter, `response_stream`), code dans `Scripts/mcp_server/`. **12 tools** `PALIM_*` (retrieval, dossiers, synthese copro, visite 3D, Assynco, feedback). Authless : barriere = slug d'URL secret (`MCP_URL_SLUG`) plus resource policy de la Function URL. `stateless_http=True` obligatoire en Lambda. Compte AWS 046004768626, fonction `palim-mcp`, image v8.
+- **Secrets** : AWS Secrets Manager (`palim/mcp_ncg_reader` pour la DB, `palim/airtable_pat` pour Assynco). DB en **lecture seule** via user `mcp_ncg_reader` cote MCP.
+- **Streamlit** : devenu **harness de debug interne** (toujours deploye depuis `main`, version dans `Scripts/Streamlit Cloud/VERSION` = 0.7.1). N'est plus le produit livre au client. La regle 3.1 (UI seulement) reste valide.
+
+### Socle commun (partage MCP + harness Streamlit)
+- **LLM** : AWS Bedrock — Sonnet 4.6 (generation ; cote client en MCP), Haiku 4.5 (strategie, classification, filtrage, ingestion)
+- **Embeddings** : Amazon Titan Embed Text V2 (1024 dims), region eu-west-1
+- **Rerank** : Cohere rerank-v3.5 sur Bedrock **eu-central-1** (Francfort ; pas dispo eu-west-1). Module `rerank.py`, vendorise cote MCP. Parite app <-> MCP.
 - **DB** : PostgreSQL sur AWS RDS (`sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com`) avec pgvector
-- **Observabilite** : Langfuse Cloud (EU) — traces, feedback, prompt filtering. Pin `langfuse==2.60.4` (v3 casse `.trace()`)
-- **Auth** : login gate simple avec utilisateurs pilotes dans `st.secrets[pilot_users]`
-- **Version** : affichee dans la sidebar, stockee dans `Scripts/Streamlit Cloud/VERSION` (actuellement v0.5.0)
+- **Observabilite** : Langfuse Cloud (EU) — traces, feedback, span rerank. Pin `langfuse==2.60.4` (v3 casse `.trace()`)
 - **Python** : 3.12 (fichier `.python-version` a la racine du repo — requis pour Langfuse/Pydantic V1)
 
-### Pipeline (scripts locaux, executer dans l'ordre)
-1. `03_chunking.py` — classifier doc_type (3 passes : folder/filename/Haiku) + chunking + BORDEREAU_AR
-2. `04_metadata_documents.py` — metadonnees document-level via Haiku + protection RCP (`_TRUSTED_FOLDER_TYPES`)
-3. `05_embedding.py` — embeddings Titan V2 (parallelise)
-4. `05b_synthetic_questions.py` — questions synthetiques Haiku (PV_AG, RCP, CONTRAT)
-5. `06b_load_db.py` — TRUNCATE + INSERT dans PostgreSQL (chunks, documents, dossiers)
-6. `08_airtable_sync.py` — sync dossiers sinistres depuis Airtable Assynco (**OBLIGATOIRE apres 06b**)
+### Pipeline d'ingestion — mode per-copro incremental (recommande)
+Chaque etape prend `--copro <code>` et ecrit dans `Resultats bruts/per_copro/<code>/`. Le driver `ingest.py --copro <code>` (ou `--all`) ingere une copro de bout en bout avec **CRUD documents** (creation / modification / suppression detectees vs l'etat DB) et regeneration des agregats Tier-2 **gatee par doc_type**.
+1. `01_filtrage.py` — tri plans/photos/inutiles (regles + Vision Sonnet)
+2. `02_extraction_optimized.py` — extraction texte Textract ; checkpoint par signature `taille:mtime_ns` (detecte les docs modifies sur place)
+3. `03_chunking.py` — classif doc_type (3 passes) + chunking + BORDEREAU_AR ; `chunk_id` content-addressed (stable cross-run) + caches deterministes (`doc_type_cache.json`, `resolution_format_cache.json`)
+4. `04_metadata_documents.py` — metadonnees document-level via Haiku + protection RCP (`_TRUSTED_FOLDER_TYPES`)
+5. `05_embedding.py` — embeddings Titan V2 (parallelise, incremental : append, skip `chunk_id` deja embeddes)
+6. `05b_synthetic_questions.py` — questions synthetiques Haiku (PV_AG, RCP, CONTRAT)
+7. `05c_entity_extraction.py` — entites sinistre -> `dossiers.jsonl` (streaming, cache content-addressed) [Tier-2, si doc_type SINISTRE touche]
+8. `00c_dedup_dossiers_rag.py` — dedup des dossiers sinistres (union-find par copro, garde-fous date+nom) [Tier-2]
+9. `09_copro_synthese.py` — fiche synthese pre-calculee par copro (table `copro_synthese`, lue par `PALIM_copro_overview`) [Tier-2, si PV_AG ou SINISTRE touche]
+10. `06b_load_db.py --copro` — **UPSERT** per-copro (DELETE WHERE code_ncg + INSERT ON CONFLICT), remplace le TRUNCATE global
+11. `08_airtable_sync.py` — sync dossiers sinistres depuis Airtable Assynco (**OBLIGATOIRE apres 06b** : le DELETE per-copro retire les chunks/dossiers virtuels Airtable)
+
+Mode legacy global (sans `--copro`) conserve pour retro-compat ; `06b` sans `--copro` fait TRUNCATE global. `run_pipeline_per_copro.py --copro <code>` enchaine seulement 01->05b (flags `--from / --only / --skip`).
 
 ### Decisions de design cles
 - **Mode juriste** : conditionnel — active quand les sources contiennent des doc_types juridiques
@@ -111,6 +126,18 @@ val = st.secrets.get("KEY")
 val = st.secrets["section"].get("KEY")
 ```
 
+### 3.7 Secrets MCP — Secrets Manager, jamais en clair
+
+Le backend MCP lit ses secrets via **AWS Secrets Manager**, jamais en variable d'env en prod (env = fallback dev) :
+- DB : `palim/mcp_ncg_reader` (user PostgreSQL **lecture seule**). Le MCP n'ecrit jamais en base.
+- Airtable Assynco : `palim/airtable_pat`.
+
+Le pipeline d'ingestion (qui ecrit en base) utilise le user `ragadmin` via `DB_PASSWORD` en variable d'env (jamais commite). Ne jamais hardcoder un mot de passe RDS ni un PAT dans un script ; passer par l'env ou Secrets Manager. Le mot de passe `ragadmin` mort a deja ete sweepe du repo (commits 6fe50a6/97a2822) et peut etre rote via `Scripts/rotate_ragadmin.py`.
+
+### 3.8 Isolation tenant Assynco — filtre Syndic = NCG obligatoire
+
+La base Airtable Assynco est celle du courtier (multi-syndic). Tout acces a une copro DOIT filtrer `Syndic ∈ {NCG IMMOBILIER, NCG GE, IMMOEXPRESS}` (`ASSYNCO_SYNDIC_NCG` dans `Scripts/mcp_server/PALIM_config.py`, fail-safe non vide). Un code d'un autre syndic doit renvoyer "introuvable", jamais les donnees. Ne jamais retirer ce filtre (fuite RGPD de ~157 copros tierces).
+
 ---
 
 ## 4. Pipeline re-run checklist
@@ -135,7 +162,10 @@ PYTHONIOENCODING=utf-8 AIRTABLE_PAT="..." DB_HOST="sp-rag-ncg-copros.c8ypoidw2hz
 
 ---
 
-## 5. Bugs corriges dans cette session (v0.5.0)
+## 5. Bugs corriges (session v0.5.0 — historique)
+
+> Snapshot historique de la session v0.5.0 (avril 2026), conserve pour reference. Les evolutions posterieures (rerank Cohere, backend MCP, scale per-copro, route analytique, securite) sont documentees dans `Resultats bruts/rag-prototype-guide.md` (sections 12+) et `AGENTS.md` (sections 10-11).
+
 
 | Bug | Root cause | Fix |
 |-----|-----------|-----|
@@ -168,9 +198,12 @@ PYTHONIOENCODING=utf-8 AIRTABLE_PAT="..." DB_HOST="sp-rag-ncg-copros.c8ypoidw2hz
 
 ---
 
-## 7. Tache future enregistree
+## 7. Taches et priorites en cours
 
-- **Refactoring `streamlit_app.py`** : deplacer toute la logique retrieval/business dans des modules dedies (ex: `retrieval.py`, `strategy.py`). Actuellement le fichier est trop gros avec de la logique metier melee a l'UI.
+- **PRIORITE — Analytique inter-copro en MCP** : exposer `PALIM_run_analytical_query` (wrapper de `analytics.py` cote MCP, module cible `mcp_server/PALIM_analytics.py`, SQL pur read-only, zero Bedrock) plus facettes UX d'affinage (couverture honnete, jamais "choisis dans 150"). Plan : `Scripts/PLAN_ANALYTIQUE_INTER_COPRO.md`. RIEN CODE (plan seul).
+- **Scale ingestion 150 copros** : finir le CRUD per-copro (gate chunk-level dans `ingest.py` pour propager les pures modifications ; cleanup disque des shards ; 08 per-copro ; registre `copros` peuple par 08). Plan : `Scripts/PLAN_SCALE_150_COPROS.md`.
+- **Reduction cout ingestion** : leviers L1 dedup SHA-256 / L2 prompt caching sur 04 / L3 OCR page-level / L5 Bedrock Batch. Plan : `Scripts/PLAN_REDUCTION_COUT_COPRO.md`. Mesure faite (BERCY ~61 $ HT), rien code.
+- **Refactoring `streamlit_app.py`** : deplacer toute la logique retrieval/business restante dans des modules dedies (`dossiers_api.py`, `analytics.py`, `rerank.py` deja extraits). Le fichier garde encore `search_chunks` et le ranking dans l'UI.
 - **Web RAG** : plan concu pour interroger des sites juridiques whitelistes (Legifrance, Service-Public, ANIL). Module `web_search.py` + Google Custom Search API. Option A (scraping live) recommandee en premier.
 
 ---
