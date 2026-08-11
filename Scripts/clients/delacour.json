@@ -1,16 +1,16 @@
 {
-  "_comment": "Profil client PALIM — Delacour Patrimoine (GABARIT, à compléter avant toute ingestion). Utilisation : PALIM_CLIENT=delacour. project_root=null => racine du clone (le repo doit être cloné dans le dossier mission Delacour). db.host vide => les scripts DB refusent de démarrer tant que la RDS dédiée n'est pas provisionnée (jamais de fallback vers la DB d'un autre client).",
+  "_comment": "Profil client PALIM — Delacour Patrimoine. Utilisation : PALIM_CLIENT=delacour. project_root=null => racine du clone (le repo doit être cloné dans le dossier mission Delacour). RDS dédiée provisionnée le 11/08/2026 (db.t4g.micro PG 17.9, cf. mcp_server/RUNBOOK_PROVISION_DELACOUR.md pour les secrets + Lambda).",
   "client_code": "delacour",
   "client_name": "Delacour Patrimoine",
   "project_root": null,
   "db": {
-    "host": "",
+    "host": "sp-rag-delacour-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com",
     "port": 5432,
     "name": "postgres",
     "user_admin": "ragadmin",
     "user_reader": "mcp_delacour_reader",
-    "secret_reader": "palim-delacour/mcp_delacour_reader",
-    "secret_admin": "palim-delacour/ragadmin"
+    "secret_reader": "palim/delacour/mcp_reader",
+    "secret_admin": "palim/delacour/ragadmin"
   },
   "assynco": {
     "_comment": "Assynco est aussi le courtier de Delacour : même base Airtable. Libellés relevés dans Organisation le 11/08/2026 : 'DELACOUR PATRIMOINE' (Syndic+Client, 31 copros liées) et 'Delacour Patrimoine' (doublon orphelin, 0 copro — gardé par sécurité, FIND est sensible à la casse). ATTENTION onboarding : seules 2/31 copros Delacour ont un {Ref client} renseigné — à peupler côté Assynco avant que la résolution par code copro fonctionne.",
