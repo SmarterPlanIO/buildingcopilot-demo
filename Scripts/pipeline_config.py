@@ -1,16 +1,46 @@
-"""Configuration commune au pipeline d'ingestion per-copro.
+"""Configuration commune au pipeline d'ingestion per-copro — multi-client.
 
 Source de vérité unique pour :
-- Map code NCG -> nom de dossier dans `Données brutes/`
+- Le profil client courant (chargé depuis `clients/<client>.json`, sélectionné
+  par la variable d'env PALIM_CLIENT, défaut "ncg")
+- Map code copro -> nom de dossier dans `Données brutes/`
 - Helpers de calcul de paths per-copro (filtré, extrait, JSONLs intermédiaires)
+- Paramètres DB du client (host/port/name/users), surchargés par l'env
 
 Les scripts 01..05b acceptent un flag `--copro <code>` qui résout les paths
 via ce module. Sans `--copro`, ils retombent sur les chemins historiques
 (rétro-compatibilité avec l'ancien mode "tout d'un coup").
+
+Multi-client : un clone du repo par client (dans le dossier mission du client),
+un profil JSON par client. `project_root` null dans le profil = racine du clone
+(parent de Scripts/), donc aucun path absolu à éditer en déclinant le produit.
+Aucun secret dans les profils : mots de passe via env (pipeline) ou Secrets
+Manager (MCP).
 """
+import json
+import os
 from pathlib import Path
 
-PROJECT_ROOT = Path(r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne")
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+CLIENTS_DIR = _SCRIPTS_DIR / "clients"
+
+PALIM_CLIENT = (os.environ.get("PALIM_CLIENT", "ncg").strip().lower() or "ncg")
+
+_client_file = CLIENTS_DIR / f"{PALIM_CLIENT}.json"
+if not _client_file.exists():
+    _known = sorted(p.stem for p in CLIENTS_DIR.glob("*.json"))
+    raise SystemExit(
+        f"❌ Profil client introuvable : {_client_file} (PALIM_CLIENT={PALIM_CLIENT}). "
+        f"Profils connus : {_known}"
+    )
+with open(_client_file, encoding="utf-8") as _f:
+    _cfg = json.load(_f)
+
+CLIENT_CODE = _cfg["client_code"]
+CLIENT_NAME = _cfg["client_name"]
+
+# Racine projet : null dans le profil = racine du clone (parent de Scripts/).
+PROJECT_ROOT = Path(_cfg["project_root"]) if _cfg.get("project_root") else _SCRIPTS_DIR.parent
 
 RAW_ROOT       = PROJECT_ROOT / "Données brutes"
 RESULTS_ROOT   = PROJECT_ROOT / "Résultats bruts"
@@ -18,21 +48,36 @@ FILTERED_ROOT  = RESULTS_ROOT / "Archives_Filtrees"
 EXTRACTED_ROOT = RESULTS_ROOT / "Archives_Extraites"
 PER_COPRO_ROOT = RESULTS_ROOT / "per_copro"
 
-# Map code NCG -> nom de dossier dans Données brutes/
-# Liste explicite : tout ce qui n'est pas listé ici est ignoré.
-# 5412 TOUR LYON BERCY exclu (volume trop important).
-INCLUDED_COPROS = {
-    "5033": "5033 - 24 TORCY",
-    "5354": "5354 - 2 UNIVERSITE",
-    "5390": "5390 - 2-6 BIS HENRI TARIEL",
-    "5427": "5427 - 33 VICTOR CRESSON",
-    "5480": "5480 - 88-90 GR GAL EBOUE",
-    "5499": "5499 - 22-24 GUILLEMIN",
-    "5548": "5548 - VILLA HAUSSMANN",
-    "5553": "5553 - 8 Jaurès - LES FREGATES",
-    "8030": "8030 - 21 PATAY",
-    "8050": "8050 - STYLE - 145 AVENUE DE FRANCE",
-}
+# Map code copro -> nom de dossier dans Données brutes/
+# Liste explicite : tout ce qui n'est pas listé dans le profil client est ignoré.
+INCLUDED_COPROS = dict(_cfg.get("included_copros") or {})
+
+# ── DB du client (précédence : env > profil client) ──
+# Le mot de passe n'est JAMAIS ici : DB_PASSWORD en env pour le pipeline.
+_db = _cfg.get("db") or {}
+DB_HOST = os.environ.get("DB_HOST") or _db.get("host", "")
+DB_PORT = int(os.environ.get("DB_PORT") or _db.get("port", 5432))
+DB_NAME = os.environ.get("DB_NAME") or _db.get("name", "postgres")
+DB_USER_ADMIN = os.environ.get("DB_USER") or _db.get("user_admin", "ragadmin")
+DB_USER_READER = _db.get("user_reader", "")
+DB_SECRET_READER = _db.get("secret_reader", "")
+DB_SECRET_ADMIN = _db.get("secret_admin", "")
+
+# ── Assynco (base Airtable du courtier, multi-syndic donc multi-client) ──
+_assynco = _cfg.get("assynco") or {}
+ASSYNCO_ENABLED = bool(_assynco.get("enabled", False))
+ASSYNCO_SYNDIC_LABELS = [s.strip() for s in (_assynco.get("syndic_labels") or []) if s and s.strip()]
+
+
+def require_db_host() -> str:
+    """DB host du client, ou arrêt net si non provisionné (jamais de fallback
+    silencieux vers la DB d'un autre client)."""
+    if not DB_HOST:
+        raise SystemExit(
+            f"❌ Aucun host DB pour le client '{CLIENT_CODE}'. Renseigner db.host dans "
+            f"clients/{CLIENT_CODE}.json (ou exporter DB_HOST)."
+        )
+    return DB_HOST
 
 
 def folder_for(code: str) -> str:

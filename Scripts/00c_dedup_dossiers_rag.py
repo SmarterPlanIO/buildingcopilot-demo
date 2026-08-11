@@ -38,7 +38,7 @@ from datetime import date
 
 import pipeline_config as pcfg
 
-BASE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts"
+BASE = str(pcfg.RESULTS_ROOT)
 INPUT_FILE = os.path.join(BASE, "dossiers.jsonl")
 OUTPUT_FILE = os.path.join(BASE, "dossiers_dedup.jsonl")
 REPORT_FILE = os.path.join(BASE, "dossiers_dedup_report.txt")

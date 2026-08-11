@@ -30,6 +30,18 @@ Pipeline d'ingestion de documents de copropriété (PDF/Word/Excel scannés) →
 
 ---
 
+## 2b. Multi-client (déclinaison par syndic)
+
+Le produit est déclinable par client syndic (NCG, Delacour Patrimoine, ...). Un client = **un clone du repo** (dans le dossier mission du client) + **un profil** `Scripts/clients/<client>.json` + **une infra dédiée** (RDS, Lambda MCP + slug, secrets, projet Langfuse). Jamais deux clients dans la même DB copros (les tools filtrent par code copro, pas par syndic).
+
+- **Sélection du client** : variable d'env `PALIM_CLIENT` (défaut `ncg`), lue par `pipeline_config.py` (pipeline) et `PALIM_config.py` (MCP, via env.json Lambda).
+- **Profil client** : `client_code`, `client_name`, `project_root` (null = racine du clone), `db` (host/users/secrets — jamais de mot de passe), `assynco.syndic_labels` (allowlist tenant Airtable), `included_copros` (registre code→dossier).
+- **Précédence** : env > profil client. `db.host` vide → les scripts DB refusent de démarrer (`require_db_host()`, pas de fallback vers la DB d'un autre client).
+- **Assynco** : base Airtable du courtier partagée entre clients (Assynco est aussi le courtier de Delacour). L'isolation tenant se fait par `syndic_labels` ; côté MCP, allowlist vide = fail-closed (aucune copro ne résout). Env : `ASSYNCO_SYNDIC_ALLOWLIST` (l'ancien nom `ASSYNCO_SYNDIC_NCG` reste lu, rétro-compat env.json <= v8).
+- **Nom hérité** : la colonne DB et les params de tools s'appellent toujours `code_ncg` (= "code copro interne syndic"). Renommage jugé trop invasif (schéma DB + contrat MCP).
+
+---
+
 ## 3. Carte des fichiers
 
 ```
@@ -39,7 +51,8 @@ Pipeline d'ingestion de documents de copropriété (PDF/Word/Excel scannés) →
 ├── .python-version              # 3.12
 ├── requirements.txt             # deps racine
 ├── Scripts/                     # ⭐ TOUT le code vit ici
-│   ├── pipeline_config.py       # Source de vérité : map code NCG→dossier, helpers paths per-copro
+│   ├── pipeline_config.py       # Source de vérité : profil client (clients/<client>.json), map code copro→dossier, paths per-copro, DB
+│   ├── clients/                  # Profils clients (ncg.json, delacour.json) — cf. §2b, aucun secret
 │   ├── 00_inventaire.py         # Étape 0 : inventaire des fichiers d'archives
 │   ├── 01_filtrage.py           # Étape 0.2 : tri plans/photos/inutiles (règles + Vision Sonnet)
 │   ├── 02_extraction_optimized.py  # Étape 2 : extraction texte (Textract fire-all-then-collect)

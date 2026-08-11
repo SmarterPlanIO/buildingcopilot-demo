@@ -1,0 +1,21 @@
+{
+  "_comment": "Profil client PALIM — Delacour Patrimoine (GABARIT, à compléter avant toute ingestion). Utilisation : PALIM_CLIENT=delacour. project_root=null => racine du clone (le repo doit être cloné dans le dossier mission Delacour). db.host vide => les scripts DB refusent de démarrer tant que la RDS dédiée n'est pas provisionnée (jamais de fallback vers la DB d'un autre client).",
+  "client_code": "delacour",
+  "client_name": "Delacour Patrimoine",
+  "project_root": null,
+  "db": {
+    "host": "",
+    "port": 5432,
+    "name": "postgres",
+    "user_admin": "ragadmin",
+    "user_reader": "mcp_delacour_reader",
+    "secret_reader": "palim-delacour/mcp_delacour_reader",
+    "secret_admin": "palim-delacour/ragadmin"
+  },
+  "assynco": {
+    "_comment": "Assynco est aussi le courtier de Delacour : même base Airtable. Renseigner ici les libellés EXACTS du champ primaire Organisation des entités Delacour (à relever dans Airtable). Tant que la liste est vide, tout accès Assynco est fail-closed (aucune copro ne résout).",
+    "enabled": true,
+    "syndic_labels": []
+  },
+  "included_copros": {}
+}

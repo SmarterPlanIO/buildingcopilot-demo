@@ -42,8 +42,8 @@ import psycopg2
 
 import pipeline_config as pcfg
 
-DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
-DB_PORT, DB_NAME, DB_USER = 5432, "postgres", "ragadmin"
+DB_HOST = pcfg.require_db_host()
+DB_PORT, DB_NAME, DB_USER = pcfg.DB_PORT, pcfg.DB_NAME, pcfg.DB_USER_ADMIN
 
 # doc_types qui declenchent la regeneration de chaque agregat Tier-2.
 GATE_05C = {"SINISTRE"}

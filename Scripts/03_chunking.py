@@ -32,7 +32,7 @@ import boto3
 
 # Filtre de contenu binaire / garbage (v2)
 from content_filter import analyze_file_quality, filter_chunks, make_placeholder_chunk
-from pipeline_config import paths_for
+from pipeline_config import paths_for, RESULTS_ROOT, EXTRACTED_ROOT
 import bedrock_cost
 
 # =====================================================
@@ -51,8 +51,8 @@ if _args.copro:
     RES_FORMAT_CACHE_FILE = str(_paths["per_copro"] / "resolution_format_cache.json")
     print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
 else:
-    EXTRACTED_DIR = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Extraites"
-    OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"
+    EXTRACTED_DIR = str(EXTRACTED_ROOT)
+    OUTPUT_FILE = str(RESULTS_ROOT / "chunks_copro.jsonl")
     DOC_TYPE_CACHE_FILE = os.path.join(os.path.dirname(OUTPUT_FILE), "doc_type_cache.json")
     RES_FORMAT_CACHE_FILE = os.path.join(os.path.dirname(OUTPUT_FILE), "resolution_format_cache.json")
 

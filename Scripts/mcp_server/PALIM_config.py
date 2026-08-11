@@ -77,13 +77,24 @@ AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
 AIRTABLE_PAT_SECRET_ARN = os.environ.get("AIRTABLE_PAT_SECRET_ARN", "")
 ASSYNCO_MAX_RECORDS_CAP = int(os.environ.get("ASSYNCO_MAX_RECORDS_CAP", "50"))
 ASSYNCO_HTTP_TIMEOUT = int(os.environ.get("ASSYNCO_HTTP_TIMEOUT", "15"))
-# Isolation tenant : la base Airtable est multi-syndic (base du courtier). Les
-# tools n'autorisent QUE les copros dont le champ `Syndic` correspond à une entité
-# NCG. Libellés (champ primaire Organisation) des entités NCG, séparés par virgule.
-# Fail-safe : si vidé, on retombe sur la liste par défaut (jamais sur un filtre ouvert).
-_DEFAULT_SYNDIC_NCG = "NCG IMMOBILIER,NCG GE,IMMOEXPRESS"
-ASSYNCO_SYNDIC_NCG = (os.environ.get("ASSYNCO_SYNDIC_NCG", _DEFAULT_SYNDIC_NCG).strip()
-                      or _DEFAULT_SYNDIC_NCG)
+# Isolation tenant : la base Airtable est multi-syndic (base du courtier Assynco,
+# partagée entre clients PALIM). Les tools n'autorisent QUE les copros dont le champ
+# `Syndic` correspond à une entité du client courant. Libellés (champ primaire
+# Organisation), séparés par virgule.
+# PALIM_CLIENT identifie le déploiement ("ncg", "delacour", ...). Fail-safe :
+# - déploiement ncg sans env → allowlist NCG par défaut (comportement historique,
+#   compatible env.json <= v8 qui ne pose pas la variable) ;
+# - tout autre client sans allowlist explicite → allowlist VIDE, et PALIM_assynco
+#   est fail-closed (aucune copro ne résout — jamais de filtre ouvert, jamais le
+#   défaut d'un autre client).
+PALIM_CLIENT = (os.environ.get("PALIM_CLIENT", "ncg").strip().lower() or "ncg")
+_DEFAULT_SYNDIC_ALLOWLISTS = {"ncg": "NCG IMMOBILIER,NCG GE,IMMOEXPRESS"}
+ASSYNCO_SYNDIC_ALLOWLIST = (
+    os.environ.get("ASSYNCO_SYNDIC_ALLOWLIST", "").strip()
+    or os.environ.get("ASSYNCO_SYNDIC_NCG", "").strip()  # rétro-compat env.json <= v8
+    or _DEFAULT_SYNDIC_ALLOWLISTS.get(PALIM_CLIENT, "")
+)
+ASSYNCO_SYNDIC_NCG = ASSYNCO_SYNDIC_ALLOWLIST  # alias déprécié (lecteurs <= v8)
 
 # ── MCP ──
 MCP_URL_SLUG = os.environ.get("MCP_URL_SLUG", "mcp")  # slug secret en prod

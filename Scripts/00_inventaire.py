@@ -7,10 +7,12 @@ import csv
 from collections import Counter
 from pathlib import Path
 
+from pipeline_config import RESULTS_ROOT
+
 # =====================================================
 # CONFIGURATION — Modifie ce chemin vers tes archives
 # =====================================================
-ARCHIVES_ROOT = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\RUN ON 6 COPROS"  # ← MODIFIER ICI
+ARCHIVES_ROOT = str(RESULTS_ROOT / "RUN ON 6 COPROS")  # ← MODIFIER ICI si autre sous-dossier
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_CSV = os.path.join(SCRIPT_DIR, "inventaire_fichiers.csv")
 OUTPUT_STATS = os.path.join(SCRIPT_DIR, "inventaire_stats.txt")

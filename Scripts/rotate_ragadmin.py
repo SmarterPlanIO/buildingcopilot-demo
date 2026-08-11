@@ -17,10 +17,12 @@ import sys
 import psycopg2
 from psycopg2 import sql
 
-HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
-PORT = 5432
-DBNAME = "postgres"
-USER = "ragadmin"
+import pipeline_config as pcfg
+
+HOST = pcfg.require_db_host()
+PORT = pcfg.DB_PORT
+DBNAME = pcfg.DB_NAME
+USER = pcfg.DB_USER_ADMIN
 
 old = os.environ.get("DB_PASSWORD")
 new = os.environ.get("NEW_DB_PASSWORD")

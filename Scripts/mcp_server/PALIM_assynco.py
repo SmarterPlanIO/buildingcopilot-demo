@@ -285,16 +285,17 @@ def _project_sinistre(rec, id_to_name):
 # ──────────────────────────────────────────────────────────────
 # Résolution copro (hub)
 # ──────────────────────────────────────────────────────────────
-def _ncg_syndic_clause():
-    """Sous-formule Airtable n'autorisant que les copros d'une entité NCG.
+def _syndic_allowlist_clause():
+    """Sous-formule Airtable n'autorisant que les copros du syndic client courant.
 
-    La base Assynco est multi-syndic ; sans ce filtre, un code d'un autre syndic
-    résoudrait et fuiterait ses données (cf. audit isolation tenant). Match substring
-    tolérant sur le champ lié `Syndic` (ARRAYJOIN → noms primaires Organisation),
-    insensible à la multi-valeur. Retourne None si aucun libellé configuré (jamais le
-    cas : cfg.ASSYNCO_SYNDIC_NCG est fail-safe sur une valeur par défaut non vide).
+    La base Assynco est multi-syndic (base du courtier, partagée entre clients
+    PALIM) ; sans ce filtre, un code d'un autre syndic résoudrait et fuiterait ses
+    données (cf. audit isolation tenant). Match substring tolérant sur le champ lié
+    `Syndic` (ARRAYJOIN → noms primaires Organisation), insensible à la multi-valeur.
+    Retourne None si aucun libellé configuré (cfg.ASSYNCO_SYNDIC_ALLOWLIST vide) —
+    l'appelant DOIT alors être fail-closed : aucune copro ne résout.
     """
-    labels = [s.strip() for s in cfg.ASSYNCO_SYNDIC_NCG.split(",") if s.strip()]
+    labels = [s.strip() for s in cfg.ASSYNCO_SYNDIC_ALLOWLIST.split(",") if s.strip()]
     if not labels:
         return None
     terms = ['FIND("' + lbl + '", ARRAYJOIN({Syndic}))' for lbl in labels]
@@ -302,22 +303,25 @@ def _ncg_syndic_clause():
 
 
 def _get_copro_record(code_ncg):
-    """Record Copropriété brut pour un code NCG **appartenant à NCG**, ou None.
+    """Record Copropriété brut pour un code copro **appartenant au syndic client**, ou None.
 
-    Le code NCG vit dans le champ `Ref client` de la table Copropriétés (le `Nom`
+    Le code copro vit dans le champ `Ref client` de la table Copropriétés (le `Nom`
     est l'adresse/nom d'immeuble). `code_ncg` est validé numérique → pas d'injection.
-    Le record n'est retourné que si son `Syndic` est une entité NCG (isolation tenant) :
-    une copro d'un autre syndic, ou un code en collision, renvoie None — indistinguable
-    d'un code inexistant côté tool (pas d'oracle d'énumération).
+    Le record n'est retourné que si son `Syndic` est dans l'allowlist du client
+    (isolation tenant) : une copro d'un autre syndic, ou un code en collision,
+    renvoie None — indistinguable d'un code inexistant côté tool (pas d'oracle
+    d'énumération). Allowlist vide → fail-closed : None sans appel Airtable (jamais
+    de filtre ouvert sur la base multi-syndic).
     NB : quelques codes matchent >1 record (ex. 5548, doublon Assynco) ; on retient
     le premier.
     """
     code = str(code_ncg).strip()
     if not code.isdigit():
         return None
-    ref_clause = '{Ref client}="' + code + '"'
-    ncg_clause = _ncg_syndic_clause()
-    formula = ref_clause if not ncg_clause else "AND(" + ref_clause + ", " + ncg_clause + ")"
+    syndic_clause = _syndic_allowlist_clause()
+    if syndic_clause is None:
+        return None
+    formula = "AND(" + '{Ref client}="' + code + '"' + ", " + syndic_clause + ")"
     recs = _airtable_list(cfg.ASSYNCO_TABLE_COPRO,
                           formula=formula,
                           fields=_COPRO_FIELDS, max_records=1)

@@ -19,7 +19,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
-from pipeline_config import paths_for
+from pipeline_config import paths_for, RESULTS_ROOT
 
 # =====================================================
 # CONFIGURATION
@@ -35,8 +35,8 @@ if _args.copro:
     OUTPUT_FILE = str(_paths["embeddings_jsonl"])
     print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
 else:
-    INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_copro.jsonl"
-    OUTPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings.jsonl"
+    INPUT_FILE = str(RESULTS_ROOT / "chunks_copro.jsonl")
+    OUTPUT_FILE = str(RESULTS_ROOT / "chunks_avec_embeddings.jsonl")
 
 AWS_REGION = "eu-west-1"
 

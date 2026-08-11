@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from botocore.config import Config
 from tqdm import tqdm
 
-from pipeline_config import paths_for
+from pipeline_config import paths_for, FILTERED_ROOT, EXTRACTED_ROOT
 
 # ── Dépendances (installation auto si manquantes) ──
 try:
@@ -79,8 +79,8 @@ if _args.copro:
     _LOG_PATH = str(_paths["extraction_log"])
     print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
 else:
-    FILTERED_DIR = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Filtrees"
-    OUTPUT_DIR   = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\Archives_Extraites"
+    FILTERED_DIR = str(FILTERED_ROOT)
+    OUTPUT_DIR   = str(EXTRACTED_ROOT)
     _WALK_DIR    = FILTERED_DIR
     CHECKPOINT_FILE = os.path.join(SCRIPT_DIR, "extraction_checkpoint.json")
     _LOG_PATH = "extraction.log"

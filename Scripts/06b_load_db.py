@@ -28,12 +28,12 @@ if COPRO:
     INPUT_FILE = str(pcfg.paths_for(COPRO)["embeddings_sq_jsonl"])
     print(f"📌 Mode per-copro : {COPRO} — upsert (DELETE+INSERT par copro)")
 else:
-    INPUT_FILE = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts\chunks_avec_embeddings_sq.jsonl"  # Phase 1a : fichier enrichi avec questions synthétiques
+    INPUT_FILE = str(pcfg.RESULTS_ROOT / "chunks_avec_embeddings_sq.jsonl")  # Phase 1a : fichier enrichi avec questions synthétiques
     print("📌 Mode legacy : monolithe global (TRUNCATE complet)")
-DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"  # ← MODIFIER
-DB_PORT = 5432
-DB_NAME = "postgres"
-DB_USER = "ragadmin"
+DB_HOST = pcfg.require_db_host()
+DB_PORT = pcfg.DB_PORT
+DB_NAME = pcfg.DB_NAME
+DB_USER = pcfg.DB_USER_ADMIN
 DB_PASSWORD = os.environ.get("DB_PASSWORD")  # secret hors du code — exporter avant de lancer
 if not DB_PASSWORD:
     raise SystemExit("❌ DB_PASSWORD manquant. Lance : DB_PASSWORD=... python 06b_load_db.py")

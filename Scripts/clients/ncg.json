@@ -1,0 +1,32 @@
+{
+  "_comment": "Profil client PALIM — NCG. Chargé par pipeline_config.py selon PALIM_CLIENT (défaut: ncg). Ne contient AUCUN secret : les mots de passe restent en env (pipeline) ou Secrets Manager (MCP).",
+  "client_code": "ncg",
+  "client_name": "NCG",
+  "project_root": null,
+  "db": {
+    "host": "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com",
+    "port": 5432,
+    "name": "postgres",
+    "user_admin": "ragadmin",
+    "user_reader": "mcp_ncg_reader",
+    "secret_reader": "palim/mcp_ncg_reader",
+    "secret_admin": "palim/ragadmin"
+  },
+  "assynco": {
+    "_comment": "Base Airtable du courtier Assynco (multi-syndic, partagée entre clients PALIM). syndic_labels = libellés exacts du champ primaire Organisation autorisés pour CE client (isolation tenant).",
+    "enabled": true,
+    "syndic_labels": ["NCG IMMOBILIER", "NCG GE", "IMMOEXPRESS"]
+  },
+  "included_copros": {
+    "5033": "5033 - 24 TORCY",
+    "5354": "5354 - 2 UNIVERSITE",
+    "5390": "5390 - 2-6 BIS HENRI TARIEL",
+    "5427": "5427 - 33 VICTOR CRESSON",
+    "5480": "5480 - 88-90 GR GAL EBOUE",
+    "5499": "5499 - 22-24 GUILLEMIN",
+    "5548": "5548 - VILLA HAUSSMANN",
+    "5553": "5553 - 8 Jaurès - LES FREGATES",
+    "8030": "8030 - 21 PATAY",
+    "8050": "8050 - STYLE - 145 AVENUE DE FRANCE"
+  }
+}

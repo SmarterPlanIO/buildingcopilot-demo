@@ -51,7 +51,7 @@ if _args.copro:
     OUTPUT_DOSSIERS = str(_p["dossiers_jsonl"])
     print(f"📌 Mode per-copro : {_args.copro} ({_p['folder_name']})")
 else:
-    _RESULTS = r"G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\NCG\202512 Mission Déploiement IA interne\Résultats bruts"
+    _RESULTS = str(pcfg.RESULTS_ROOT)
     INPUT_FILE = os.path.join(_RESULTS, "chunks_avec_embeddings_sq.jsonl")
     OUTPUT_DOSSIERS = os.path.join(_RESULTS, "dossiers.jsonl")
 

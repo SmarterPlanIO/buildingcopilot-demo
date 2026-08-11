@@ -5,13 +5,15 @@ Lance : python 06a_init_db.py
 import os
 import psycopg2
 
+import pipeline_config as pcfg
+
 # =====================================================
-# CONFIGURATION — Remplace par tes valeurs
+# CONFIGURATION — profil client (clients/<client>.json), surchargé par l'env
 # =====================================================
-DB_HOST = "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com"
-DB_PORT = 5432
-DB_NAME = "postgres"
-DB_USER = "ragadmin"
+DB_HOST = pcfg.require_db_host()
+DB_PORT = pcfg.DB_PORT
+DB_NAME = pcfg.DB_NAME
+DB_USER = pcfg.DB_USER_ADMIN
 DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 
 # =====================================================
