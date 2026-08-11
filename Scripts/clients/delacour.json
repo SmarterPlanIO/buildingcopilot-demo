@@ -13,9 +13,9 @@
     "secret_admin": "palim-delacour/ragadmin"
   },
   "assynco": {
-    "_comment": "Assynco est aussi le courtier de Delacour : même base Airtable. Renseigner ici les libellés EXACTS du champ primaire Organisation des entités Delacour (à relever dans Airtable). Tant que la liste est vide, tout accès Assynco est fail-closed (aucune copro ne résout).",
+    "_comment": "Assynco est aussi le courtier de Delacour : même base Airtable. Libellés relevés dans Organisation le 11/08/2026 : 'DELACOUR PATRIMOINE' (Syndic+Client, 31 copros liées) et 'Delacour Patrimoine' (doublon orphelin, 0 copro — gardé par sécurité, FIND est sensible à la casse). ATTENTION onboarding : seules 2/31 copros Delacour ont un {Ref client} renseigné — à peupler côté Assynco avant que la résolution par code copro fonctionne.",
     "enabled": true,
-    "syndic_labels": []
+    "syndic_labels": ["DELACOUR PATRIMOINE", "Delacour Patrimoine"]
   },
   "included_copros": {}
 }
