@@ -123,8 +123,11 @@ with open(INPUT_FILE, "r", encoding="utf-8") as f:
         def clean(s):
             return s.replace("\x00", "") if isinstance(s, str) else s
 
-        # Extraire code_ncg du source_file
-        _code_ncg = extract_code_ncg(chunk.get("source_file", ""))
+        # code_ncg : en mode per-copro le code est CONNU (--copro) — l'estampiller.
+        # L'extraction par regex sur le chemin est une convention NCG (dossiers
+        # "8050 - ...") qui produit des codes fantômes chez d'autres clients
+        # (années, codes postaux) : réservée au mode legacy global.
+        _code_ncg = COPRO or extract_code_ncg(chunk.get("source_file", ""))
 
         # Préparer le tuple pour insertion
         row = (
@@ -254,7 +257,7 @@ if os.path.exists(METADATA_FILE):
             else:
                 raw_dossier = None
 
-            _doc_code_ncg = extract_code_ncg(rec.get("source_file", ""))
+            _doc_code_ncg = COPRO or extract_code_ncg(rec.get("source_file", ""))
             row = (
                 clean(rec["source_file"]),
                 clean(rec["copropriete"]),
@@ -342,8 +345,8 @@ if os.path.exists(DOSSIERS_FILE):
     with open(DOSSIERS_FILE, "r", encoding="utf-8") as f:
         for line in f:
             rec = json.loads(line)
-            # Try multiple sources for code_ncg: nom_dossier, documents_lies paths, dossier_id
-            _dossier_code_ncg = extract_code_ncg(rec.get("nom_dossier", ""))
+            # Try multiple sources for code_ncg: --copro (per-copro), nom_dossier, documents_lies paths, dossier_id
+            _dossier_code_ncg = COPRO or extract_code_ncg(rec.get("nom_dossier", ""))
             if not _dossier_code_ncg:
                 for _dl in (rec.get("documents_lies") or []):
                     _dossier_code_ncg = extract_code_ncg(_dl)
