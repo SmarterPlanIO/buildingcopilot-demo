@@ -43,7 +43,9 @@ CLIENT_NAME = _cfg["client_name"]
 # Racine projet : null dans le profil = racine du clone (parent de Scripts/).
 PROJECT_ROOT = Path(_cfg["project_root"]) if _cfg.get("project_root") else _SCRIPTS_DIR.parent
 
-RAW_ROOT       = PROJECT_ROOT / "Données brutes"
+# Sources documentaires : "raw_root" du profil permet de lire DIRECTEMENT un Drive
+# partagé client (lecture seule, zéro recopie). Défaut : Données brutes/ du projet.
+RAW_ROOT       = Path(_cfg["raw_root"]) if _cfg.get("raw_root") else PROJECT_ROOT / "Données brutes"
 RESULTS_ROOT   = PROJECT_ROOT / "Résultats bruts"
 FILTERED_ROOT  = RESULTS_ROOT / "Archives_Filtrees"
 EXTRACTED_ROOT = RESULTS_ROOT / "Archives_Extraites"
