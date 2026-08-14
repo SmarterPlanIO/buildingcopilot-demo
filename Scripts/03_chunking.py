@@ -240,55 +240,62 @@ def detect_doc_type(filepath, filename, text="", source_file=""):
     path_parts = [p.lower() for p in filepath.replace("\\", "/").split("/") if p]
 
     # ── PASSE 1 : Structure des dossiers (signal le plus fiable) ──
+    # Match par TOKENS et non par égalité exacte : les conventions de nommage
+    # varient par syndic ("FACTURES", "Factures 2024", "5 - SINISTRES", "AG 2025"
+    # doivent tous matcher). Les chiffres servent de séparateurs, pas de tokens.
+    def _folder_tokens(p):
+        return set(t for t in re.split(r"[^a-zà-ÿœ_]+", p) if t)
+
     _in_assemblee_folder = False
     for part in path_parts:
+        tok = _folder_tokens(part)
         # Dossier AG/ASSEMBLEE → marquer mais NE PAS retourner PV_AG directement.
         # Le dossier contient aussi convocations, ODJ, VPC, annexes, contrats syndic...
         # On laisse la Passe 2 (nom du fichier) qualifier le type exact.
-        if part in ("assemblee", "assemblée", "assemblees", "assemblées",
-                     "ag", "pv", "pv_ag", "proces_verbaux"):
+        if tok & {"assemblee", "assemblée", "assemblees", "assemblées",
+                  "ag", "pv", "pv_ag", "proces_verbaux"}:
             _in_assemblee_folder = True
             continue  # ne pas retourner tout de suite
 
         # Comptabilité — AVANT budget (un dossier COMPTA contient des annexes, pas des budgets)
-        if part in ("compta", "comptabilité", "comptabilite", "comptable"):
+        if tok & {"compta", "comptabilité", "comptabilite", "comptable"}:
             return "COMPTABILITE"
 
         # Entretien / maintenance
-        if part in ("entretien", "maintenance"):
+        if tok & {"entretien", "maintenance"}:
             return "ENTRETIEN"
 
         # Sinistres / expertises
-        if part in ("sinistre", "sinistres", "expertise", "expertises", "anomalies"):
+        if tok & {"sinistre", "sinistres", "expertise", "expertises", "anomalies"}:
             return "SINISTRE"
 
-        if part in ("reglement", "règlement", "rcp", "reglement_copro",
-                     "règlement_copropriété", "regl_copro"):
+        if tok & {"reglement", "règlement", "rcp", "reglement_copro",
+                  "règlement_copropriété", "regl_copro"}:
             return "RCP"
 
-        if part in ("contrat", "contrats", "mandat", "mandats", "convention", "conventions"):
+        if tok & {"contrat", "contrats", "mandat", "mandats", "convention", "conventions"}:
             return "CONTRAT"
 
-        if part in ("devis",):
+        if tok & {"devis"}:
             return "DEVIS"
 
-        if part in ("facture", "factures"):
+        if tok & {"facture", "factures"}:
             return "FACTURE"
 
-        if part in ("budget", "budgets", "appels_de_fonds", "repartition", "répartition"):
+        if tok & {"budget", "budgets", "appels_de_fonds", "repartition", "répartition"}:
             return "BUDGET"
 
-        if part in ("diagnostic", "diagnostics", "dpe", "amiante"):
+        if tok & {"diagnostic", "diagnostics", "dpe", "amiante"}:
             return "DIAGNOSTIC"
 
-        if part in ("courrier", "courriers", "correspondance", "lrar"):
+        if tok & {"courrier", "courriers", "correspondance", "lrar"}:
             return "COURRIER"
 
         # PLAN en dernier dans la Passe 1 (mot courant, risque de faux positifs)
-        if part in ("plan", "plans", "architecte"):
+        if tok & {"plan", "plans", "architecte"}:
             return "PLAN"
 
-        if part in ("assurance", "assurances"):
+        if tok & {"assurance", "assurances"}:
             return "ASSURANCE"
 
     # ── PASSE 2 : Nom du fichier (word boundaries pour éviter faux positifs) ──
