@@ -113,6 +113,11 @@ FURL=$(aws lambda create-function-url-config --region $REG --function-name palim
 aws lambda add-permission --region $REG --function-name palim-delacour-mcp \
   --statement-id AllowPublicFunctionUrl --action lambda:InvokeFunctionUrl \
   --principal "*" --function-url-auth-type NONE >/dev/null
+# InvokeFunctionUrl seul => 403 "Forbidden" au front door en mode streaming
+# (constate le 14/08 ; la policy NCG a la meme declaration en plus) :
+aws lambda add-permission --region $REG --function-name palim-delacour-mcp \
+  --statement-id FnUrlInvokeAction --action lambda:InvokeFunction \
+  --principal "*" >/dev/null
 rm -f /tmp/palim-delacour-policy.json /tmp/env-delacour.json /tmp/trust.json
 
 echo ""
