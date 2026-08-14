@@ -32,9 +32,11 @@ Pipeline d'ingestion de documents de copropriété (PDF/Word/Excel scannés) →
 
 ## 2b. Multi-client (déclinaison par syndic)
 
-Le produit est déclinable par client syndic (NCG, Delacour Patrimoine, ...). Un client = **un clone du repo** (dans le dossier mission du client) + **un profil** `Scripts/clients/<client>.json` + **une infra dédiée** (RDS, Lambda MCP + slug, secrets, projet Langfuse). Jamais deux clients dans la même DB copros (les tools filtrent par code copro, pas par syndic).
+Le produit est déclinable par client syndic (NCG, Delacour Patrimoine, ...). Un client = **un clone du repo** (dans le dossier mission du client) + **un dossier** `Scripts/clients/<client>/` + **une infra dédiée** (RDS, Lambda MCP + slug, secrets, projet Langfuse). Jamais deux clients dans la même DB copros (les tools filtrent par code copro, pas par syndic).
 
-- **Sélection du client** : variable d'env `PALIM_CLIENT` (défaut `ncg`), lue par `pipeline_config.py` (pipeline) et `PALIM_config.py` (MCP, via env.json Lambda).
+Règle de rangement : `Scripts/` (racine, `mcp_server/`, `Streamlit Cloud/`) = **produit générique**, zéro référence client techniquement injustifiée. Tout ce qui est propre à un client vit dans `clients/<client>/` : `client.json` (profil), `docs/` (Project Instructions, runbooks), `tools/` (diagnostics et one-offs liés à ses données), `skills/` (skills Claude Teams brandées client ; `assynco-erp` reste dans le produit car le courtier est partagé).
+
+- **Sélection du client** : variable d'env `PALIM_CLIENT` (défaut `ncg`), lue par `pipeline_config.py` (charge `clients/<client>/client.json`) et `PALIM_config.py` (MCP, via env.json Lambda).
 - **Profil client** : `client_code`, `client_name`, `project_root` (null = racine du clone), `db` (host/users/secrets — jamais de mot de passe), `assynco.syndic_labels` (allowlist tenant Airtable), `included_copros` (registre code→dossier).
 - **Précédence** : env > profil client. `db.host` vide → les scripts DB refusent de démarrer (`require_db_host()`, pas de fallback vers la DB d'un autre client).
 - **Assynco** : base Airtable du courtier partagée entre clients (Assynco est aussi le courtier de Delacour). L'isolation tenant se fait par `syndic_labels` ; côté MCP, allowlist vide = fail-closed (aucune copro ne résout). Env : `ASSYNCO_SYNDIC_ALLOWLIST` (l'ancien nom `ASSYNCO_SYNDIC_NCG` reste lu, rétro-compat env.json <= v8).
@@ -51,8 +53,10 @@ Le produit est déclinable par client syndic (NCG, Delacour Patrimoine, ...). Un
 ├── .python-version              # 3.12
 ├── requirements.txt             # deps racine
 ├── Scripts/                     # ⭐ TOUT le code vit ici
-│   ├── pipeline_config.py       # Source de vérité : profil client (clients/<client>.json), map code copro→dossier, paths per-copro, DB
-│   ├── clients/                  # Profils clients (ncg.json, delacour.json) — cf. §2b, aucun secret
+│   ├── pipeline_config.py       # Source de vérité : profil client (clients/<client>/client.json), map code copro→dossier, paths per-copro, DB
+│   ├── clients/                  # ⭐ Tout le spécifique client — cf. §2b, aucun secret
+│   │   ├── ncg/                 # client.json + docs/ (INSTRUCTIONS_NCG_PROJECT v1.9, RUNBOOK_DEPLOY_V7) + tools/ (debug/diag one-offs, ex-07_query_rag_ui) + skills/ (ncg-redaction-livrable, ncg-note-juridique)
+│   │   └── delacour/            # client.json + docs/ (RUNBOOK_PROVISION_DELACOUR)
 │   ├── 00_inventaire.py         # Étape 0 : inventaire des fichiers d'archives
 │   ├── 01_filtrage.py           # Étape 0.2 : tri plans/photos/inutiles (règles + Vision Sonnet)
 │   ├── 02_extraction_optimized.py  # Étape 2 : extraction texte (Textract fire-all-then-collect)
@@ -63,7 +67,6 @@ Le produit est déclinable par client syndic (NCG, Delacour Patrimoine, ...). Un
 │   ├── 05c_entity_extraction.py # Étape 5c : entités sinistre → dossiers auto
 │   ├── 06a_init_db.py           # Étape 6a : CREATE TABLE + index (schéma DB — voir §5)
 │   ├── 06b_load_db.py           # Étape 6b : TRUNCATE + INSERT chunks/documents/dossiers
-│   ├── 07_query_rag_ui.py       # App Streamlit LOCALE (avec FlashRank) — variante dev
 │   ├── 08_airtable_sync.py      # Étape 8 : sync dossiers sinistres Airtable Assynco (OBLIGATOIRE après 06b)
 │   ├── ingest.py                # ⭐ Driver d'ingestion per-copro de bout en bout (CRUD docs) — voir §4
 │   ├── run_pipeline_per_copro.py   # Orchestrateur Tier-1 : enchaîne 01→05b pour 1 copro
@@ -74,7 +77,6 @@ Le produit est déclinable par client syndic (NCG, Delacour Patrimoine, ...). Un
 │   ├── PLAN_*.md                # Plans : SCALE_150_COPROS, ANALYTIQUE_INTER_COPRO, REDUCTION_COUT_COPRO, 05C_DEDUP_SINISTRES
 │   ├── pipeline_config.py       # (cf. plus haut)
 │   ├── content_filter.py        # Filtre contenu binaire (importé par 03)
-│   ├── diag_*.py / debug_*.py   # Scripts de diagnostic jetables (one-off, pas du code prod)
 │   ├── Streamlit Cloud/         # Banc de test interne (déployé depuis main)
 │   │   ├── streamlit_app.py     # Harness (2900+ lignes) — UI + orchestration retrieval
 │   │   ├── dossiers_api.py      # Logique métier dossiers/sinistres (UI-agnostique, vendorisé côté MCP)
@@ -93,15 +95,13 @@ Le produit est déclinable par client syndic (NCG, Delacour Patrimoine, ...). Un
 │       ├── PALIM_{dossiers,copros,discovery,scope,visites}.py  # helpers des tools
 │       ├── PALIM_tracing.py     # Tracing Langfuse optionnel (no-op si pas de clés)
 │       ├── Dockerfile / build_and_push.sh / env.json  # Packaging Lambda container + LWA
-│       ├── INSTRUCTIONS_NCG_PROJECT.md   # ⭐ Project Instructions client (v1.9) — voir §11
-│       ├── RUNBOOK_DEPLOY_V7.md  # Procédure de déploiement Lambda
-│       └── skills/              # Skills client : ncg-redaction-livrable, ncg-note-juridique, assynco-erp
+│       └── skills/              # Skills produit partagées entre clients : assynco-erp
 ├── Données brutes/              # Archives sources par copro (gitignored)
 └── Résultats bruts/             # Sorties pipeline + guide (jsonl/csv gitignored)
     └── rag-prototype-guide.md   # Mémoire complète du pipeline (à maintenir)
 ```
 
-**Deux apps Streamlit coexistent** : `Scripts/07_query_rag_ui.py` (locale, rerank FlashRank) et `Scripts/Streamlit Cloud/streamlit_app.py` (déployée, rerank Cohere via `rerank.py`). **Modifier la version Cloud** pour tout ce qui touche le harness déployé.
+**Harness Streamlit** : la version déployée est `Scripts/Streamlit Cloud/streamlit_app.py` (rerank Cohere via `rerank.py`) — **c'est elle qu'on modifie**. L'ancienne UI locale (FlashRank) est archivée dans `clients/ncg/tools/07_query_rag_ui.py`.
 
 > **Important** : les deux apps Streamlit sont des **bancs de test internes (harness de debug)**. Le produit livré au client est le **backend MCP** (`Scripts/mcp_server/`, §10), interrogé par le LLM du client via les **Project Instructions** et **skills** (§11). Le pipeline d'ingestion et le schéma DB sont le socle commun aux deux.
 
@@ -209,7 +209,7 @@ generate_answer_stream()  → Sonnet 4.6, streaming, citations [Source N]
 | Dossiers sinistres | `Scripts/Streamlit Cloud/dossiers_api.py` + `08_airtable_sync.py` |
 | Agrégations analytiques sécurisées | `Scripts/Streamlit Cloud/analytics.py` |
 | Backend MCP produit (serveur, 12 tools, deploy) | `Scripts/mcp_server/` (§10) |
-| Project Instructions + skills client | `Scripts/mcp_server/INSTRUCTIONS_NCG_PROJECT.md` + `skills/` (§11) |
+| Project Instructions + skills client | `Scripts/clients/ncg/docs/INSTRUCTIONS_NCG_PROJECT.md` + `clients/ncg/skills/` (§11) |
 | Ingestion incrémentale d'une copro (CRUD) | `Scripts/ingest.py` |
 | Fiche synthèse par copro | `Scripts/09_copro_synthese.py` → table `copro_synthese` |
 | Modèle / réduction de coût ingestion | `Scripts/00a_cost_preflight.py`, `Scripts/PLAN_REDUCTION_COUT_COPRO.md` |
@@ -227,7 +227,7 @@ Serveur **FastMCP** (Python 3.12) déployé sur **AWS Lambda** en image containe
 - **Accès** : authless. Barrière = slug d'URL secret (`MCP_URL_SLUG`) plus resource policy de la Function URL. Pas d'OAuth/bearer. Protection DNS-rebinding FastMCP désactivée (rejetait le domaine `*.lambda-url.*.on.aws` en 421).
 - **Secrets (AWS Secrets Manager)** : `palim/mcp_ncg_reader` (DB, user **lecture seule** `mcp_ncg_reader`), `palim/airtable_pat` (Assynco). Env = fallback dev seulement, jamais loggé.
 - **Régions** : embeddings Titan eu-west-1, rerank Cohere eu-central-1, Secrets Manager + RDS eu-west-1.
-- **Build/deploy** : `build_and_push.sh <tag>` vendorise `dossiers_api.py` et `rerank.py` depuis `../Streamlit Cloud/`, build linux/amd64, push ECR ; puis `aws lambda update-function-code ... --image-uri ...:vN`. Runbook : `RUNBOOK_DEPLOY_V7.md`. Rollback = repointer sur l'image précédente.
+- **Build/deploy** : `build_and_push.sh <tag>` vendorise `dossiers_api.py` et `rerank.py` depuis `../Streamlit Cloud/`, build linux/amd64, push ECR ; puis `aws lambda update-function-code ... --image-uri ...:vN`. Runbook : `clients/ncg/docs/RUNBOOK_DEPLOY_V7.md`. Rollback = repointer sur l'image précédente.
 - **Tracing** : Langfuse optionnel via `PALIM_tracing.py` (no-op si pas de clés ; `langfuse==2.60.4`). `search_chunks`/`search_dossiers` renvoient un `trace_ref` pour rattacher le feedback.
 
 ### Les 12 tools `PALIM_*` (décorateurs `@mcp.tool()` dans `PALIM_server.py`)
@@ -257,7 +257,7 @@ Tous renvoient un dict `{ok, ...}` (jamais d'exception brute). Le **scope est d�
 
 Le client connecte son LLM (Claude Teams / Cowork) au MCP avec :
 
-- **Project Instructions** `Scripts/mcp_server/INSTRUCTIONS_NCG_PROJECT.md` (**v1.9**, à coller dans le Projet Claude). 12 blocs (Bloc 0→11). **Cadre à 2 axes** annoncé en une ligne avant toute réponse non triviale : Axe 1 Destinataire (Interne par défaut / Externe, gate de sécurité), Axe 2 Type de tâche (Factuel par défaut / Analyse juridique / Synthèse de dossier / Rédaction de livrable). Invariant : jamais de réponse "toutes copros confondues". Bloc 10 (sourçage, v1.9) : le verbatim se cite depuis le `text` du passage renvoyé par `search_chunks` tant qu'il est en contexte ; `get_chunks` re-matérialise le texte exact par `chunk_id` quand le passage a quitté le contexte ; `citation` = métadonnées seules. Bloc 11 : `get_visite_3d` obligatoire sur match littéral de mot-clé 3D.
+- **Project Instructions** `Scripts/clients/ncg/docs/INSTRUCTIONS_NCG_PROJECT.md` (**v1.9**, à coller dans le Projet Claude). 12 blocs (Bloc 0→11). **Cadre à 2 axes** annoncé en une ligne avant toute réponse non triviale : Axe 1 Destinataire (Interne par défaut / Externe, gate de sécurité), Axe 2 Type de tâche (Factuel par défaut / Analyse juridique / Synthèse de dossier / Rédaction de livrable). Invariant : jamais de réponse "toutes copros confondues". Bloc 10 (sourçage, v1.9) : le verbatim se cite depuis le `text` du passage renvoyé par `search_chunks` tant qu'il est en contexte ; `get_chunks` re-matérialise le texte exact par `chunk_id` quand le passage a quitté le contexte ; `citation` = métadonnées seules. Bloc 11 : `get_visite_3d` obligatoire sur match littéral de mot-clé 3D.
 - **3 skills** (`Scripts/mcp_server/skills/`) :
   - `ncg-redaction-livrable` — mise en forme (note interne, courrier copropriétaires, note conseil syndical, email prestataire, export Word, logo `logo NCG.png` en en-tête des livrables externes). 4 gabarits dans `templates.md`.
   - `ncg-note-juridique` — analyse juridique (RCP/EDD, majorités art. 24/25/25-1/26 loi 1965, délais art. 42), 3 couches (doc copro primant / cadre légal à valider / interprétation signalée), active `include_legal_context=true`, ne se fait jamais passer pour un avis juridique.

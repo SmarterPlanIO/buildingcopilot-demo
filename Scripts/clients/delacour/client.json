@@ -1,5 +1,5 @@
 {
-  "_comment": "Profil client PALIM — Delacour Patrimoine. Utilisation : PALIM_CLIENT=delacour. project_root=null => racine du clone (le repo doit être cloné dans le dossier mission Delacour). RDS dédiée provisionnée le 11/08/2026 (db.t4g.micro PG 17.9, cf. mcp_server/RUNBOOK_PROVISION_DELACOUR.md pour les secrets + Lambda).",
+  "_comment": "Profil client PALIM — Delacour Patrimoine. Utilisation : PALIM_CLIENT=delacour. project_root=null => racine du clone (le repo doit être cloné dans le dossier mission Delacour). RDS dédiée provisionnée le 11/08/2026 (db.t4g.micro PG 17.9, cf. clients/delacour/docs/RUNBOOK_PROVISION_DELACOUR.md pour les secrets + Lambda).",
   "client_code": "delacour",
   "client_name": "Delacour Patrimoine",
   "project_root": null,

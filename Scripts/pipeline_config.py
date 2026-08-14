@@ -12,10 +12,11 @@ via ce module. Sans `--copro`, ils retombent sur les chemins historiques
 (rétro-compatibilité avec l'ancien mode "tout d'un coup").
 
 Multi-client : un clone du repo par client (dans le dossier mission du client),
-un profil JSON par client. `project_root` null dans le profil = racine du clone
-(parent de Scripts/), donc aucun path absolu à éditer en déclinant le produit.
-Aucun secret dans les profils : mots de passe via env (pipeline) ou Secrets
-Manager (MCP).
+un dossier `clients/<client>/` par client (client.json = profil ; docs/, tools/,
+skills/ = tout ce qui est spécifique à ce client). `project_root` null dans le
+profil = racine du clone (parent de Scripts/), donc aucun path absolu à éditer
+en déclinant le produit. Aucun secret dans les profils : mots de passe via env
+(pipeline) ou Secrets Manager (MCP).
 """
 import json
 import os
@@ -26,9 +27,9 @@ CLIENTS_DIR = _SCRIPTS_DIR / "clients"
 
 PALIM_CLIENT = (os.environ.get("PALIM_CLIENT", "ncg").strip().lower() or "ncg")
 
-_client_file = CLIENTS_DIR / f"{PALIM_CLIENT}.json"
+_client_file = CLIENTS_DIR / PALIM_CLIENT / "client.json"
 if not _client_file.exists():
-    _known = sorted(p.stem for p in CLIENTS_DIR.glob("*.json"))
+    _known = sorted(p.parent.name for p in CLIENTS_DIR.glob("*/client.json"))
     raise SystemExit(
         f"❌ Profil client introuvable : {_client_file} (PALIM_CLIENT={PALIM_CLIENT}). "
         f"Profils connus : {_known}"
