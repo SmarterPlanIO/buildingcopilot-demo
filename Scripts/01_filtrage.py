@@ -315,7 +315,16 @@ for root, dirs, filenames in os.walk(ARCHIVES_ROOT):
         if is_system_file(fname):
             stats["exclus_systeme"] += 1
             continue
-        
+
+        # Fichiers Google natifs (.gsheet, .gdoc, ...) : purs pointeurs cloud sans
+        # contenu binaire local (raw_root = Drive streamé) — illisibles hors API
+        # Drive, la copie plante en EINVAL. Exclus d'office.
+        if ext in {".gsheet", ".gdoc", ".gslides", ".gdraw", ".gform", ".gtable", ".gmap", ".gsite", ".glink"}:
+            stats["exclus_autres"] += 1
+            decisions_log.append({"fichier": rel_path, "extension": ext, "taille_mo": 0,
+                                  "decision": "EXCLURE_GOOGLE_NATIF"})
+            continue
+
         try:
             filesize = os.path.getsize(src_path)
         except OSError:
@@ -357,7 +366,30 @@ for root, dirs, filenames in os.walk(ARCHIVES_ROOT):
         if decision == "GARDER":
             dest_path = os.path.join(OUTPUT_DIR, rel_path)
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            shutil.copy2(src_path, dest_path)
+            try:
+                try:
+                    shutil.copy2(src_path, dest_path)
+                except OSError:
+                    # GoogleDriveFS (raw_root = Drive partagé streamé) ne supporte pas
+                    # l'API CopyFile2 utilisée par copy2 sous Python 3.13+ (WinError 1).
+                    # Repli : copie par flux + mtime source préservé (checkpoint de 02).
+                    with open(src_path, "rb") as fsrc, open(dest_path, "wb") as fdst:
+                        shutil.copyfileobj(fsrc, fdst, 1024 * 1024)
+                    try:
+                        shutil.copystat(src_path, dest_path)
+                    except OSError:
+                        pass
+            except OSError as _e:
+                # Fichier illisible même en flux (placeholder cloud, 0 octet corrompu...) :
+                # non fatal — on le journalise et on continue, un fichier ne doit pas
+                # faire échouer l'ingestion de toute la copro.
+                stats["erreurs"] += 1
+                decision = "ERREUR_COPIE"
+                try:
+                    os.remove(dest_path)
+                except OSError:
+                    pass
+                print(f"   ⚠️ copie impossible, fichier ignoré : {rel_path} ({_e})")
         
         decisions_log.append({
             "fichier": rel_path,

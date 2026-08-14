@@ -1,5 +1,5 @@
 {
-  "_comment": "Profil client PALIM — Delacour Patrimoine. Utilisation : PALIM_CLIENT=delacour. project_root = dossier de travail LOCAL (sorties pipeline : Résultats bruts/, plus rapide et plus sûr que GDrive pour les gros JSONL). raw_root = Drive partagé du client, LECTURE SEULE, zéro recopie des sources. RDS dédiée provisionnée le 11/08/2026, infra MCP validée le 14/08 (cf. clients/delacour/docs/RUNBOOK_PROVISION_DELACOUR.md). Codes copro = codes Lobby 4 chiffres zéro-paddés, extraits des documents du Drive le 14/08 (préfixes de fichiers + en-têtes 'Immeuble :') — 13 codes certains ici ; 3 plausibles à confirmer (1171 Guynemer, 0810 Lazare Carnot, 0204 94 Victor Hugo) et 9 copros sans code (à obtenir via Lobby/Delacour) restent à ajouter.",
+  "_comment": "Profil client PALIM — Delacour Patrimoine. Utilisation : PALIM_CLIENT=delacour. project_root = dossier de travail LOCAL (sorties pipeline : Résultats bruts/, plus rapide et plus sûr que GDrive pour les gros JSONL). raw_root = Drive partagé du client, LECTURE SEULE, zéro recopie des sources. RDS dédiée provisionnée le 11/08/2026, infra MCP validée le 14/08 (cf. clients/delacour/docs/RUNBOOK_PROVISION_DELACOUR.md). Codes copro = codes Lobby 4 chiffres zéro-paddés, extraits des documents du Drive le 14/08 (préfixes de fichiers Delacour-era + en-têtes 'Immeuble :'), revalidés le 14/08 contre les zones de reprise des anciens syndics. ATTENTION : certains préfixes viennent de l'ANCIEN syndic (ex. 2190 = code Privilège Gestion pour 100 Bd Victor Hugo, retiré d'ici ; code Lobby probable 5807 via Ref client '5807/2190', à confirmer). Douteux à confirmer avant ingestion : 0619 (74 agent Sarre) et 0325 (1 Crillon), fichiers préfixés uniquement en zone reprise/archives ; 0053 (Didot) à revérifier. Manquent aussi : 1171/0810/0204 plausibles + 9 copros sans code — source qui tranche = liste des immeubles Lobby ou Delacour.",
   "client_code": "delacour",
   "client_name": "Delacour Patrimoine",
   "project_root": "C:\\Users\\thai-\\palim-delacour",
@@ -30,7 +30,6 @@
     "0619": "74 avenue de l’agent Sarre - 92700",
     "0858": "130 Rue d'Aboukir - 75002",
     "1114": "6 6Bis rue de la briqueterie - 75014",
-    "2190": "SDC 100 Boulevard Victor Hugo - 92200",
     "6344": "SDC 79-81 BOULEVARD EXELMANS - 75016"
   }
 }
