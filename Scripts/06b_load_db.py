@@ -159,7 +159,22 @@ with open(INPUT_FILE, "r", encoding="utf-8") as f:
                  text, nb_caracteres, embedding,
                  resolution_category, synthetic_questions, dossier_id, code_ncg)
                 VALUES %s
-                ON CONFLICT (chunk_id) DO NOTHING
+                ON CONFLICT (chunk_id) DO UPDATE SET
+                    copropriete = EXCLUDED.copropriete,
+                    source_file = EXCLUDED.source_file,
+                    nom_fichier = EXCLUDED.nom_fichier,
+                    doc_type = EXCLUDED.doc_type,
+                    chunk_index = EXCLUDED.chunk_index,
+                    total_chunks = EXCLUDED.total_chunks,
+                    themes = EXCLUDED.themes,
+                    theme_scores = EXCLUDED.theme_scores,
+                    text = EXCLUDED.text,
+                    nb_caracteres = EXCLUDED.nb_caracteres,
+                    embedding = EXCLUDED.embedding,
+                    resolution_category = EXCLUDED.resolution_category,
+                    synthetic_questions = EXCLUDED.synthetic_questions,
+                    dossier_id = EXCLUDED.dossier_id,
+                    code_ncg = EXCLUDED.code_ncg
             """, batch)
             conn.commit()
             loaded += len(batch)
@@ -174,7 +189,22 @@ if batch:
          text, nb_caracteres, embedding,
          resolution_category, synthetic_questions, dossier_id, code_ncg)
         VALUES %s
-        ON CONFLICT (chunk_id) DO NOTHING
+        ON CONFLICT (chunk_id) DO UPDATE SET
+            copropriete = EXCLUDED.copropriete,
+            source_file = EXCLUDED.source_file,
+            nom_fichier = EXCLUDED.nom_fichier,
+            doc_type = EXCLUDED.doc_type,
+            chunk_index = EXCLUDED.chunk_index,
+            total_chunks = EXCLUDED.total_chunks,
+            themes = EXCLUDED.themes,
+            theme_scores = EXCLUDED.theme_scores,
+            text = EXCLUDED.text,
+            nb_caracteres = EXCLUDED.nb_caracteres,
+            embedding = EXCLUDED.embedding,
+            resolution_category = EXCLUDED.resolution_category,
+            synthetic_questions = EXCLUDED.synthetic_questions,
+            dossier_id = EXCLUDED.dossier_id,
+            code_ncg = EXCLUDED.code_ncg
     """, batch)
     conn.commit()
     loaded += len(batch)
