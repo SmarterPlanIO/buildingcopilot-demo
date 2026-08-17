@@ -22,6 +22,8 @@ import json
 import os
 from pathlib import Path
 
+from copro_id import canon  # canonicalisation des codes copro (produit partagé)
+
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 CLIENTS_DIR = _SCRIPTS_DIR / "clients"
 
@@ -51,9 +53,38 @@ FILTERED_ROOT  = RESULTS_ROOT / "Archives_Filtrees"
 EXTRACTED_ROOT = RESULTS_ROOT / "Archives_Extraites"
 PER_COPRO_ROOT = RESULTS_ROOT / "per_copro"
 
-# Map code copro -> nom de dossier dans Données brutes/
+# Registre des copros du client. Deux formats acceptés dans le profil :
+#   "code": "nom de dossier"                                    (legacy, NCG)
+#   "code": {"folder": ..., "lobby_code": ..., "label": ...}    (riche, Delacour+)
+# Clés stockées en forme canonique (copro_id.canon) ; `lobby_code` devient un
+# ALIAS de résolution (les gestionnaires pensent encore en codes internes).
 # Liste explicite : tout ce qui n'est pas listé dans le profil client est ignoré.
-INCLUDED_COPROS = dict(_cfg.get("included_copros") or {})
+_COPROS = {}
+_ALIASES = {}
+for _k, _v in (_cfg.get("included_copros") or {}).items():
+    _ck = canon(_k)
+    _meta = {"folder": _v} if isinstance(_v, str) else dict(_v)
+    _COPROS[_ck] = _meta
+    if _meta.get("lobby_code"):
+        _ALIASES[canon(_meta["lobby_code"])] = _ck
+
+INCLUDED_COPROS = {c: m["folder"] for c, m in _COPROS.items()}  # compat historique
+COPRO_META = _COPROS
+
+
+def resolve(code: str) -> str:
+    """Code canonique depuis toute graphie (tirets/espaces/casse) ou alias (code Lobby).
+
+    Tout point d'entrée par code (--copro, stamping DB, paths) DOIT passer ici :
+    c'est ce qui garantit qu'une même copro n'a qu'un seul shard et qu'un seul
+    code_ncg en base, quelle que soit la façon dont l'humain a tapé le code.
+    """
+    c = canon(code)
+    if c in _COPROS:
+        return c
+    if c in _ALIASES:
+        return _ALIASES[c]
+    raise ValueError(f"Code copro inconnu ou exclu : {code}. Codes valides : {sorted(_COPROS)}")
 
 # ── DB du client (précédence : env > profil client) ──
 # Le mot de passe n'est JAMAIS ici : DB_PASSWORD en env pour le pipeline.
@@ -84,9 +115,7 @@ def require_db_host() -> str:
 
 
 def folder_for(code: str) -> str:
-    if code not in INCLUDED_COPROS:
-        raise ValueError(f"Code copro inconnu ou exclu : {code}. Codes valides : {sorted(INCLUDED_COPROS)}")
-    return INCLUDED_COPROS[code]
+    return _COPROS[resolve(code)]["folder"]
 
 
 def raw_source_dir(code: str) -> Path:
@@ -103,11 +132,13 @@ def extracted_dir(code: str) -> Path:
 
 def per_copro_dir(code: str) -> Path:
     """Dossier de staging per-copro : rapports, checkpoints, JSONLs intermédiaires."""
-    return PER_COPRO_ROOT / code
+    return PER_COPRO_ROOT / resolve(code)
 
 
 def paths_for(code: str) -> dict:
-    """Bundle de tous les paths pour un code donné. Ne crée pas les dossiers."""
+    """Bundle de tous les paths pour un code donné (résolu en canonique).
+    Ne crée pas les dossiers."""
+    code = resolve(code)
     pcd = per_copro_dir(code)
     return {
         "code": code,

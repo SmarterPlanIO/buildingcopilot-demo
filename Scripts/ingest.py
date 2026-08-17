@@ -228,7 +228,7 @@ def main():
     if args.all:
         codes = sorted(pcfg.INCLUDED_COPROS)
     elif args.copro:
-        codes = [args.copro]
+        codes = [pcfg.resolve(args.copro)]
     else:
         raise SystemExit("❌ Preciser --copro <code> ou --all.")
 

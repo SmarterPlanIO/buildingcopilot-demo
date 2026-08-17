@@ -20,7 +20,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from pipeline_config import paths_for, INCLUDED_COPROS
+from pipeline_config import paths_for, INCLUDED_COPROS, resolve
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 
@@ -82,8 +82,10 @@ def main():
     parser.add_argument("--skip", action="append", choices=STEP_NAMES, default=[], help="Ignorer une étape (cumulable).")
     args = parser.parse_args()
 
-    if args.copro not in INCLUDED_COPROS:
-        print(f"❌ Code copro inconnu : {args.copro}. Valides : {sorted(INCLUDED_COPROS)}", file=sys.stderr)
+    try:
+        args.copro = resolve(args.copro)  # canonique (immatriculation/alias, toute graphie)
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr)
         sys.exit(2)
 
     paths = paths_for(args.copro)

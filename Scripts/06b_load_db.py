@@ -22,7 +22,7 @@ import pipeline_config as pcfg
 _parser = argparse.ArgumentParser(description="Chargement DB chunks/documents/dossiers.")
 _parser.add_argument("--copro", help="Code NCG (ex: 8050). Absent = legacy global (TRUNCATE).")
 _args, _ = _parser.parse_known_args()
-COPRO = _args.copro
+COPRO = pcfg.resolve(_args.copro) if _args.copro else None  # canonique (immat/alias)
 
 if COPRO:
     INPUT_FILE = str(pcfg.paths_for(COPRO)["embeddings_sq_jsonl"])

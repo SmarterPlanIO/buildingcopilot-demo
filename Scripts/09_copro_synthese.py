@@ -337,7 +337,7 @@ if __name__ == "__main__":
     cur = conn.cursor()
     bedrock = boto3.client("bedrock-runtime", region_name=AWS_REGION)
 
-    codes = [args.copro] if args.copro else all_codes(cur)
+    codes = [pcfg.resolve(args.copro)] if args.copro else all_codes(cur)
     print(f"{len(codes)} copro(s) à traiter"
           + (" (mode --if-stale)" if args.if_stale else "") + "\n")
 
