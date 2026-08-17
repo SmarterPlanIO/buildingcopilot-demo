@@ -20,11 +20,13 @@ en réponse MCP structurée) :
   - search_sinistres(code_ncg, query, max_records) -> list[dict]
 """
 import json
+import re
 import unicodedata
 import urllib.parse
 import urllib.request
 
 import PALIM_config as cfg
+from PALIM_scope import canon, is_immatriculation  # canonicalisation des codes copro
 
 _AT_API = "https://api.airtable.com/v0"
 _pat_cache = None
@@ -305,8 +307,11 @@ def _syndic_allowlist_clause():
 def _get_copro_record(code_ncg):
     """Record Copropriété brut pour un code copro **appartenant au syndic client**, ou None.
 
-    Le code copro vit dans le champ `Ref client` de la table Copropriétés (le `Nom`
-    est l'adresse/nom d'immeuble). `code_ncg` est validé numérique → pas d'injection.
+    Deux régimes de résolution (cf. PLAN_IMMATRICULATION_RNIC.md) :
+    - immatriculation RNIC (AA0000000, toute graphie humaine acceptée) → match sur
+      `Numéro d'immatriculation`, canonisé des deux côtés (SUBSTITUTE des tirets/espaces) ;
+    - code interne numérique (NCG) → match exact sur `Ref client` (comportement historique).
+    Le code passe par canon() (alphanumérique majuscules uniquement) → pas d'injection.
     Le record n'est retourné que si son `Syndic` est dans l'allowlist du client
     (isolation tenant) : une copro d'un autre syndic, ou un code en collision,
     renvoie None — indistinguable d'un code inexistant côté tool (pas d'oracle
@@ -315,13 +320,18 @@ def _get_copro_record(code_ncg):
     NB : quelques codes matchent >1 record (ex. 5548, doublon Assynco) ; on retient
     le premier.
     """
-    code = str(code_ncg).strip()
-    if not code.isdigit():
+    code = canon(code_ncg)
+    if not code or not re.fullmatch(r"[A-Z0-9]{1,12}", code):
         return None
     syndic_clause = _syndic_allowlist_clause()
     if syndic_clause is None:
         return None
-    formula = "AND(" + '{Ref client}="' + code + '"' + ", " + syndic_clause + ")"
+    if is_immatriculation(code):
+        id_clause = ('UPPER(SUBSTITUTE(SUBSTITUTE({Numéro d\'immatriculation},"-","")," ",""))="'
+                     + code + '"')
+    else:
+        id_clause = '{Ref client}="' + code + '"'
+    formula = "AND(" + id_clause + ", " + syndic_clause + ")"
     recs = _airtable_list(cfg.ASSYNCO_TABLE_COPRO,
                           formula=formula,
                           fields=_COPRO_FIELDS, max_records=1)

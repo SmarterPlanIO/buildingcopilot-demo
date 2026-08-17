@@ -4,6 +4,7 @@ env.json
 # Artefacts de build (vendorises par build_and_push.sh, jamais committes)
 dossiers_api_vendored.py
 rerank_vendored.py
+copro_id_vendored.py
 
 # Python
 __pycache__/

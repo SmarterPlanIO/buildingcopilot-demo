@@ -17,9 +17,10 @@ REGISTRY="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com"
 
 cd "$(dirname "$0")"
 
-echo "==> Vendoring des modules de 'Streamlit Cloud'"
+echo "==> Vendoring des modules partages"
 cp "../Streamlit Cloud/dossiers_api.py" ./dossiers_api_vendored.py
 cp "../Streamlit Cloud/rerank.py" ./rerank_vendored.py
+cp "../copro_id.py" ./copro_id_vendored.py
 
 echo "==> ECR: repo ${REPO} (creation si absent)"
 aws ecr describe-repositories --repository-names "${REPO}" --region "${REGION}" >/dev/null 2>&1 \

@@ -8,13 +8,27 @@ réponse finale ne part sans au moins une copro (non-dilution dure).
 Aucune exception brute ne doit remonter à Claude : les erreurs sont des
 réponses MCP structurées (build_error).
 """
+import os
 import re
+import sys
 
-_CODE_RE = re.compile(r"^\d{4,6}$")  # code_ncg = entier 4-6 chiffres (ex. "5390")
+# copro_id : module produit partagé (Scripts/copro_id.py), vendorisé dans
+# l'image Lambda par build_and_push.sh (copro_id_vendored.py).
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+try:
+    from copro_id import canon, is_immatriculation  # dev : module produit
+except ImportError:  # image Lambda : vendorisé au build
+    from copro_id_vendored import canon, is_immatriculation  # type: ignore
+
+# Deux régimes de code copro (cf. PLAN_IMMATRICULATION_RNIC.md) :
+# - immatriculation RNIC AA0000000 (standard nouveaux clients, ex. Delacour)
+# - code interne numérique 4-6 chiffres (NCG, ex. "5390")
+_CODE_RE = re.compile(r"^(\d{4,6}|[A-Z]{2}\d{7})$")
 
 
 def normalize_copro_codes(copro_codes):
-    """Nettoie, déduplique et valide le format des codes. Retourne une liste (ordre stable)."""
+    """Canonise (majuscules, sans tirets/espaces — un humain écrit "AE3-410-578"),
+    déduplique et retourne une liste (ordre stable)."""
     if copro_codes is None:
         return []
     if isinstance(copro_codes, str):
@@ -23,7 +37,7 @@ def normalize_copro_codes(copro_codes):
     for c in copro_codes:
         if c is None:
             continue
-        c = str(c).strip()
+        c = canon(c)
         if not c or c in seen:
             continue
         seen.add(c)
@@ -76,7 +90,7 @@ def build_scope_warnings(copro_codes):
     bad = invalid_codes(copro_codes)
     if bad:
         warnings.append(
-            f"Codes au format inattendu (attendu 4-6 chiffres) : {bad}. "
-            "Vérifier via PALIM_list_copros."
+            f"Codes au format inattendu (attendu : immatriculation RNIC type AE3410578, "
+            f"ou code interne 4-6 chiffres) : {bad}. Vérifier via PALIM_list_copros."
         )
     return warnings

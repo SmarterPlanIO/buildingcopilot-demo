@@ -138,7 +138,7 @@ def PALIM_search_chunks(
 
     Args:
         query: La question ou requête (reformulée si besoin).
-        copro_codes: Codes copro (référence interne syndic) des copropriétés (1 = mono ; >=2 = comparaison équilibrée).
+        copro_codes: Codes copro (1 = mono ; >=2 = comparaison équilibrée). Immatriculation RNIC (ex: "AE3-410-578", toutes graphies acceptées) ou code interne syndic (ex: "5390").
         doc_type: Filtre type de document (PV_AG, RCP, CONTRAT, ASSURANCE, ...).
         year_min / year_max: Bornes temporelles (année du document).
         statut / sous_type: Filtres document-level optionnels.
@@ -541,7 +541,7 @@ def PALIM_assynco_get_copro(code_ncg: str) -> dict:
     Pour les détails des contrats, enchaîner sur PALIM_assynco_list_polices.
 
     Args:
-        code_ncg: Code copro (référence interne syndic) de la copropriété (ex: "5390").
+        code_ncg: Code de la copropriété : immatriculation RNIC (ex: "AE3-410-578", toutes graphies acceptées) ou code interne syndic (ex: "5390").
 
     Returns:
         {ok, code_ncg, copro} ; copro : nom, adresse, type_syndicat, nb_coproprietaires,
@@ -583,7 +583,7 @@ def PALIM_assynco_list_polices(code_ncg: str, max_results: int = 20) -> dict:
     plafonds structurés par risque ne sont pas inclus (table Produit, hors R1).
 
     Args:
-        code_ncg: Code copro (référence interne syndic) de la copropriété (ex: "5390").
+        code_ncg: Code de la copropriété : immatriculation RNIC (ex: "AE3-410-578", toutes graphies acceptées) ou code interne syndic (ex: "5390").
         max_results: Nombre max de polices (plafonné serveur).
 
     Returns:
@@ -623,7 +623,7 @@ def PALIM_assynco_search_sinistres(code_ncg: str, query: str | None = None,
     """Sinistres d'une copropriété dans l'ERP Assynco (live, plus riche que la table dossiers RAG).
 
     Args:
-        code_ncg: Code copro (référence interne syndic) de la copropriété (ex: "5390").
+        code_ncg: Code de la copropriété : immatriculation RNIC (ex: "AE3-410-578", toutes graphies acceptées) ou code interne syndic (ex: "5390").
         query: Filtre texte optionnel, langage naturel OK (insensible casse/accents).
             Matche sur garantie, cause, nom du lésé, situation, références et libellé
             du sinistre ; tous les mots doivent apparaître. Ex: "dégât des eaux",
@@ -681,7 +681,7 @@ def PALIM_copro_overview(code_ncg: str) -> dict:
     PALIM_search_dossiers ou PALIM_assynco_list_polices.
 
     Args:
-        code_ncg: Code copro (référence interne syndic) de la copropriété (ex: "5390"). Utiliser PALIM_list_copros pour le trouver.
+        code_ncg: Code de la copropriété : immatriculation RNIC (ex: "AE3-410-578", toutes graphies acceptées) ou code interne syndic (ex: "5390"). Utiliser PALIM_list_copros pour le trouver.
 
     Returns:
         {ok, code_ncg, precomputed, nom, narratif, faits, assurance, freshness, generated_at}.
