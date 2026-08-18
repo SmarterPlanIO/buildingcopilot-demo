@@ -788,7 +788,9 @@ def print_report():
     print(f"  Erreurs                   : {stats['erreurs']}")
     t = stats['pdf_ocr'] + stats['image_ocr']
     print(f"\n  TOTAL Textract            : {t} fichiers")
-    print(f"  Coût Textract estimé      : ~${t * 0.0015:.2f}")
+    # 0,0015 $ / PAGE (pas par fichier). Pilote Delacour mesuré ~10 pages/fichier
+    # océrisé -> l'ancienne estimation (t × 0,0015) sous-estimait d'un facteur ~10.
+    print(f"  Coût Textract estimé      : ~${t * 0.0015 * 10:.2f} (hyp. 10 pages/fichier ; réel = 0,0015 $/page, cf. facture)")
     print(f"\n  📁 Résultats : {OUTPUT_DIR}")
 
 

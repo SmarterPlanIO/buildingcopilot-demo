@@ -148,6 +148,12 @@ def ingest_copro(code, dry=False, keep_shards=False):
     print("\n[01] filtrage (filtered rebati depuis la source vivante)")
     run("01_filtrage.py", code, dry)
 
+    # --- 00b dedup exacte SHA-256 (levier L1 cout) : retire les copies exactes de
+    #     'filtered' AVANT extraction -> zero Textract/traitement sur les doublons.
+    #     Les doublons deja en DB tombent dans la mecanique des suppressions. ---
+    print("\n[00b] dedup exacte SHA-256 (avant extraction)")
+    run("00b_dedup.py", code, dry)
+
     # --- Suppressions : docs presents en DB mais absents de la source vivante.
     #     On retire leur JSON extrait -> 03 reconstruira chunks.jsonl sans eux -> 06b
     #     les retirera de la DB (et donc du RAG). C'est le D du CRUD. ---

@@ -26,6 +26,7 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 
 STEPS = [
     ("01", "01_filtrage.py"),
+    ("00b", "00b_dedup.py"),
     ("02", "02_extraction_optimized.py"),
     ("03", "03_chunking.py"),
     ("04", "04_metadata_documents.py"),
