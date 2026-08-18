@@ -2,7 +2,7 @@
 
 > Ce fichier compile toutes les regles, feedbacks et contexte du projet PALIM.
 > A coller en debut de session pour que Claude ait le meme contexte.
-> Derniere mise a jour : 22 juin 2026. Harness Streamlit v0.7.1, backend MCP image v8, Project Instructions client v1.9.
+> Derniere mise a jour : 18 aout 2026. Harness Streamlit v0.7.1, backend MCP image v8, Project Instructions client v2.0 (instanciees depuis le template produit `Scripts/clients/INSTRUCTIONS_TEMPLATE_PALIM.md`).
 >
 > **Bascule produit (mai-juin 2026)** : le produit livre au client est desormais un **backend de tools MCP** que le LLM du client (Claude Teams / Cowork) interroge, plus l'app Streamlit (devenue harness de debug interne). Carte du code a jour dans `AGENTS.md` (sections 10-11 = backend MCP + livrable client) ; memoire complete dans `Resultats bruts/rag-prototype-guide.md` (sections 12+).
 
@@ -24,7 +24,7 @@
 ## 2. Architecture du projet
 
 ### Produit : backend MCP interroge par le LLM du client
-- **Modele de livraison** : le client (NCG) utilise son propre LLM (Claude Teams / Cowork) avec des **Project Instructions** fournies (`Scripts/clients/ncg/docs/INSTRUCTIONS_NCG_PROJECT.md`, v1.9) et 3 **skills** (`ncg-redaction-livrable`, `ncg-note-juridique`, `assynco-erp`). Ce LLM se connecte au **serveur MCP PALIM** qui expose le RAG documentaire et l'ERP assurance en tools.
+- **Modele de livraison** : le client (NCG) utilise son propre LLM (Claude Teams / Cowork) avec des **Project Instructions** fournies (`Scripts/clients/ncg/docs/INSTRUCTIONS_NCG_PROJECT.md`, v2.0, instanciees depuis le template produit `Scripts/clients/INSTRUCTIONS_TEMPLATE_PALIM.md`) et 4 **skills** (`ncg-redaction-livrable`, `ncg-note-juridique`, `ncg-fiche-decision`, `assynco-erp`). Ce LLM se connecte au **serveur MCP PALIM** qui expose le RAG documentaire et l'ERP assurance en tools.
 - **Serveur MCP** : FastMCP (Python 3.12) sur **AWS Lambda** (image container + Lambda Web Adapter, `response_stream`), code dans `Scripts/mcp_server/`. **12 tools** `PALIM_*` (retrieval, dossiers, synthese copro, visite 3D, Assynco, feedback). Authless : barriere = slug d'URL secret (`MCP_URL_SLUG`) plus resource policy de la Function URL. `stateless_http=True` obligatoire en Lambda. Compte AWS 046004768626, fonction `palim-mcp`, image v8.
 - **Secrets** : AWS Secrets Manager (`palim/mcp_ncg_reader` pour la DB, `palim/airtable_pat` pour Assynco). DB en **lecture seule** via user `mcp_ncg_reader` cote MCP.
 - **Streamlit** : devenu **harness de debug interne** (toujours deploye depuis `main`, version dans `Scripts/Streamlit Cloud/VERSION` = 0.7.1). N'est plus le produit livre au client. La regle 3.1 (UI seulement) reste valide.

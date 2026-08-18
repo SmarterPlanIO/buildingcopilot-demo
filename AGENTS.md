@@ -56,7 +56,8 @@ Règle de rangement : `Scripts/` (racine, `mcp_server/`, `Streamlit Cloud/`) = *
 ├── Scripts/                     # ⭐ TOUT le code vit ici
 │   ├── pipeline_config.py       # Source de vérité : profil client (clients/<client>/client.json), map code copro→dossier, paths per-copro, DB
 │   ├── clients/                  # ⭐ Tout le spécifique client — cf. §2b, aucun secret
-│   │   ├── ncg/                 # client.json + docs/ (INSTRUCTIONS_NCG_PROJECT v1.9, RUNBOOK_DEPLOY_V7) + tools/ (debug/diag one-offs, ex-07_query_rag_ui) + skills/ (ncg-redaction-livrable, ncg-note-juridique)
+│   │   ├── INSTRUCTIONS_TEMPLATE_PALIM.md  # Template produit des Project Instructions (placeholders {{...}}, versioning source unique) — chaque client instancie dans clients/<c>/docs/
+│   │   ├── ncg/                 # client.json + docs/ (INSTRUCTIONS_NCG_PROJECT v2.0, RUNBOOK_DEPLOY_V7) + tools/ (debug/diag one-offs, ex-07_query_rag_ui) + skills/ (ncg-redaction-livrable, ncg-note-juridique, ncg-fiche-decision)
 │   │   └── delacour/            # client.json + docs/ (RUNBOOK_PROVISION_DELACOUR)
 │   ├── 00_inventaire.py         # Étape 0 : inventaire des fichiers d'archives
 │   ├── 01_filtrage.py           # Étape 0.2 : tri plans/photos/inutiles (règles + Vision Sonnet)
@@ -258,10 +259,11 @@ Tous renvoient un dict `{ok, ...}` (jamais d'exception brute). Le **scope est d�
 
 Le client connecte son LLM (Claude Teams / Cowork) au MCP avec :
 
-- **Project Instructions** `Scripts/clients/ncg/docs/INSTRUCTIONS_NCG_PROJECT.md` (**v1.9**, à coller dans le Projet Claude). 12 blocs (Bloc 0→11). **Cadre à 2 axes** annoncé en une ligne avant toute réponse non triviale : Axe 1 Destinataire (Interne par défaut / Externe, gate de sécurité), Axe 2 Type de tâche (Factuel par défaut / Analyse juridique / Synthèse de dossier / Rédaction de livrable). Invariant : jamais de réponse "toutes copros confondues". Bloc 10 (sourçage, v1.9) : le verbatim se cite depuis le `text` du passage renvoyé par `search_chunks` tant qu'il est en contexte ; `get_chunks` re-matérialise le texte exact par `chunk_id` quand le passage a quitté le contexte ; `citation` = métadonnées seules. Bloc 11 : `get_visite_3d` obligatoire sur match littéral de mot-clé 3D.
-- **3 skills** (`Scripts/mcp_server/skills/`) :
+- **Project Instructions** `Scripts/clients/ncg/docs/INSTRUCTIONS_NCG_PROJECT.md` (**v2.0**, à coller dans le Projet Claude ; instancié depuis le template produit `Scripts/clients/INSTRUCTIONS_TEMPLATE_PALIM.md`). 12 blocs (Bloc 0→11). **Cadre à 2 axes** annoncé en une ligne avant toute réponse non triviale : Axe 1 Destinataire (Interne par défaut / Externe, gate de sécurité), Axe 2 Type de tâche (Factuel par défaut / Analyse juridique / Synthèse de dossier / Rédaction de livrable / Fiche de décision). Invariant : jamais de réponse "toutes copros confondues". Bloc 7 : protocole d'échec d'outil (retry 1×, voie équivalente, annonce en 1ʳᵉ ligne, jamais de livrable complet sur sources partielles). Bloc 9 durci (valeurs exactes, séquencement des questions fermées, 1 rattrapage/fil, cas dégradés). Bloc 10 (sourçage) : le verbatim se cite depuis le `text` du passage renvoyé par `search_chunks` tant qu'il est en contexte ; `get_chunks` re-matérialise le texte exact par `chunk_id` quand le passage a quitté le contexte ; `citation` = métadonnées seules. Bloc 11 : `get_visite_3d` obligatoire sur match littéral de mot-clé 3D.
+- **4 skills** (client dans `Scripts/clients/ncg/skills/`, produit dans `Scripts/mcp_server/skills/`) :
   - `ncg-redaction-livrable` — mise en forme (note interne, courrier copropriétaires, note conseil syndical, email prestataire, export Word, logo `logo NCG.png` en en-tête des livrables externes). 4 gabarits dans `templates.md`.
   - `ncg-note-juridique` — analyse juridique (RCP/EDD, majorités art. 24/25/25-1/26 loi 1965, délais art. 42), 3 couches (doc copro primant / cadre légal à valider / interprétation signalée), active `include_legal_context=true`, ne se fait jamais passer pour un avis juridique.
-  - `assynco-erp` — accès lecture assurance Assynco via les 3 tools `PALIM_assynco_*`.
+  - `ncg-fiche-decision` — instruction d'une décision multi-options (fiche CS / préparation AG) : cadrage du décideur (délégation CS / AG / syndic conservatoire), options comparables dont « ne pas agir », majorité par option, gabarit imposé, décidabilité honnête (« NON DÉCIDABLE EN L'ÉTAT »). Orchestration : fond = ncg-note-juridique, forme = ncg-redaction-livrable, assurance = assynco-erp.
+  - `assynco-erp` — accès lecture assurance Assynco via les 3 tools `PALIM_assynco_*` (skill produit, partagée entre clients).
 
-> Version alignée en **v1.9** (2026-06-22) : header et Bloc 0 = v1.9. L'ancien drift v1.6/v1.8 est résolu.
+> Version alignée en **v2.0** (2026-08-18). **Versioning à source unique** : la version s'écrit à un seul endroit, la ligne italique du Bloc 0 (l'en-tête n'a plus de numéro propre — cause des drifts v1.6/v1.8 passés). Un compteur par client ; bump mineur = wording, majeur = contrat tools/skills.
