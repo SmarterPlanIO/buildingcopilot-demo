@@ -1,4 +1,7 @@
-mcp[cli]>=1.2.0
+# PIN STRICT : mcp 2.x supprime mcp.server.fastmcp -> crash au boot de l'image
+# (incident v9 du 18/08, Runtime.ExitError sur les 2 Lambdas). 1.27.2 = version
+# validee en prod (v8). Ne monter de version qu'en testant l'image localement.
+mcp[cli]==1.27.2
 psycopg2-binary>=2.9.9
 boto3>=1.34.0
 uvicorn>=0.30.0

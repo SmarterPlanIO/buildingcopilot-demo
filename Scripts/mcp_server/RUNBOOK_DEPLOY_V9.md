@@ -1,5 +1,14 @@
 # RUNBOOK - Deploiement MCP PALIM image v9 (produit multi-client, 2 Lambdas)
 
+> ⚠️ POST-MORTEM 18/08 : le premier build v9 a casse les DEUX Lambdas
+> (Runtime.ExitError : ModuleNotFoundError mcp.server.fastmcp). Cause :
+> mcp[cli]>=1.2.0 non epingle -> pip a resolu mcp 2.x qui supprime le module.
+> Fix : pin mcp[cli]==1.27.2 dans requirements.txt (commit dedie). Procedure
+> corrective : rollback v8 immediat (update-function-code --image-uri ...:v8
+> sur les 2 fonctions), puis re-pull main et rebuild sous un NOUVEAU tag (v10)
+> avant de repointer. Lecon : toujours smoke-tester l'URL apres deploy, et
+> rebuilder sous un tag neuf plutot que d'ecraser un tag existant.
+
 > Date : 17/08/2026. A executer en AWS CloudShell (console, compte 046004768626,
 > region eu-west-1, Docker preinstalle, creds heritees). Duree ~10 min.
 >
