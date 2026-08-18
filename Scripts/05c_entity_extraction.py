@@ -164,6 +164,14 @@ def extract_entities(text, filename, folder_name):
             answer = re.sub(r"\s*```$", "", answer)
 
             parsed = json.loads(answer)
+            # Haiku renvoie parfois une liste [{...}] au lieu d'un objet
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                parsed = parsed[0]
+            if not isinstance(parsed, dict):
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(1)
+                    continue
+                return None
             return parsed
 
         except json.JSONDecodeError:
