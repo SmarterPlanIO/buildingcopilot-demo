@@ -131,6 +131,13 @@ def get_bedrock_client():
     return _thread_local.client
 
 
+def _scalar(v):
+    """Aplati une valeur d'entite Haiku : liste -> premier element, sinon telle quelle."""
+    if isinstance(v, list):
+        v = v[0] if v else None
+    return v
+
+
 def extract_entities(text, filename, folder_name):
     """Extrait les entites d'un document sinistre via Haiku. Retourne un dict ou None."""
     text_excerpt = text[:3000].strip()
@@ -505,24 +512,25 @@ if __name__ == "__main__":
             all_source_files.append(ent["_source_file"])
             all_chunk_ids.extend(ent["_chunk_ids"])
             # Prendre la premiere valeur non-null pour chaque champ
+            # (_scalar : Haiku renvoie parfois une liste la ou un scalaire est attendu)
             if not best_lese_nom and ent.get("lese_nom"):
-                best_lese_nom = ent["lese_nom"]
+                best_lese_nom = _scalar(ent["lese_nom"])
             if not best_lese_lot and ent.get("lese_lot"):
-                best_lese_lot = ent["lese_lot"]
+                best_lese_lot = _scalar(ent["lese_lot"])
             if not best_expert and ent.get("expert_nom"):
-                best_expert = ent["expert_nom"]
-                if ent.get("expert_cabinet"):
-                    best_expert += f" ({ent['expert_cabinet']})"
+                best_expert = _scalar(ent["expert_nom"])
+                if best_expert and ent.get("expert_cabinet"):
+                    best_expert += f" ({_scalar(ent['expert_cabinet'])})"
             if not best_assureur and ent.get("assureur"):
-                best_assureur = ent["assureur"]
+                best_assureur = _scalar(ent["assureur"])
             if not best_date and ent.get("date_sinistre"):
-                best_date = ent["date_sinistre"]
+                best_date = _scalar(ent["date_sinistre"])
             if not best_montant and ent.get("montant"):
-                best_montant = ent["montant"]
+                best_montant = _scalar(ent["montant"])
             if not best_num_sinistre and ent.get("num_sinistre"):
-                best_num_sinistre = ent["num_sinistre"]
+                best_num_sinistre = _scalar(ent["num_sinistre"])
             if not best_num_police and ent.get("num_police"):
-                best_num_police = ent["num_police"]
+                best_num_police = _scalar(ent["num_police"])
             # Garder l'etape la plus avancee
             etape_order = ["CONSTAT", "DECLARATION", "EXPERTISE", "DEVIS", "TRAVAUX", "CLOTURE"]
             det = ent.get("etape_detectee")
@@ -588,8 +596,8 @@ if __name__ == "__main__":
             "documents_lies": all_source_files,
             "resume_ia": f"Sinistre {nom_dossier} - {best_lese_nom or 'lese inconnu'} - "
                          f"{len(all_source_files)} documents - "
-                         f"{'Expert: ' + best_expert if best_expert else 'Pas d expert'} - "
-                         f"{'Ref: ' + best_num_sinistre if best_num_sinistre else ''}",
+                         f"{'Expert: ' + str(best_expert) if best_expert else 'Pas d expert'} - "
+                         f"{'Ref: ' + str(best_num_sinistre) if best_num_sinistre else ''}",
         }
         dossiers.append(dossier)
 
