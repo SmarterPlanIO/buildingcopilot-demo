@@ -1,0 +1,29 @@
+{
+  "_comment": "Profil client PALIM — Cabinet Saint Germain (CSG), syndic SASU, 92 bd Raspail 75006 Paris, SIREN 539388876. Utilisation : PALIM_CLIENT=csg. Périmètre : UNE copropriété, SDC 33-35-41 rue Lacépède 75005 Paris (copro Assynco C0216), reprise de gestion notifiée le 23/04/2026. Mission cadrée par la note interne Assynco du 17/08/2026 (périmètre sinistres / date de bascule 01/10/2024) : 'Sales/Prospects/Assynco/202608 Cabinet Saint Germain/Note interne Lacepede perimetre sinistres.pdf'. RDS dédiée sp-rag-csg-copros créée le 20/08/2026 (db.t4g.micro PG 17.9, mêmes paramètres que Delacour) ; provisioning secrets/IAM/Lambda via clients/csg/docs/RUNBOOK_PROVISION_CSG.md. raw_root = raccourci Drive dans Mon Drive vers le dossier partagé par philippe@assynco.com ('Document extract - 33 Rue Lacépède (en cours d off boarding)', extract d'off-boarding Bellman, id Drive 1v8c9Eu5x2f-Mnwuu8vE1VgRL7bcKpZ3f) — à créer par Thai : Drive web > clic droit sur le dossier partagé > Organiser > Ajouter un raccourci > Mon Drive > dossier 'PALIM CSG'. Si GoogleDriveFS ne traverse pas le raccourci, repli : copie locale dans C:\\Users\\thai-\\palim-csg\\raw et pointer raw_root dessus.",
+  "client_code": "csg",
+  "client_name": "Cabinet Saint Germain",
+  "project_root": "C:\\Users\\thai-\\palim-csg",
+  "raw_root": "G:\\Mon Drive\\PALIM CSG",
+  "db": {
+    "host": "sp-rag-csg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com",
+    "port": 5432,
+    "name": "postgres",
+    "user_admin": "ragadmin",
+    "user_reader": "mcp_csg_reader",
+    "secret_reader": "palim/csg/mcp_reader",
+    "secret_admin": "palim/csg/ragadmin"
+  },
+  "assynco": {
+    "_comment": "Assynco (Top Bridging SASU, Philippe Marchal) est le courtier de la copro depuis le 01/10/2024 et le prescripteur de la mission. Libellé Organisation relevé dans Airtable le 20/08/2026 : 'CABINET SAINT GERMAIN' (record recFrJEVzxTBCXBcA, Type Syndic, SIREN 539388876 = SIRET RNIC). Ne PAS élargir le libellé : 'SOCIETE MARIE SAINT GERMAIN' est un autre syndic, hors tenant. Copro Airtable : recA6x5yqHWU4JuRV '33 RUE LACÉPÈDE' (Syndic = CSG, 3 polices, 5 sinistres au 20/08/2026). GOTCHA onboarding : les champs {Ref client} et {Numéro d'immatriculation} de la fiche copro sont VIDES — la résolution MCP par code (immat AB0835843) échouera tant qu'Assynco n'a pas rempli 'Numéro d'immatriculation' = AB0-835-843 (et idéalement Ref client = C0216). À faire remplir par Philippe avant le smoke test des tools Assynco.",
+    "enabled": true,
+    "syndic_labels": ["CABINET SAINT GERMAIN"]
+  },
+  "_comment_copros": "Clé = immatriculation RNIC canonique, vérifiée au registre le 20/08/2026 (API tabular data.gouv : SDC 33-41 RUE LACEPEDE, 75005 Paris, 76 lots principaux, syndic professionnel, registre à jour au 01/08/2026). lobby_code = alias de résolution pipeline vers le code interne Assynco C0216 (référence de la note du 17/08).",
+  "included_copros": {
+    "AB0835843": {
+      "folder": "Document extract - 33 Rue Lacépède (en cours d'off boarding)",
+      "lobby_code": "C0216",
+      "label": "SDC 33-35-41 rue Lacépède, 75005 Paris"
+    }
+  }
+}
