@@ -22,7 +22,7 @@ import json
 import os
 from pathlib import Path
 
-from copro_id import canon  # canonicalisation des codes copro (produit partagé)
+from copro_id import canon, is_immatriculation  # identité copro (produit partagé)
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 CLIENTS_DIR = _SCRIPTS_DIR / "clients"
@@ -55,15 +55,28 @@ PER_COPRO_ROOT = RESULTS_ROOT / "per_copro"
 
 # Registre des copros du client. Deux formats acceptés dans le profil :
 #   "code": "nom de dossier"                                    (legacy, NCG)
-#   "code": {"folder": ..., "lobby_code": ..., "label": ...}    (riche, Delacour+)
+#   "code": {"folder": ..., "lobby_code": ..., "label": ...,
+#            "immatriculation": ...}                            (riche, Delacour+)
 # Clés stockées en forme canonique (copro_id.canon) ; `lobby_code` devient un
 # ALIAS de résolution (les gestionnaires pensent encore en codes internes).
-# Liste explicite : tout ce qui n'est pas listé dans le profil client est ignoré.
+# `immatriculation` = attribut RNIC (AA0000000) : jamais une clé pour les clients
+# à codes internes ; auto-dérivée de la clé quand celle-ci EST une immatriculation
+# (régime RNIC, Delacour+). Liste explicite : tout ce qui n'est pas listé dans le
+# profil client est ignoré.
 _COPROS = {}
 _ALIASES = {}
 for _k, _v in (_cfg.get("included_copros") or {}).items():
     _ck = canon(_k)
     _meta = {"folder": _v} if isinstance(_v, str) else dict(_v)
+    _im = canon(_meta.get("immatriculation") or "")
+    if _im and not is_immatriculation(_im):
+        raise SystemExit(
+            f"❌ Immatriculation RNIC invalide pour la copro {_ck} : "
+            f"{_meta.get('immatriculation')!r} (format attendu AA0000000)."
+        )
+    if not _im and is_immatriculation(_ck):
+        _im = _ck  # régime RNIC : la clé du registre est l'immatriculation
+    _meta["immatriculation"] = _im or None
     _COPROS[_ck] = _meta
     if _meta.get("lobby_code"):
         _ALIASES[canon(_meta["lobby_code"])] = _ck
@@ -116,6 +129,13 @@ def require_db_host() -> str:
 
 def folder_for(code: str) -> str:
     return _COPROS[resolve(code)]["folder"]
+
+
+def immatriculation_of(code: str):
+    """Immatriculation RNIC (canonique) de la copro, ou None si non renseignée.
+    Attribut d'identité : sert au recoupement (Airtable, registre national),
+    jamais de clé interne pour les clients à codes courts."""
+    return _COPROS[resolve(code)].get("immatriculation")
 
 
 def raw_source_dir(code: str) -> Path:

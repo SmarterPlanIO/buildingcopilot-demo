@@ -446,6 +446,24 @@ else:
     print(f"\n⚠️  {DOSSIERS_FILE} introuvable — table dossiers non peuplée.")
     print(f"   Lance d'abord : python 05c_entity_extraction.py")
 
+# =====================================================
+# Registre copros : immatriculation RNIC en attribut (annuaire)
+# =====================================================
+# Upsert depuis le profil client (per-copro : la copro chargée ; legacy : tout le
+# profil). Jamais de purge : la table copros survit aux TRUNCATE/DELETE ci-dessus.
+try:
+    _reg_codes = [COPRO] if COPRO else sorted(pcfg.COPRO_META)
+    _reg_rows = [(c, pcfg.immatriculation_of(c)) for c in _reg_codes]
+    execute_values(cur, """
+        INSERT INTO copros (code_ncg, immatriculation) VALUES %s
+        ON CONFLICT (code_ncg) DO UPDATE SET immatriculation = EXCLUDED.immatriculation
+    """, _reg_rows)
+    conn.commit()
+    print(f"✅ Registre copros mis à jour ({len(_reg_rows)} ligne(s), attribut immatriculation)")
+except Exception as _e:
+    conn.rollback()
+    print(f"⚠️  Registre copros non mis à jour ({_e}) — lancer 06a_init_db.py pour créer la table copros")
+
 cur.close()
 conn.close()
 

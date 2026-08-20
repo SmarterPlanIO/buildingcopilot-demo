@@ -103,12 +103,28 @@ def _freshness(stored, live_wm, assynco_nb_sinistres):
     return {"stale": bool(reasons), "reasons": reasons}
 
 
+def _fetch_immatriculation(conn, code):
+    """Attribut RNIC depuis le registre copros. None si table/ligne absente (dégradé)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT immatriculation FROM copros WHERE code_ncg = %s", (code,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception:
+        try:
+            conn.rollback()  # ne pas laisser la transaction abortée
+        except Exception:
+            pass
+        return None
+
+
 def get_overview(conn, code, assynco_nb_sinistres=None):
     """Fiche synthèse d'une copro. Toujours {ok:True} : dégradé utile si non pré-calculée.
 
     Retourne narratif + faits + fraîcheur. Si la fiche n'existe pas encore, renvoie les
     faits live (SQL) avec precomputed=False et narratif=None (jamais d'échec dur).
     """
+    immatriculation = _fetch_immatriculation(conn, code)
     with conn.cursor() as cur:
         cur.execute("""
             SELECT nom, narratif, faits, nb_documents, nb_chunks, nb_dossiers,
@@ -122,7 +138,8 @@ def get_overview(conn, code, assynco_nb_sinistres=None):
 
     if not row:
         fresh = _freshness(None, live_wm, assynco_nb_sinistres)
-        return {"ok": True, "code_ncg": code, "precomputed": False,
+        return {"ok": True, "code_ncg": code, "immatriculation": immatriculation,
+                "precomputed": False,
                 "nom": live_wm["nom"], "narratif": None, "faits": live_faits,
                 "generated_at": None,
                 "freshness": {"stale": True, "reasons": fresh["reasons"],
@@ -132,7 +149,8 @@ def get_overview(conn, code, assynco_nb_sinistres=None):
     stored = {"nb_documents": row[3], "dernier_pv_date": row[7], "nb_sinistres_assynco": row[6]}
     fresh = _freshness(stored, live_wm, assynco_nb_sinistres)
     return {
-        "ok": True, "code_ncg": code, "precomputed": True,
+        "ok": True, "code_ncg": code, "immatriculation": immatriculation,
+        "precomputed": True,
         "nom": row[0], "narratif": row[1], "faits": row[2],
         "generated_at": str(row[11]) if row[11] else None,
         "model_used": row[9],

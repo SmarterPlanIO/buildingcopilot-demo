@@ -386,6 +386,25 @@ cur.execute("""
 conn.commit()
 print("✅ Table copro_synthese créée (ou déjà existante)")
 
+# ── Table copros : registre annuaire (identité, pas retrieval) ──
+# Lue par PALIM_list_copros (adresse/aliases optionnels) et PALIM_copro_overview.
+# immatriculation = attribut RNIC (AA0000000), jamais une clé interne pour les
+# clients à codes courts (cf. copro_id.py / PLAN_IMMATRICULATION_RNIC.md).
+# Peuplée par 06b_load_db.py depuis le profil client (upsert, jamais de TRUNCATE).
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS copros (
+        code_ncg        TEXT PRIMARY KEY,
+        nom_residence   TEXT,
+        adresse         TEXT,
+        rue             TEXT,
+        aliases         TEXT[] DEFAULT '{}',
+        immatriculation TEXT
+    );
+""")
+cur.execute("ALTER TABLE copros ADD COLUMN IF NOT EXISTS immatriculation TEXT;")
+conn.commit()
+print("✅ Table copros créée (registre annuaire + immatriculation RNIC)")
+
 cur.close()
 conn.close()
 print("\n✅ Base de données initialisée avec succès")

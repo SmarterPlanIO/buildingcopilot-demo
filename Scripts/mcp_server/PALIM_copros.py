@@ -12,6 +12,13 @@ CANDIDATS classés — jamais une résolution 1:1 (alias non uniques, cf.
 """
 import unicodedata
 
+# copro_id : module produit partagé (Scripts/copro_id.py), vendorisé dans
+# l'image Lambda par build_and_push.sh (copro_id_vendored.py).
+try:
+    from copro_id import display as _immat_display  # dev : module produit
+except ImportError:  # pragma: no cover
+    from copro_id_vendored import display as _immat_display  # type: ignore
+
 
 def _norm(s):
     if not s:
@@ -60,9 +67,10 @@ def _fetch_registry(conn):
     """Registre copro optionnel. {} si la table est absente."""
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT code_ncg, nom_residence, adresse, rue, aliases FROM copros")
+            cur.execute("SELECT code_ncg, nom_residence, adresse, rue, aliases, immatriculation FROM copros")
             return {r[0]: {"nom_residence": r[1], "adresse": r[2], "rue": r[3],
-                           "aliases": list(r[4] or [])} for r in cur.fetchall()}
+                           "aliases": list(r[4] or []), "immatriculation": r[5]}
+                    for r in cur.fetchall()}
     except Exception:
         return {}
 
@@ -74,6 +82,9 @@ def _score(entry, qn):
     haystacks = [_norm(entry["code_ncg"]), _norm(entry.get("nom")),
                  _norm(entry.get("adresse")), _norm(entry.get("rue"))]
     haystacks += [_norm(a) for a in entry.get("aliases", [])]
+    if entry.get("immatriculation"):  # les 2 graphies : AA0000000 et AA0-000-000
+        haystacks += [_norm(entry["immatriculation"]),
+                      _norm(_immat_display(entry["immatriculation"]))]
     score = 0
     for h in haystacks:
         if not h:
@@ -110,13 +121,15 @@ def list_copros(conn, query=None):
             "has_pv_ag": "PV_AG" in doc_types,
             "has_dossiers": code in dossier_copros,
         }
-        # adresse/aliases : optionnels (omis si registre absent)
+        # adresse/aliases/immatriculation : optionnels (omis si registre absent)
         if reg.get("adresse"):
             entry["adresse"] = reg["adresse"]
         if reg.get("rue"):
             entry["rue"] = reg["rue"]
         if reg.get("aliases"):
             entry["aliases"] = reg["aliases"]
+        if reg.get("immatriculation"):
+            entry["immatriculation"] = reg["immatriculation"]
         entries.append(entry)
 
     qn = _norm(query)
