@@ -2,7 +2,7 @@
 
 > Ce fichier compile toutes les regles, feedbacks et contexte du projet PALIM.
 > A coller en debut de session pour que Claude ait le meme contexte.
-> Derniere mise a jour : 18 aout 2026. Harness Streamlit v0.7.1, backend MCP image v8, Project Instructions client v2.0 (instanciees depuis le template produit `Scripts/clients/INSTRUCTIONS_TEMPLATE_PALIM.md`).
+> Derniere mise a jour : 21 aout 2026. Harness Streamlit v0.7.1, backend MCP image v8, Project Instructions client v2.0 (instanciees depuis le template produit `Scripts/clients/INSTRUCTIONS_TEMPLATE_PALIM.md`).
 >
 > **Bascule produit (mai-juin 2026)** : le produit livre au client est desormais un **backend de tools MCP** que le LLM du client (Claude Teams / Cowork) interroge, plus l'app Streamlit (devenue harness de debug interne). Carte du code a jour dans `AGENTS.md` (sections 10-11 = backend MCP + livrable client) ; memoire complete dans `Resultats bruts/rag-prototype-guide.md` (sections 12+).
 
@@ -41,7 +41,7 @@
 Chaque etape prend `--copro <code>` et ecrit dans `Resultats bruts/per_copro/<code>/`. Le driver `ingest.py --copro <code>` (ou `--all`) ingere une copro de bout en bout avec **CRUD documents** (creation / modification / suppression detectees vs l'etat DB) et regeneration des agregats Tier-2 **gatee par doc_type**.
 1. `01_filtrage.py` — tri plans/photos/inutiles (regles + Vision Sonnet)
 2. `02_extraction_optimized.py` — extraction texte Textract ; checkpoint par signature `taille:mtime_ns` (detecte les docs modifies sur place)
-3. `03_chunking.py` — classif doc_type (3 passes) + chunking + BORDEREAU_AR ; `chunk_id` content-addressed (stable cross-run) + caches deterministes (`doc_type_cache.json`, `resolution_format_cache.json`)
+3. `03_chunking.py` — classif doc_type (3 passes) + chunking + BORDEREAU_AR ; `chunk_id` content-addressed (stable cross-run) + caches deterministes (`doc_type_cache.json`, `resolution_format_cache.json`) + **dedup proche a 2 etages** (candidats tete 500c -> confirmation texte integral via `dedup_confirm.py`, manifest `dedup_proche_manifest.json`)
 4. `04_metadata_documents.py` — metadonnees document-level via Haiku + protection RCP (`_TRUSTED_FOLDER_TYPES`)
 5. `05_embedding.py` — embeddings Titan V2 (parallelise, incremental : append, skip `chunk_id` deja embeddes)
 6. `05b_synthetic_questions.py` — questions synthetiques Haiku (PV_AG, RCP, CONTRAT)
@@ -61,6 +61,8 @@ Mode legacy global (sans `--copro`) conserve pour retro-compat ; `06b` sans `--c
 - **Protection RCP** : `_TRUSTED_FOLDER_TYPES = {"RCP"}` dans 04 — empeche Haiku de reclasser en MUTATION
 - **Double retrieval contextuel** : guarde par `_dossier_filter_on` + seuil vectoriel `_CTX_VEC_MIN=0.25`
 - **Sync sidebar** : selectionner un dossier coche le filtre ; decocher le filtre deselectionne le dossier
+- **Dedup proche = candidats + confirmation, jamais la tete seule** (21/08/26) : l'ancienne regle de 03 (similarite des 500 premiers caracteres > 0.85) supprimait des documents DISTINCTS partageant le meme en-tete syndic — 5 087 docs perdus mesures (2 731 Delacour + 2 356 NCG, dont 381+ PV/AG). Fix : `dedup_confirm.py` (module pur, teste) confirme sur texte integral (veto dates du nom de fichier -> texte identique OU jaccard>=0.90 + memes dates texte + longueurs a 10%). Resultat calibre : 1 605 suppressions -> 147. NE JAMAIS decider une suppression sur la tete d'un document.
+- **Registre d'ingestion** (`ingestion_registre` + `ingestion_runs` en DB, plan `Scripts/PLAN_REGISTRE_INGESTION.md`) : memoire d'etat par document (DECOUVERT/EXTRAIT/INGERE/REJETE/SUPPRIME/ERREUR + motif). P0 backfill FAIT sur NCG+Delacour (20/08). Jamais lu par le MCP. Tout nouveau rejet du pipeline doit y etre trace.
 
 ---
 
@@ -200,6 +202,8 @@ PYTHONIOENCODING=utf-8 AIRTABLE_PAT="..." DB_HOST="sp-rag-ncg-copros.c8ypoidw2hz
 
 ## 7. Taches et priorites en cours
 
+- **PRIORITE — Rattrapage dedup** : la dedup proche corrigee (03 + `dedup_confirm.py`, tests 8/8) n'est PAS encore commitee ni rechargee en DB. Reste : re-run `03->04->05->05b->06b` sur les copros touchees (liste exacte = `SELECT ... WHERE statut='REJETE' AND motif='DOUBLON_PROCHE'` dans `ingestion_registre`), ~18 600 chunks a recuperer cote Delacour, ~10-15 $ Bedrock. Puis brique 2 (marquage versions anterieures, `est_version_anterieure`) et brique 3 (filtre retrieval MCP, patron BORDEREAU_AR).
+- **Registre d'ingestion P1-P3** : ecritures a chaud dans 01/00b/02/03/06b via `registre.py` (a creer), rapport `ingest.py --rapport`, bascule detection suppressions. Plan : `Scripts/PLAN_REGISTRE_INGESTION.md` (P0 livre).
 - **PRIORITE — Analytique inter-copro en MCP** : exposer `PALIM_run_analytical_query` (wrapper de `analytics.py` cote MCP, module cible `mcp_server/PALIM_analytics.py`, SQL pur read-only, zero Bedrock) plus facettes UX d'affinage (couverture honnete, jamais "choisis dans 150"). Plan : `Scripts/PLAN_ANALYTIQUE_INTER_COPRO.md`. RIEN CODE (plan seul).
 - **Scale ingestion 150 copros** : finir le CRUD per-copro (gate chunk-level dans `ingest.py` pour propager les pures modifications ; cleanup disque des shards ; 08 per-copro ; registre `copros` peuple par 08). Plan : `Scripts/PLAN_SCALE_150_COPROS.md`.
 - **Reduction cout ingestion** : leviers L1 dedup SHA-256 / L2 prompt caching sur 04 / L3 OCR page-level / L5 Bedrock Batch. Plan : `Scripts/PLAN_REDUCTION_COUT_COPRO.md`. Mesure faite (BERCY ~61 $ HT), rien code.

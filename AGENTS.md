@@ -80,6 +80,9 @@ Règle de rangement : `Scripts/` (racine, `mcp_server/`, `Streamlit Cloud/`) = *
 │   ├── PLAN_*.md                # Plans : SCALE_150_COPROS, ANALYTIQUE_INTER_COPRO, REDUCTION_COUT_COPRO, 05C_DEDUP_SINISTRES
 │   ├── pipeline_config.py       # (cf. plus haut)
 │   ├── content_filter.py        # Filtre contenu binaire (importé par 03)
+│   ├── dedup_confirm.py         # ⭐ Confirmation des doublons proches (étage 2 de 03) — module pur, testé
+│   ├── registre_backfill.py     # P0 registre d'ingestion : reconstruit `ingestion_registre` depuis les artefacts (aucune ré-ingestion)
+│   ├── tests/                   # test_copro_id.py, test_dedup_confirm.py (exécutables sans pytest)
 │   ├── Streamlit Cloud/         # Banc de test interne (déployé depuis main)
 │   │   ├── streamlit_app.py     # Harness (2900+ lignes) — UI + orchestration retrieval
 │   │   ├── dossiers_api.py      # Logique métier dossiers/sinistres (UI-agnostique, vendorisé côté MCP)
@@ -124,6 +127,7 @@ Charge :             06b_load_db --copro (UPSERT)  →  08_airtable_sync (OBLIGA
 ```
 
 - `02` détecte les docs modifiés sur place (signature `taille:mtime_ns`) ; `03` produit des `chunk_id` content-addressed (stables cross-run) ; `05` est incrémental (n'embedde que les nouveaux `chunk_id`).
+- **Dédup proche dans `03` (corrigée 21/08/26)** : le test historique (similarité des 500 premiers caractères > 0.85, même dossier parent) ne fait plus que **générer des candidats** ; la décision revient à `dedup_confirm.confirmer()` (veto dates du nom de fichier, puis texte identique OU jaccard 5-grammes ≥ 0.90 + mêmes dates texte + longueurs à 10 %). L'ancienne règle supprimait des documents distincts à en-tête commun (5 087 docs perdus mesurés, dont 381+ PV/AG) ; la nouvelle : 1 605 → 147 suppressions sur l'échantillon de calibration. Chaque exclusion est tracée dans `per_copro/<code>/dedup_proche_manifest.json` (gardé, score, motif). Tests : `tests/test_dedup_confirm.py` (8 cas mesurés sur corpus).
 - `06b --copro` fait un **UPSERT** (DELETE WHERE code_ncg + INSERT ON CONFLICT) au lieu du TRUNCATE global ; il préserve les dossiers Airtable (`airtable_record_id IS NOT NULL`) mais retire les virtuels, donc **08 obligatoire ensuite**.
 - `run_pipeline_per_copro.py --copro <code>` enchaîne seulement 01→05b (flags `--from / --only / --skip`). `ingest.py` orchestre en plus 05c/00c/09/06b/08.
 
@@ -146,6 +150,8 @@ Charge :             06b_load_db --copro (UPSERT)  →  08_airtable_sync (OBLIGA
 | `chat_sessions` | Persistance conversation (résilience mobile) | `updated_at` |
 | `copro_synthese` | Fiche pré-calculée par copro (lue par `PALIM_copro_overview`) | `code_ncg` (PK), narratif PV/dossiers, faits (JSONB), `generated_at` |
 | `copros` | Registre annuaire (identité, pas retrieval) — upserté par 06b depuis le profil client, jamais purgé | `code_ncg` (PK), `immatriculation` (attribut RNIC), `nom_residence`/`adresse`/`rue`/`aliases` (réservés registre dynamique) |
+| `ingestion_registre` | Mémoire d'état du pipeline, 1 ligne/document source (JAMAIS lu par le MCP — outil d'exploitation) | `source_file` (PK), `statut` (DECOUVERT/EXTRAIT/INGERE/REJETE/SUPPRIME/ERREUR), `motif` (DOUBLON_PROCHE, TEXTE_VIDE...), `ref_source_file`, `score`, `nb_chunks`, `run_id` |
+| `ingestion_runs` | 1 ligne par batch d'ingestion (rapport de cycle) | `run_id` (PK), `code_ncg`, `ok`, `stats` (JSONB) |
 
 **Index** : IVFFlat sur `embedding` (cosine), GIN sur `text_search` (BM25) et `themes`, btree sur `copropriete`/`code_ncg`/`doc_type`/`annee`.
 
@@ -208,6 +214,8 @@ generate_answer_stream()  → Sonnet 4.6, streaming, citations [Source N]
 | Map copros, paths per-copro | `Scripts/pipeline_config.py` |
 | Schéma DB exact | `Scripts/06a_init_db.py` |
 | Classification doc_type, chunking | `Scripts/03_chunking.py` |
+| Dédup proche (règle de confirmation, seuils) | `Scripts/dedup_confirm.py` + `tests/test_dedup_confirm.py` |
+| Pourquoi un doc n'est pas en base (audit) | table `ingestion_registre` (`SELECT motif, count(*) ... WHERE statut='REJETE' GROUP BY 1`) + `Scripts/registre_backfill.py` |
 | Logique retrieval/ranking | `Scripts/Streamlit Cloud/streamlit_app.py` (`search_chunks`) |
 | Rerank Cohere (cloud) | `Scripts/Streamlit Cloud/rerank.py` |
 | Dossiers sinistres | `Scripts/Streamlit Cloud/dossiers_api.py` + `08_airtable_sync.py` |

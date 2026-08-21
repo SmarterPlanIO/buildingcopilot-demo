@@ -871,6 +871,8 @@ def search_chunks(query, copropriete=None, max_chunks=MAX_CHUNKS_LLM_DEFAULT,
         # Exclure les bordereaux AR par défaut (sauf si Haiku a détecté un besoin de traçabilité)
         if not include_bordereau_ar:
             where_clauses.append("c.doc_type != 'BORDEREAU_AR'")
+            # Parite MCP : soft delete (version chains) exclu du retrieval par defaut
+            where_clauses.append("NOT c.retrieval_exclu")
 
         # Exclure les catégories de résolution directement en SQL
         # pour ne pas gaspiller de slots dynamic_cap sur des chunks filtrés ensuite

@@ -51,3 +51,16 @@ Scripts/metadata_cache.json
 secrets.toml
 .env
 .env.local
+Scripts/mcp_server/skills/ncg-note-juridique.zip
+Scripts/mcp_server/skills/ncg-redaction-livrable.zip
+Scripts/PLAN_ANALYTIQUE_INTER_COPRO.md
+Scripts/PLAN_REDUCTION_COUT_COPRO.md
+Scripts/zip_content_analysis.py
+Scripts/mcp_server/RUNBOOK_DEPLOY_ASSYNCO_R1.md
+Admin/PALIM_Proposition_Tarifaire_NCG_bundle.docx
+Admin/PALIM_Proposition_Tarifaire_NCG_bundle.pdf
+Résultats bruts/dossiers_dedup_report.txt
+Résultats bruts/dossiers.jsonl.bak
+
+# ─── Données client Delacour (hors repo) ────────────────────────────────────
+Scripts/clients/delacour/docs/LOTS_PRINCIPAUX_*.md
