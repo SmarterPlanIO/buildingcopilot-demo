@@ -1,5 +1,15 @@
 # RUNBOOK — Provisioning infra Delacour Patrimoine (secrets + IAM + Lambda MCP)
 
+> ⛔ **EXECUTE LE 14/08/2026 — NE PAS RE-EXECUTER.** Ce script n'est PAS idempotent :
+> un re-run genere de NOUVEAUX mots de passe (etape 1, qui echoue en "already exists"
+> sans les stocker) puis reset le mot de passe master RDS vers ce mot de passe non
+> stocke (etape 2) -> secret et base desynchronises, pipeline et MCP casses.
+> Re-run partiel du 20/08 : sans degat (variables shell perdues apres un crash
+> CloudShell, les commandes --region ont echoue avant d'agir), mais c'est de la
+> chance, pas une protection. Pour toute reprise : executer UNIQUEMENT la section
+> concernee, et pour les secrets utiliser `put-secret-value` + refleter le meme
+> mot de passe cote RDS dans la MEME session shell.
+
 > Date : 11/08/2026. A executer dans **AWS CloudShell** (console, compte 046004768626, region eu-west-1)
 > avec un profil admin. Duree ~3 min.
 >

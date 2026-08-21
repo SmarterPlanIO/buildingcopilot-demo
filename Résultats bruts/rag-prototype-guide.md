@@ -1,7 +1,7 @@
 # Guide complet — Prototype RAG pour archives de copropriété sur AWS
 
 **Projet :** PALIM — Building Copilot — RAG multi-copropriétés
-**Dernière mise à jour :** 19 juin 2026
+**Dernière mise à jour :** 21 août 2026
 **Version :** harness Streamlit v0.7.1 · backend MCP image v8 · Project Instructions client v1.9
 **Volume (DB live) :** 10 copros, ~166 000 chunks, ~316 dossiers sinistres
 **Profil :** Non-développeur, copier/coller dans VS Code ou Antigravity
@@ -3496,10 +3496,78 @@ Préflight `Scripts/00a_cost_preflight.py` (zéro appel AWS, commit `7550dca` po
 ## Section 21 — Chantiers ouverts / résiduels
 
 - **Analytique MCP** : coder `mcp_server/PALIM_analytics.py` + `PALIM_run_analytical_query` + facettes (couverture, concentration, refine). Doctrine analytique (Instructions v1.9, Bloc 2 à scinder documentaire/analytique) à rédiger.
+- **Rattrapage dédup proche (PRIORITAIRE)** : le fix de la Section 22 est codé+testé mais NI commité NI rechargé en DB. Re-run `03→04→05→05b→06b` sur les copros touchées (liste exacte : `ingestion_registre WHERE statut='REJETE' AND motif='DOUBLON_PROCHE'`), puis brique 2 (marquage `est_version_anterieure` des chaînes de versions) et brique 3 (filtre retrieval MCP, patron BORDEREAU_AR).
+- **Registre d'ingestion P1-P3** : écritures à chaud (module `registre.py` à créer, 6 points d'écriture), rapport `ingest.py --rapport`, bascule de la détection des suppressions sur `absents()`. Plan : `Scripts/PLAN_REGISTRE_INGESTION.md` (P0 backfill livré 20/08).
 - **Scale 150 copros** : gate chunk-level dans `ingest.py` (propager les pures modifications de doc existant, pas seulement les ajouts/suppressions) ; cleanup disque des shards (désactivé en V1) ; `08` per-copro (dérouler `COPRO_FILTERS` depuis `INCLUDED_COPROS`) ; registre `copros` jamais peuplé (à upserter par `08`) ; `01` incrémental (le rmtree+recopie ~10 Go par run est coûteux) ; cache `05b`.
 - **Coût** : tous les leviers L1-L5 non codés ; run 03/04 sur BERCY pour confirmer le compte de chunks réel.
 - **Alignements doc** : résolus le 22/06 (Project Instructions v1.9 header+Bloc 0 ; docstring d'en-tête `PALIM_server.py` corrigé en 12 tools).
 - **Tests live restants** : smoke test `PALIM_copro_overview` (Desktop/Langfuse) ; après déploiement de l'image MCP (v9 : retrait du `snippet`), recoller v1.9 des instructions côté Claude Desktop/Teams et retester le sourçage (verbatim depuis `result.text` en contexte, `get_chunks` pour re-fetch) + visite 3D.
 - **Refactoring `streamlit_app.py`** : sortir `search_chunks`/ranking restants dans des modules (`dossiers_api.py`, `analytics.py`, `rerank.py` déjà extraits).
+
+## Section 22 — Incident dédup proche + registre d'ingestion (20-21 août 2026)
+
+### 22.1 L'incident : 5 087 documents supprimés silencieusement par la dédup de `03`
+
+Découvert lors de l'audit d'état documentaire des 24 copros Delacour (20/08/2026). La dédup par
+similarité de `03_chunking.py` comparait les **500 premiers caractères** de deux documents du même
+dossier parent et supprimait le plus court au-dessus de 85 % de ressemblance. Sur un corpus de
+syndic, ces 500 caractères ne portent que l'en-tête du cabinet : deux AG différentes de la même
+copro s'y ressemblent à ~90 %.
+
+**Mesure** : 2 731 documents avalés chez Delacour (22,4 M car, 14 % du texte du parc) + 2 356 chez
+NCG (1 281 sur la seule 8050), dont **381+ PV/AG alors que le RAG n'en contient que 263**. Taux de
+faux positifs mesuré par jaccard 5-grammes sur texte intégral : 23 % à 71 % selon la copro. Cas
+emblématique : `PVE 16-02-2022.pdf` (AG extraordinaire) supprimé au profit de `PV 02-06-2022.pdf`
+(AG ordinaire), 88 % de ressemblance d'en-tête, 11 % de contenu commun. Personne ne l'a vu parce
+que le pipeline ne journalisait pas ses rejets (compteur anonyme, aucune liste).
+
+### 22.2 Le fix : dédup à 2 étages (`dedup_confirm.py`, patché dans `03`)
+
+Le test de tête est conservé comme **générateur de candidats** (bon marché) ; la décision revient à
+`dedup_confirm.confirmer()` (module pur, sans I/O, importé par `03`) :
+
+1. **Veto absolu** : dates différentes dans les deux noms de fichier → jamais un doublon (sauve les
+   séries mensuelles `BullStand_AAAAMMJJ` même à texte OCR identique). Piège corrigé au passage :
+   `\b` ne matche pas entre `_` et un chiffre, les regex de dates utilisent des lookarounds `(?<!\d)`.
+2. **Texte normalisé identique** (casse/accents/ponctuation neutralisées) → doublon, motif
+   `TEXTE_IDENTIQUE`. Seul cas où la suppression ne peut rien coûter.
+3. **Sinon** : jaccard 5-grammes ≥ 0.90 sur texte intégral ET mêmes dates dans les textes ET
+   longueurs à 10 % près → doublon `QUASI_IDENTIQUE`. Tout autre cas : conservé, motif tracé.
+
+Seuils en constantes (`CANDIDAT_TETE_SEUIL=0.85`, `JACCARD_MIN=0.90`, `RATIO_LONGUEUR_MIN=0.90`).
+Profils relus à la demande derrière `lru_cache(64)` (pas de corpus en RAM). Chaque exclusion écrite
+dans `per_copro/<code>/dedup_proche_manifest.json` (gardé, score, motif, tête).
+
+**Validation** : `tests/test_dedup_confirm.py` (8 cas reproduisant des situations mesurées, sans
+pytest). Rejeu corpus réel (6 copros Delacour, 7 491 paires candidates) : **1 605 suppressions →
+147**, dont 131 = envois en nombre à texte identique (convocations/pouvoirs nominatifs, l'OCR ne
+capte pas le destinataire). Run réel `03 --copro AE1302603` : 50→63 docs, 549→567 chunks, 0 appel
+Haiku (caches), les 13 docs récupérés = exactement les 13 `DOUBLON_PROCHE` du registre.
+
+**Doctrine actée** : ne jamais décider une suppression sur la tête d'un document ; la similarité
+seule ne suffit pas (distribution continue, pas de vallée), il faut un signal indépendant (les
+dates). Perdre un PV coûte plus qu'un doublon stocké : dans le doute, garder. Suite prévue (non
+codée) : marquer au lieu de supprimer (`est_version_anterieure`, patron BORDEREAU_AR) pour les
+chaînes de versions de travail (v1/v2/VF : même racine de nom, inclusion ≥ 0.95, famille < 12) ;
+« le PV signé fait foi » vit dans les Project Instructions (Bloc 6), pas dans un filtre code (92 %
+des PV n'ont aucun marqueur de nom exploitable).
+
+### 22.3 Le registre d'ingestion (`ingestion_registre`, modèle LLB transposé au document)
+
+Réponse au « comment personne ne l'a vu » : mémoire d'état en DB, 1 ligne par document source,
+transposée de l'`ingestion_registry` de LillySalesBot (unité dossier → unité document). Plan
+complet : `Scripts/PLAN_REGISTRE_INGESTION.md`. Tables `ingestion_registre` (PK `source_file` =
+`chunks.source_file`, jointure directe ; statuts DECOUVERT/EXTRAIT/INGERE/REJETE/SUPPRIME/ERREUR +
+`motif` séparé + `ref_source_file`/`score`) et `ingestion_runs` (1 ligne/batch), DDL dans `06a`.
+**Jamais lu par le MCP** (aucun GRANT reader). Règles : le FAIT prime sur la DÉCISION (un doc en
+base est INGERE même si une étape l'avait écarté, 37 doublons « fuités » tracés ainsi) ;
+`REJETE` (décision de règle, rejouable si la règle change) ≠ `ERREUR` (incident, rejouable tel quel).
+
+**P0 backfill LIVRÉ 20/08** (`registre_backfill.py`, reconstruit depuis les artefacts, zéro
+ré-ingestion) : Delacour 23 258 docs tracés / NCG 13 123 ; critères OK (`sum(nb_chunks)` =
+`count(chunks)` : 104 517 / 166 094 ; 0 orphelin). Trouvailles immédiates : 6 426 fichiers Google
+natifs exclus chez Delacour (28 % du parc vu, `.gdoc/.gsheet` = pointeurs sans contenu) ; 1 476
+`TEXTE_VIDE` NCG (inféré, fragile, levé par P1). P1 (écritures à chaud), P2 (rapport), P3
+(suppressions via `absents()`) restent à faire.
 
 ---
