@@ -56,7 +56,13 @@ PER_COPRO_ROOT = RESULTS_ROOT / "per_copro"
 # Registre des copros du client. Deux formats acceptés dans le profil :
 #   "code": "nom de dossier"                                    (legacy, NCG)
 #   "code": {"folder": ..., "lobby_code": ..., "label": ...,
-#            "immatriculation": ...}                            (riche, Delacour+)
+#            "immatriculation": ..., "raw_dir": ...}            (riche, Delacour+)
+# `raw_dir` (optionnel) : chemin ABSOLU (local ou UNC \\serveur\part) vers la
+# source documentaire de CETTE copro — lecture directe (share VPN client, disque
+# externe) sans recopie dans Données brutes/. Prime sur RAW_ROOT/folder pour la
+# LECTURE des bruts uniquement ; `folder` reste le nom RELATIF utilisé pour les
+# sorties locales (Archives_Filtrees/, Archives_Extraites/) — on n'écrit jamais
+# dans la source.
 # Clés stockées en forme canonique (copro_id.canon) ; `lobby_code` devient un
 # ALIAS de résolution (les gestionnaires pensent encore en codes internes).
 # `immatriculation` = attribut RNIC (AA0000000) : jamais une clé pour les clients
@@ -77,6 +83,18 @@ for _k, _v in (_cfg.get("included_copros") or {}).items():
     if not _im and is_immatriculation(_ck):
         _im = _ck  # régime RNIC : la clé du registre est l'immatriculation
     _meta["immatriculation"] = _im or None
+    # folder = nom relatif (sert aux sorties locales) ; un chemin absolu ici
+    # enverrait Archives_Filtrees/ vers la source (ex. share client) → refus net.
+    if Path(str(_meta.get("folder") or "")).is_absolute():
+        raise SystemExit(
+            f"❌ Copro {_ck} : `folder` doit être un nom RELATIF ({_meta['folder']!r}). "
+            f"Pour une source externe (share VPN, disque), utiliser `raw_dir`."
+        )
+    if _meta.get("raw_dir") and not Path(str(_meta["raw_dir"])).is_absolute():
+        raise SystemExit(
+            f"❌ Copro {_ck} : `raw_dir` doit être un chemin ABSOLU (local ou UNC), "
+            f"reçu {_meta['raw_dir']!r}."
+        )
     _COPROS[_ck] = _meta
     if _meta.get("lobby_code"):
         _ALIASES[canon(_meta["lobby_code"])] = _ck
@@ -139,7 +157,12 @@ def immatriculation_of(code: str):
 
 
 def raw_source_dir(code: str) -> Path:
-    return RAW_ROOT / folder_for(code)
+    """Source documentaire de la copro : `raw_dir` absolu (share VPN, disque
+    externe — lecture seule, zéro recopie) s'il est déclaré, sinon RAW_ROOT/folder."""
+    meta = _COPROS[resolve(code)]
+    if meta.get("raw_dir"):
+        return Path(meta["raw_dir"])
+    return RAW_ROOT / meta["folder"]
 
 
 def filtered_dir(code: str) -> Path:
