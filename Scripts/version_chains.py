@@ -128,6 +128,12 @@ def detecter(docs: list, crules: dict) -> dict:
         for d in membres:
             if d is ref:
                 continue
+            # Dates ou périodes différentes dans les NOMS : deux documents
+            # périodiques distincts ("Rapport_2025_01" / "Rapport_2025_02"),
+            # jamais une version chain, même à containment 1.0 (gabarit OCR).
+            if (d.profil.dates_nom != ref.profil.dates_nom
+                    or d.profil.periodes_nom != ref.profil.periodes_nom):
+                continue
             score = _containment(d.profil.shingles, ref.profil.shingles)
             if score < crules["containment_min"]:
                 continue                # fond trop différent : pas une version

@@ -116,6 +116,42 @@ def cas_dates_seulement_dans_le_nom():
     return "dates portees par le seul nom de fichier -> conserves"
 
 
+def cas_dates_iso_et_periodes():
+    """Dates en ordre ISO + périodes sans jour dans les noms (mesure 21/08 :
+    1 120 noms année-mois, 199 mois-année, 53 trimestres sur le parc).
+
+    Avant ce correctif, 'PV AG 2022.11.24' ne rendait aucune date (regex en
+    ordre jour-mois-année seulement) et 'Budget 2024' / 'Budget 2025' à texte
+    OCR identique étaient fusionnés en TEXTE_IDENTIQUE.
+    """
+    from dedup_confirm import periodes
+    # ISO : capté par dates()
+    assert (2022, 11, 24) in dates("0200 PV AG 2022.11.24.pdf")
+    assert (2026, 3, 31) in dates("Extrait de comptes au 2026-03-31.pdf")
+    # périodes : année-mois, mois-année, trimestre (2 graphies), année seule
+    assert ("YM", 2023, 8) in periodes("GF ENTREPRISE-DEV-2023-08-0493.pdf")
+    assert ("YM", 2023, 8) in periodes("rapport 08-2023.pdf")
+    assert ("T", 2024, 3) in periodes("honoraires-t3-2024.pdf")
+    assert ("T", 2024, 2) in periodes("MUTUELLE 2T2024.pdf")
+    assert ("Y", 2024) in periodes("Budget previsionnel 2024.pdf")
+    assert periodes("Facture n. 0493.pdf") == frozenset()   # un numero n'est pas une annee
+
+    corps = ENTETE + "GABARIT PERIODIQUE\n" + _corps(300, "cellule")
+    # texte identique, seuls les noms distinguent la periode -> conserves
+    for na, nb in (("Budget 2024.pdf", "Budget 2025.pdf"),
+                   ("rapport_2023-08.pdf", "rapport_2023-09.pdf"),
+                   ("honoraires-t1-2025.pdf", "honoraires-t3-2025.pdf")):
+        v = confirmer(profil(na, corps), profil(nb, corps))
+        assert not v.doublon and v.motif == "PERIODES_NOM_DIFFERENTES", (na, nb, v)
+    # deux PV a dates ISO differentes, texte identique -> veto dates
+    v = confirmer(profil("PV AG 2022.11.24.pdf", corps), profil("PV AG 2023.06.12.pdf", corps))
+    assert not v.doublon and v.motif == "DATES_NOM_DIFFERENTES", v
+    # memes periodes des deux cotes : pas de veto, la dedup reste possible
+    v = confirmer(profil("Budget 2024.pdf", corps), profil("Budget 2024 - Copie.pdf", corps))
+    assert v.doublon and v.motif == "TEXTE_IDENTIQUE", v
+    return "dates ISO + periodes (YM/trimestre/annee) -> vetos effectifs"
+
+
 def cas_texte_identique():
     """Deux exports du même document : texte identique après normalisation.
 
@@ -181,7 +217,8 @@ def cas_primitives():
 
 def main():
     cas = [cas_primitives, cas_pv_assemblees_distinctes, cas_pv_signe_et_non_signe,
-           cas_bulletins_mensuels, cas_dates_seulement_dans_le_nom, cas_texte_identique,
+           cas_bulletins_mensuels, cas_dates_seulement_dans_le_nom,
+           cas_dates_iso_et_periodes, cas_texte_identique,
            cas_longueurs_ecartees, cas_symetrie_et_bords]
     for f in cas:
         print(f"  OK  {f():<70} [{f.__name__}]")
