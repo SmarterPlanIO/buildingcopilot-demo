@@ -199,6 +199,10 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
             wparams.append(prefilter_files)
         if not include_bordereau_ar:
             where.append("c.doc_type != 'BORDEREAU_AR'")
+        # Soft delete : versions anterieures / variantes flaggees par 03
+        # (version_chains.py). Toujours en base, accessibles par chunk_id via
+        # get_chunks / get_full_document ; exclues du retrieval par defaut.
+        where.append("NOT c.retrieval_exclu")
         if exclude_categories:
             where.append("(c.resolution_category IS NULL OR c.resolution_category != ALL(%s))")
             wparams.append(exclude_categories)

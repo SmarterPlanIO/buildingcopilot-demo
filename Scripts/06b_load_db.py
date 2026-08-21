@@ -147,6 +147,9 @@ with open(INPUT_FILE, "r", encoding="utf-8") as f:
             clean(chunk.get("synthetic_questions", "")),  # Phase 1a
             chunk.get("dossier_id"),                      # Module Dossiers
             _code_ncg,                                    # Code NCG universel
+            bool(chunk.get("retrieval_exclu", False)),    # Soft delete (version chains)
+            chunk.get("motif_exclusion"),
+            chunk.get("ref_source_file"),
         )
         
         batch.append(row)
@@ -157,7 +160,8 @@ with open(INPUT_FILE, "r", encoding="utf-8") as f:
                 (chunk_id, copropriete, source_file, nom_fichier, doc_type,
                  chunk_index, total_chunks, themes, theme_scores,
                  text, nb_caracteres, embedding,
-                 resolution_category, synthetic_questions, dossier_id, code_ncg)
+                 resolution_category, synthetic_questions, dossier_id, code_ncg,
+                 retrieval_exclu, motif_exclusion, ref_source_file)
                 VALUES %s
                 ON CONFLICT (chunk_id) DO UPDATE SET
                     copropriete = EXCLUDED.copropriete,
@@ -165,6 +169,12 @@ with open(INPUT_FILE, "r", encoding="utf-8") as f:
                     nom_fichier = EXCLUDED.nom_fichier,
                     doc_type = EXCLUDED.doc_type,
                     chunk_index = EXCLUDED.chunk_index,
+            retrieval_exclu = EXCLUDED.retrieval_exclu,
+            motif_exclusion = EXCLUDED.motif_exclusion,
+            ref_source_file = EXCLUDED.ref_source_file,
+                    retrieval_exclu = EXCLUDED.retrieval_exclu,
+                    motif_exclusion = EXCLUDED.motif_exclusion,
+                    ref_source_file = EXCLUDED.ref_source_file,
                     total_chunks = EXCLUDED.total_chunks,
                     themes = EXCLUDED.themes,
                     theme_scores = EXCLUDED.theme_scores,
@@ -187,7 +197,8 @@ if batch:
         (chunk_id, copropriete, source_file, nom_fichier, doc_type,
          chunk_index, total_chunks, themes, theme_scores,
          text, nb_caracteres, embedding,
-         resolution_category, synthetic_questions, dossier_id, code_ncg)
+         resolution_category, synthetic_questions, dossier_id, code_ncg,
+         retrieval_exclu, motif_exclusion, ref_source_file)
         VALUES %s
         ON CONFLICT (chunk_id) DO UPDATE SET
             copropriete = EXCLUDED.copropriete,

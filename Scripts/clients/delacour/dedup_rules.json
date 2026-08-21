@@ -1,0 +1,5 @@
+{
+  "_comment": "Conventions documentaires Delacour Patrimoine, relevées lors de l'audit corpus du 20/08/2026 (guide Section 22). Suffixe _RGPD = variante expurgée d'un même document (série BU_* du 94 Victor Hugo) : l'original reste en retrieval, la variante est flaggée (variant_keep=original — les utilisateurs PALIM sont les gestionnaires du cabinet, l'exemplaire complet est le plus informatif ; décision réversible en base). Le reste du profil produit convient en l'état.",
+  "variant_suffixes": ["_RGPD", "-RGPD", " RGPD"],
+  "variant_keep": "original"
+}
