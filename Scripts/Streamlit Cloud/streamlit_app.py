@@ -59,10 +59,18 @@ AWS_REGION = st.secrets["aws"].get("region", "eu-west-1")
 AWS_ACCESS_KEY = st.secrets["aws"]["access_key_id"]
 AWS_SECRET_KEY = st.secrets["aws"]["secret_access_key"]
 
-# Branding client — logo affiché dans le header (PNG/JPG, fond transparent recommandé)
-# Télécharger le logo du client et le placer dans le même dossier que ce script.
-# Mettre None ou "" pour désactiver.
-CLIENT_LOGO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Logo_NCG.png")
+# Branding client — logo du header piloté par les secrets de l'app :
+#   [branding]
+#   logo_file = "Logo_NCG.png"   # nom d'un fichier PNG/JPG/SVG placé dans le même dossier que ce script
+# Rien de paramétré = aucun logo (défaut multi-client, ex. app CSG).
+try:
+    _logo_name = st.secrets["branding"]["logo_file"]
+except (KeyError, TypeError):
+    _logo_name = ""
+CLIENT_LOGO_FILE = (
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.basename(str(_logo_name)))
+    if _logo_name else ""
+)
 
 EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 LLM_MODEL = "eu.anthropic.claude-sonnet-4-6"
