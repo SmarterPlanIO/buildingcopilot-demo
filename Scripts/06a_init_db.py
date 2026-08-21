@@ -303,6 +303,15 @@ print(f"✅ Migration Airtable : {_added} colonnes ajoutées à la table dossier
 
 # ── Colonne dossier_id sur chunks (lien chunk → dossier) ──
 cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS dossier_id TEXT;")
+
+# ── Soft delete (version chains / variantes, cf. version_chains.py) ──
+# retrieval_exclu=TRUE : chunk exclu du retrieval PAR DEFAUT (patron BORDEREAU_AR),
+# toujours en base et accessible par chunk_id (get_chunks / get_full_document).
+# Reversible : UPDATE chunks SET retrieval_exclu=FALSE WHERE source_file=...
+cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS retrieval_exclu BOOLEAN NOT NULL DEFAULT FALSE;")
+cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS motif_exclusion TEXT;")
+cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS ref_source_file TEXT;")
+print("✅ Colonnes soft delete (retrieval_exclu/motif_exclusion/ref_source_file) sur chunks")
 conn.commit()
 cur.execute("CREATE INDEX IF NOT EXISTS idx_chunks_dossierid ON chunks (dossier_id);")
 conn.commit()
@@ -404,6 +413,60 @@ cur.execute("""
 cur.execute("ALTER TABLE copros ADD COLUMN IF NOT EXISTS immatriculation TEXT;")
 conn.commit()
 print("✅ Table copros créée (registre annuaire + immatriculation RNIC)")
+
+# ── Table ingestion_registre : memoire d'etat du pipeline, unite = document ──
+# Ecrite par 01/00b/02/03/06b via registre.py (cf. PLAN_REGISTRE_INGESTION.md).
+# JAMAIS lue par le MCP : outil d'exploitation, aucun GRANT pour mcp_*_reader.
+# source_file = chemin relatif prefixe du dossier copro, identique a chunks.source_file.
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS ingestion_registre (
+        source_file     TEXT PRIMARY KEY,
+        code_ncg        TEXT NOT NULL,
+        nom_fichier     TEXT,
+        taille_octets   BIGINT,
+        sha256          TEXT,
+        signature       TEXT,
+
+        statut          TEXT NOT NULL DEFAULT 'DECOUVERT'
+            CHECK (statut IN ('DECOUVERT','EXTRAIT','INGERE','REJETE','SUPPRIME','ERREUR')),
+        motif           TEXT
+            CHECK (motif IS NULL OR motif IN (
+                'FILTRAGE_PHOTO','FILTRAGE_PLAN','FILTRAGE_SYSTEME','FILTRAGE_AUTRE',
+                'FILTRAGE_GOOGLE_NATIF','DOUBLON_EXACT','TEXTE_VIDE','NON_EXPLOITABLE',
+                'DOUBLON_PROCHE','EXTRACTION_KO','CHARGEMENT_KO','COPIE_KO')),
+        etape           TEXT,
+        ref_source_file TEXT,
+        score           NUMERIC,
+
+        doc_type        TEXT,
+        nb_caracteres   INTEGER,
+        nb_chunks       INTEGER,
+
+        run_id          TEXT,
+        first_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_seen       TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_ingest     TIMESTAMPTZ,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+""")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_registre_copro ON ingestion_registre (code_ncg, statut);")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_registre_motif ON ingestion_registre (statut, motif);")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_registre_sha   ON ingestion_registre (sha256);")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_registre_run   ON ingestion_registre (run_id);")
+print("OK Table ingestion_registre creee (ou deja existante)")
+
+# ── Table ingestion_runs : un batch = une ligne, pour le rapport de fin de cycle ──
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS ingestion_runs (
+        run_id      TEXT PRIMARY KEY,
+        code_ncg    TEXT NOT NULL,
+        started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        finished_at TIMESTAMPTZ,
+        ok          BOOLEAN,
+        stats       JSONB
+    );
+""")
+print("OK Table ingestion_runs creee (ou deja existante)")
 
 cur.close()
 conn.close()
