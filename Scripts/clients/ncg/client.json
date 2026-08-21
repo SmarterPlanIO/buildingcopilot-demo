@@ -22,11 +22,18 @@
     "5033": {"folder": "5033 - 24 TORCY", "immatriculation": "AE6576847"},
     "5354": {"folder": "5354 - 2 UNIVERSITE", "immatriculation": "AE6582522"},
     "5390": {"folder": "5390 - 2-6 BIS HENRI TARIEL", "immatriculation": "AB8635559"},
+    "5412": {"folder": "5412 - TOUR LYON BERCY"},
     "5427": {"folder": "5427 - 33 VICTOR CRESSON", "immatriculation": "AB8644627"},
     "5480": {"folder": "5480 - 88-90 GR GAL EBOUE", "immatriculation": "AB0403527"},
     "5499": {"folder": "5499 - 22-24 GUILLEMIN", "immatriculation": "AF2237683"},
+    "5532": {"folder": "5532 AFUL Cours SAINT LOUIS", "immatriculation": "AE3727559", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5532 AFUL Cours SAINT LOUIS"},
     "5548": {"folder": "5548 - VILLA HAUSSMANN", "immatriculation": "AB0593525"},
     "5553": {"folder": "5553 - 8 Jaurès - LES FREGATES", "immatriculation": "AD6404412"},
+    "5709": {"folder": "5709  MASSENA CHOISY", "immatriculation": "AA1266725", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5709  MASSENA CHOISY"},
+    "5750": {"folder": "5750 PARKINGS RODIN EGALITE", "immatriculation": "AA1780618", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5750 PARKINGS RODIN EGALITE"},
+    "5752": {"folder": "5752 - AFUL FORT DE VANVES", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5752 - AFUL FORT DE VANVES"},
+    "5756": {"folder": "5756 CONDORCET", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5756 CONDORCET"},
+    "5757": {"folder": "5757 ABBE GREGOIRE", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5757 ABBE GREGOIRE"},
     "8030": {"folder": "8030 - 21 PATAY", "immatriculation": "AA9293150"},
     "8050": {"folder": "8050 - STYLE - 145 AVENUE DE FRANCE", "immatriculation": "AC0744680"}
   }
