@@ -1,6 +1,6 @@
 {
   "_comment": "Profil client PALIM — NCG. Chargé par pipeline_config.py selon PALIM_CLIENT (défaut: ncg). Ne contient AUCUN secret : les mots de passe restent en env (pipeline) ou Secrets Manager (MCP).",
-  "_comment_immatriculation": "immatriculation = attribut RNIC (forme canonique AA0000000), relevé Airtable Assynco 19/08/2026. Jamais une clé pour NCG (clé = code interne 4 chiffres). Manquantes dans Airtable : 5548, 5553, 8050 ; 5480 a une immat invalide dans Airtable (ABO403527, typo O/0) — à corriger côté Assynco avant de la porter ici.",
+  "_comment_immatriculation": "immatriculation = attribut RNIC (forme canonique AA0000000). Jamais une clé pour NCG (clé = code interne 4 chiffres). Couverture 10/10 depuis le 21/08/2026 : 5480/5548/5553/8050 retrouvées dans les documents ingérés (fiches de synthèse et attestations du registre) et reportées dans Airtable Assynco (typo 5480 ABO->AB0 corrigée).",
   "client_code": "ncg",
   "client_name": "NCG",
   "project_root": null,
@@ -23,11 +23,11 @@
     "5354": {"folder": "5354 - 2 UNIVERSITE", "immatriculation": "AE6582522"},
     "5390": {"folder": "5390 - 2-6 BIS HENRI TARIEL", "immatriculation": "AB8635559"},
     "5427": {"folder": "5427 - 33 VICTOR CRESSON", "immatriculation": "AB8644627"},
-    "5480": {"folder": "5480 - 88-90 GR GAL EBOUE"},
+    "5480": {"folder": "5480 - 88-90 GR GAL EBOUE", "immatriculation": "AB0403527"},
     "5499": {"folder": "5499 - 22-24 GUILLEMIN", "immatriculation": "AF2237683"},
-    "5548": {"folder": "5548 - VILLA HAUSSMANN"},
-    "5553": {"folder": "5553 - 8 Jaurès - LES FREGATES"},
+    "5548": {"folder": "5548 - VILLA HAUSSMANN", "immatriculation": "AB0593525"},
+    "5553": {"folder": "5553 - 8 Jaurès - LES FREGATES", "immatriculation": "AD6404412"},
     "8030": {"folder": "8030 - 21 PATAY", "immatriculation": "AA9293150"},
-    "8050": {"folder": "8050 - STYLE - 145 AVENUE DE FRANCE"}
+    "8050": {"folder": "8050 - STYLE - 145 AVENUE DE FRANCE", "immatriculation": "AC0744680"}
   }
 }
