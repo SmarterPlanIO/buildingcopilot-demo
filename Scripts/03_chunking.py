@@ -25,6 +25,7 @@ import logging
 import argparse
 import threading
 from pathlib import Path
+from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
@@ -32,6 +33,7 @@ import boto3
 
 # Filtre de contenu binaire / garbage (v2)
 from content_filter import analyze_file_quality, filter_chunks, make_placeholder_chunk
+import dedup_confirm  # confirmation des doublons proches (etage de verification)
 from pipeline_config import paths_for, RESULTS_ROOT, EXTRACTED_ROOT
 import bedrock_cost
 
@@ -49,12 +51,16 @@ if _args.copro:
     OUTPUT_FILE = str(_paths["chunks_jsonl"])
     DOC_TYPE_CACHE_FILE = str(_paths["per_copro"] / "doc_type_cache.json")
     RES_FORMAT_CACHE_FILE = str(_paths["per_copro"] / "resolution_format_cache.json")
+    DEDUP_PROCHE_MANIFEST = str(_paths["per_copro"] / "dedup_proche_manifest.json")
+    VERSION_CHAINS_MANIFEST = str(_paths["per_copro"] / "version_chains_manifest.json")
     print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
 else:
     EXTRACTED_DIR = str(EXTRACTED_ROOT)
     OUTPUT_FILE = str(RESULTS_ROOT / "chunks_copro.jsonl")
     DOC_TYPE_CACHE_FILE = os.path.join(os.path.dirname(OUTPUT_FILE), "doc_type_cache.json")
     RES_FORMAT_CACHE_FILE = os.path.join(os.path.dirname(OUTPUT_FILE), "resolution_format_cache.json")
+    DEDUP_PROCHE_MANIFEST = os.path.join(os.path.dirname(OUTPUT_FILE), "dedup_proche_manifest.json")
+    VERSION_CHAINS_MANIFEST = os.path.join(os.path.dirname(OUTPUT_FILE), "version_chains_manifest.json")
 
 # Taille cible des chunks (en caractères)
 CHUNK_TARGET_SIZE = 1500    # ~375 tokens français
@@ -1190,7 +1196,26 @@ from difflib import SequenceMatcher
 from collections import defaultdict
 
 _dedup_excluded = set()  # source_file à exclure du chunking
-_dedup_stats = {"groups_checked": 0, "duplicates_found": 0}
+_dedup_stats = {"groups_checked": 0, "candidats": 0, "duplicates_found": 0, "candidats_ecartes": 0}
+_dedup_motifs = {}     # motif -> compte (pourquoi un candidat a été écarté ou retenu)
+_dedup_detail = {}     # source_file exclu -> {garde, score, motif} : traçabilité du registre
+
+
+@lru_cache(maxsize=64)
+def _profil_doc(json_path, nom_fichier):
+    """Profil de confirmation d'un document, relu à la demande.
+
+    Le texte intégral n'est PAS gardé en mémoire pour tout un dossier (jusqu'à
+    1 000 fichiers, certains de 200 000 caractères) : on relit le JSON à la
+    demande derrière un cache borné, les mêmes documents revenant dans plusieurs
+    paires candidates.
+    """
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            texte = json.load(f).get("texte", "")
+    except (OSError, json.JSONDecodeError):
+        texte = ""
+    return dedup_confirm.profil(nom_fichier, texte)
 
 # Charger texte + métadonnées de chaque fichier JSON (lecture rapide)
 _dedup_index = []  # (json_path, source_file, nom_fichier, dossier_parent, text_start)
@@ -1226,9 +1251,20 @@ for folder, items in _by_folder.items():
         for j in range(i + 1, len(items)):
             if items[j][1] in _dedup_excluded:
                 continue
-            # Similarité sur les 500 premiers chars normalisés
+            # ETAGE 1 — candidat : similarité sur les 500 premiers chars normalisés.
+            # Bon marché, mais NE DECIDE RIEN : sur un corpus de syndic ces 500
+            # caractères ne portent que l'en-tête du cabinet (cf. dedup_confirm).
             ratio = SequenceMatcher(None, items[i][4], items[j][4]).ratio()
-            if ratio > 0.85:
+            if ratio > dedup_confirm.CANDIDAT_TETE_SEUIL:
+                _dedup_stats["candidats"] += 1
+                # ETAGE 2 — confirmation sur le texte intégral + jeux de dates.
+                _verdict = dedup_confirm.confirmer(
+                    _profil_doc(items[i][0], items[i][2]),
+                    _profil_doc(items[j][0], items[j][2]))
+                _dedup_motifs[_verdict.motif] = _dedup_motifs.get(_verdict.motif, 0) + 1
+                if not _verdict.doublon:
+                    _dedup_stats["candidats_ecartes"] += 1
+                    continue
                 # Choisir lequel garder — règles de priorité :
                 # a) Document signé → prioritaire (même si PDF)
                 # b) .docx/.doc → texte natif (meilleure qualité)
@@ -1243,11 +1279,75 @@ for folder, items in _by_folder.items():
                 keep, drop = (items[i], items[j]) if _priority(items[i]) >= _priority(items[j]) else (items[j], items[i])
                 _dedup_excluded.add(drop[1])
                 _dedup_stats["duplicates_found"] += 1
-                print(f"  🔗 Doublon détecté (sim={ratio:.0%}) :")
+                _dedup_detail[drop[1]] = {"garde": keep[1], "score": round(_verdict.score, 4),
+                                          "motif": _verdict.motif, "tete": round(ratio, 4)}
+                print(f"  🔗 Doublon confirmé ({_verdict.motif}, jaccard={_verdict.score:.0%}) :")
                 print(f"     GARDÉ  : {keep[2]}")
                 print(f"     EXCLU  : {drop[2]}")
 
-print(f"  ✅ {_dedup_stats['duplicates_found']} doublons éliminés sur {_dedup_stats['groups_checked']} groupes vérifiés")
+print(f"  ✅ {_dedup_stats['candidats']} candidats signalés par la tête → "
+      f"{_dedup_stats['duplicates_found']} doublons confirmés, "
+      f"{_dedup_stats['candidats_ecartes']} conservés (faux doublons)")
+for _m, _n in sorted(_dedup_motifs.items(), key=lambda x: -x[1]):
+    print(f"     {_m:26s} : {_n:5d}")
+# Manifest de traçabilité : quel document a été écarté au profit duquel, et
+# pourquoi. Lu par le registre d'ingestion (PLAN_REGISTRE_INGESTION.md, P1).
+try:
+    with open(DEDUP_PROCHE_MANIFEST, "w", encoding="utf-8") as _f:
+        json.dump(_dedup_detail, _f, ensure_ascii=False, indent=1)
+except OSError as _e:
+    print(f"  ⚠️ manifest dedup proche non écrit : {_e}")
+
+# =====================================================
+# Version chains + variantes — SOFT DELETE (flag, jamais de suppression)
+# =====================================================
+# Détecte les états successifs d'un même document de travail (v1/v2/VF/signé)
+# et les variantes par suffixe (_RGPD chez Delacour). Les documents flaggés
+# sont CHUNKÉS ET CHARGÉS normalement, mais portent retrieval_exclu=True :
+# exclus du retrieval par défaut (patron BORDEREAU_AR), récupérables à la
+# demande, réversibles en base. Conventions par client : dedup_rules.py.
+print("\n⏳ Détection des version chains (soft delete)...")
+import version_chains as _vc
+from dedup_rules import compile_rules as _vc_compile, load_rules as _vc_load
+
+_vc_rules = _vc_compile(_vc_load())
+_vc_sigs = {}
+if _args.copro:
+    try:
+        with open(str(_paths["extraction_checkpoint"]), encoding="utf-8") as _f:
+            _vc_sigs = json.load(_f).get("sigs") or {}
+    except (OSError, json.JSONDecodeError):
+        pass
+
+_vc_docs = []
+for _it in _dedup_index:
+    if _it[1] in _dedup_excluded:
+        continue
+    _vc_docs.append(_vc.DocVC(source_file=_it[1], nom_fichier=_it[2],
+                              dossier_parent=_it[3], profil=_profil_doc(_it[0], _it[2]),
+                              signature=_vc_sigs.get(_it[1])))
+_soft_flags = _vc.detecter(_vc_docs, _vc_rules)
+
+_vc_motifs = {}
+for _v in _soft_flags.values():
+    _vc_motifs[_v["motif"]] = _vc_motifs.get(_v["motif"], 0) + 1
+print(f"  ✅ {len(_soft_flags)} document(s) flaggé(s) retrieval_exclu "
+      f"({', '.join(f'{m}={n}' for m, n in sorted(_vc_motifs.items())) or 'aucun'})")
+try:
+    with open(VERSION_CHAINS_MANIFEST, "w", encoding="utf-8") as _f:
+        json.dump(_soft_flags, _f, ensure_ascii=False, indent=1)
+except OSError as _e:
+    print(f"  ⚠️ manifest version chains non écrit : {_e}")
+
+
+def _appliquer_soft_flags(record, source_file):
+    """Pose retrieval_exclu/motif/ref sur un chunk d'un document flaggé."""
+    _fl = _soft_flags.get(source_file)
+    if _fl:
+        record["retrieval_exclu"] = True
+        record["motif_exclusion"] = _fl["motif"]
+        record["ref_source_file"] = _fl["ref_source_file"]
+    return record
 
 total_chunks = 0
 doc_type_stats = {}
@@ -1296,7 +1396,7 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
             )
             chunk_id = hashlib.md5(f"{source_file}_placeholder".encode()).hexdigest()[:12]
             placeholder["chunk_id"] = chunk_id
-            out.write(json.dumps(placeholder, ensure_ascii=False) + "\n")
+            out.write(json.dumps(_appliquer_soft_flags(placeholder, source_file), ensure_ascii=False) + "\n")
             total_chunks += 1
             continue
         
@@ -1327,7 +1427,7 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
             )
             chunk_id = hashlib.md5(f"{source_file}_placeholder".encode()).hexdigest()[:12]
             placeholder["chunk_id"] = chunk_id
-            out.write(json.dumps(placeholder, ensure_ascii=False) + "\n")
+            out.write(json.dumps(_appliquer_soft_flags(placeholder, source_file), ensure_ascii=False) + "\n")
             total_chunks += 1
             _filter_stats["files_placeholder"] += 1
             continue
@@ -1365,7 +1465,7 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
                 "resolution_category": res_cat
             }
             
-            out.write(json.dumps(chunk_record, ensure_ascii=False) + "\n")
+            out.write(json.dumps(_appliquer_soft_flags(chunk_record, source_file), ensure_ascii=False) + "\n")
             total_chunks += 1
 
 _save_res_format_cache()
