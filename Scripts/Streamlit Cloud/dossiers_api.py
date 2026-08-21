@@ -628,13 +628,18 @@ if __name__ == "__main__":
     import os
     import psycopg2
 
-    # Creds via env (jamais en clair dans le code). Defaut = reader read-only.
-    #   PYTHONIOENCODING=utf-8 DB_PASSWORD=... python dossiers_api.py
-    DB_HOST = os.environ.get("DB_HOST", "sp-rag-ncg-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com")
+    # Creds via env (jamais en clair dans le code). Multi-client : pas de
+    # fallback cross-tenant sur un host — DB_HOST et DB_USER sont obligatoires.
+    #   PYTHONIOENCODING=utf-8 DB_HOST=... DB_USER=mcp_<client>_reader DB_PASSWORD=... python dossiers_api.py
+    DB_HOST = os.environ.get("DB_HOST", "")
     DB_PORT = int(os.environ.get("DB_PORT", "5432"))
     DB_NAME = os.environ.get("DB_NAME", "postgres")
-    DB_USER = os.environ.get("DB_USER", "mcp_ncg_reader")
+    DB_USER = os.environ.get("DB_USER", "")
     DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+    if not DB_HOST:
+        raise SystemExit("DB_HOST requis en variable d'environnement (pas de fallback cross-client).")
+    if not DB_USER:
+        raise SystemExit("DB_USER requis en variable d'environnement (ex. mcp_ncg_reader, mcp_csg_reader).")
     if not DB_PASSWORD:
         raise SystemExit("DB_PASSWORD requis en variable d'environnement.")
 
