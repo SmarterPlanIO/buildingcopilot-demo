@@ -1,8 +1,9 @@
 """
 PALIM_server.py — Serveur MCP FastMCP exposant le retrieval PALIM à Claude Teams.
 
-12 tools @mcp.tool() :
+13 tools @mcp.tool() :
   PALIM_search_chunks         — retrieval scopé (réponse finale), invariant non-dilution
+  PALIM_run_analytical_query  — analytique inter-copro (agrégats whitelist, parc entier OK)
   PALIM_list_copros           — annuaire (identité, fuzzy nom/adresse/alias)
   PALIM_discover_copros       — découverte documentaire (agrégat, final_answer_allowed=false)
   PALIM_get_full_document     — drilldown plafonné (anti-aspiration)
@@ -36,6 +37,7 @@ from PALIM_discovery import discover_copros
 from PALIM_copros import list_copros as _list_copros
 from PALIM_dossiers import search_dossiers as _search_dossiers
 from PALIM_visites import match_visites as _match_visites
+from PALIM_analytics import run_analytical_query as _run_analytical_query
 from PALIM_overview import get_overview as _get_overview
 import PALIM_assynco as assynco
 
@@ -208,6 +210,101 @@ def PALIM_search_chunks(
             "warnings": warnings, "results": results,
             "trace_ref": lf.trace_id(tr),
         }
+    finally:
+        lf.flush()
+
+
+@mcp.tool()
+def PALIM_run_analytical_query(
+    operation: str,
+    source: str,
+    select_field: str | None = None,
+    metric: str | None = None,
+    doc_type: str | None = None,
+    sous_type: str | None = None,
+    statut: str | None = None,
+    type_dossier: str | None = None,
+    annee: int | None = None,
+    annee_min: int | None = None,
+    annee_max: int | None = None,
+    copro_codes: list[str] | None = None,
+    gestionnaire: str | None = None,
+) -> dict:
+    """Requête ANALYTIQUE agrégée sur le portefeuille : recensement, comptage, somme ou comparaison sur champs structurés, avec ou sans périmètre de copros.
+
+    QUAND l'utiliser : questions de type « tous les... », « combien de... », « montant
+    total... », « le plus / le moins », « par copropriété », « sur le portefeuille »,
+    « quelles copros ont... ». copro_codes=None = PARC ENTIER (légitime ici : chaque
+    ligne d'agrégat reste rattachée à sa copro, il n'y a pas de dilution).
+    QUAND NE PAS l'utiliser : citer ou expliquer le CONTENU d'un document (résolution,
+    clause, montant précis d'un devis) → PALIM_search_chunks scopé, régime documentaire.
+
+    Args:
+        operation: "count" (comptage par copro ; sert aussi pour « quelles copros ont... »),
+            "sum" (somme d'une métrique par copro, remplir metric),
+            "list" (énumérer des éléments, remplir select_field).
+        source: "documents" ou "dossiers". dossiers = UNIQUEMENT les dossiers de sinistre
+            eux-mêmes (montants réglés, provisions, franchise, statut, expert, assureur).
+            Les travaux et interventions par MÉTIER vivent dans documents.sous_type, MÊME
+            si la question contient le mot « travaux ».
+        select_field: pour operation=list — documents : nom_fichier | sous_type | doc_type |
+            partie (entreprises/intervenants cités) ; dossiers : nom_dossier | type_dossier |
+            assureur | expert_nom.
+        metric: pour operation=sum — documents : montant_principal ; dossiers :
+            montant_estime | montant_reel | total_regle | provisions | franchise |
+            reglement_realise | cout_client.
+        doc_type: filtre documents (PV_AG, RCP, CONTRAT, DEVIS, ASSURANCE, ...).
+        sous_type: filtre documents, valeurs canoniques MAJUSCULES : PLOMBERIE, CHAUFFAGE,
+            ASCENSEUR, ELECTRICITE, PEINTURE, RAVALEMENT, ETANCHEITE, TOITURE, VMC,
+            ESPACES_VERTS, NETTOYAGE, DIGICODE, SECURITE_INCENDIE, DERATISATION, PARKING,
+            RELEVAGE, COMPTEUR, SYNDIC, MRI, DDE.
+        statut: documents : actif|expire|resilie|cloture|en_cours ; dossiers : EN_ATTENTE|EN_COURS|CLOTURE.
+        type_dossier: filtre dossiers (SINISTRE, TRAVAUX, CONTENTIEUX).
+        annee / annee_min / annee_max: bornes temporelles.
+        copro_codes: None = parc entier ; sinon liste de codes copro (toutes graphies).
+        gestionnaire: réservé (facette à venir) — actuellement ignoré avec warning.
+
+    Returns:
+        {ok, rows:[{code_ncg, copro_nom, valeur}], n_rows, truncated, coverage, facets}.
+        OBLIGATOIRE dans la réponse à l'utilisateur : annoncer la couverture
+        (coverage.n_copros_avec_donnees / n_copros_en_base) — un agrégat sur 8 copros en
+        base n'est pas « tout le portefeuille ». Si facets.concentration existe, proposer
+        de détailler sur les copros concentrant l'essentiel. Pour approfondir une ligne →
+        PALIM_search_chunks scopé sur cette copro (preuves documentaires).
+        Spec invalide → {ok:false, error_type:"INVALID_ANALYTICAL_SPEC", allowed:{...}} :
+        se corriger avec les valeurs admises, ne pas abandonner.
+    """
+    t0 = time.time()
+    codes = scope.normalize_copro_codes(copro_codes) if copro_codes else None
+    spec = {"operation": operation, "source": source, "select_field": select_field,
+            "metric": metric, "doc_type": doc_type, "sous_type": sous_type,
+            "statut": statut, "type_dossier": type_dossier,
+            "annee": annee, "annee_min": annee_min, "annee_max": annee_max}
+    tr = lf.start_trace("PALIM_run_analytical_query",
+                        input={"spec": spec, "copro_codes": codes},
+                        tags=["mcp", "analytical_query"])
+    try:
+        try:
+            res = _run_analytical_query(get_conn(), spec, copro_filter=codes)
+        except Exception as exc:
+            lf.update_trace(tr, output={"error_type": "INTERNAL"},
+                            metadata={"latency_ms": int((time.time() - t0) * 1000)})
+            return _internal_error("PALIM_run_analytical_query", exc)
+        if res.get("ok") and gestionnaire:
+            res.setdefault("warnings", []).append(
+                "gestionnaire_filter_unavailable : filtre gestionnaire pas encore actif, "
+                "requête exécutée sans ce filtre.")
+        _log("PALIM_run_analytical_query", ok=res.get("ok"),
+             error_type=res.get("error_type"), operation=operation, source=source,
+             scope="parc" if not codes else f"{len(codes)} copros",
+             n_rows=res.get("n_rows"), latency_ms=int((time.time() - t0) * 1000))
+        lf.update_trace(tr, output={"ok": res.get("ok"), "n_rows": res.get("n_rows"),
+                                    "error_type": res.get("error_type"),
+                                    "coverage": res.get("coverage")},
+                        metadata={"latency_ms": int((time.time() - t0) * 1000)})
+        if res.get("ok"):
+            res["trace_ref"] = lf.trace_id(tr)
+        return res
     finally:
         lf.flush()
 

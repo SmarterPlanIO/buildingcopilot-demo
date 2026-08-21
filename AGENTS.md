@@ -92,7 +92,8 @@ Règle de rangement : `Scripts/` (racine, `mcp_server/`, `Streamlit Cloud/`) = *
 │   │   ├── requirements.txt     # deps du harness
 │   │   └── secrets_template.toml
 │   └── mcp_server/              # ⭐⭐ BACKEND PRODUIT (serveur MCP FastMCP/Lambda) — voir §10-11
-│       ├── PALIM_server.py      # Définit les 12 tools @mcp.tool() + app ASGI FastMCP
+│       ├── PALIM_server.py      # Définit les 13 tools @mcp.tool() + app ASGI FastMCP
+│       ├── PALIM_analytics.py   # Analytique inter-copro (whitelist+builder SQL, copie maîtrisée d'analytics.py, zéro Bedrock)
 │       ├── PALIM_retrieval.py   # hybrid_search (vector+BM25+RRF+rerank Cohere) côté MCP
 │       ├── PALIM_config.py      # Constantes + ARNs secrets + ASSYNCO_SYNDIC_NCG (isolation tenant)
 │       ├── PALIM_db.py          # Connexion RDS read-only (mcp_ncg_reader)
@@ -220,7 +221,7 @@ generate_answer_stream()  → Sonnet 4.6, streaming, citations [Source N]
 | Rerank Cohere (cloud) | `Scripts/Streamlit Cloud/rerank.py` |
 | Dossiers sinistres | `Scripts/Streamlit Cloud/dossiers_api.py` + `08_airtable_sync.py` |
 | Agrégations analytiques sécurisées | `Scripts/Streamlit Cloud/analytics.py` |
-| Backend MCP produit (serveur, 12 tools, deploy) | `Scripts/mcp_server/` (§10) |
+| Backend MCP produit (serveur, 13 tools, deploy) | `Scripts/mcp_server/` (§10) |
 | Project Instructions + skills client | `Scripts/clients/ncg/docs/INSTRUCTIONS_NCG_PROJECT.md` + `clients/ncg/skills/` (§11) |
 | Ingestion incrémentale d'une copro (CRUD) | `Scripts/ingest.py` |
 | Fiche synthèse par copro | `Scripts/09_copro_synthese.py` → table `copro_synthese` |
@@ -242,11 +243,12 @@ Serveur **FastMCP** (Python 3.12) déployé sur **AWS Lambda** en image containe
 - **Build/deploy** : `build_and_push.sh <tag>` vendorise `dossiers_api.py` et `rerank.py` depuis `../Streamlit Cloud/`, build linux/amd64, push ECR ; puis `aws lambda update-function-code ... --image-uri ...:vN`. Runbook : `clients/ncg/docs/RUNBOOK_DEPLOY_V7.md`. Rollback = repointer sur l'image précédente.
 - **Tracing** : Langfuse optionnel via `PALIM_tracing.py` (no-op si pas de clés ; `langfuse==2.60.4`). `search_chunks`/`search_dossiers` renvoient un `trace_ref` pour rattacher le feedback.
 
-### Les 12 tools `PALIM_*` (décorateurs `@mcp.tool()` dans `PALIM_server.py`)
+### Les 13 tools `PALIM_*` (décorateurs `@mcp.tool()` dans `PALIM_server.py`)
 
 | Tool (signature résumée) | Rôle | Notes |
 |--------------------------|------|-------|
 | `PALIM_search_chunks(query, copro_codes, doc_type?, year_min?, year_max?, statut?, sous_type?, retrieval_mode=equilibre, max_chunks=12, include_bordereau_ar?, include_legal_context?)` | Recherche de passages (chunks) | INVARIANT : ≥1 `copro_code` sinon `MISSING_COPRO_SCOPE`. Renvoie `trace_ref` |
+| `PALIM_run_analytical_query(operation, source, select_field?, metric?, doc_type?, sous_type?, statut?, type_dossier?, annee?, annee_min?, annee_max?, copro_codes?, gestionnaire?)` | Analytique inter-copro (count/sum/list par copro) | SEUL tool sans scope obligatoire (None = parc entier). Whitelist `PALIM_analytics.py` (copie maîtrisée d'analytics.py, zéro Bedrock), retour rows+coverage+facets, spec invalide → `INVALID_ANALYTICAL_SPEC`+`allowed` |
 | `PALIM_list_copros(query?)` | Annuaire copros (identité) | Choisir la copro sans recherche documentaire |
 | `PALIM_discover_copros(query, doc_type?, year_min?, year_max?, top_k=10)` | Découverte / triage | `final_answer_allowed=false` |
 | `PALIM_get_full_document(source_file, max_chars=20000, chunk_start?, chunk_end?, reason?)` | Texte intégral d'un doc | Anti-aspiration (cap 50000, refuse `%`/`*`) |
