@@ -3,9 +3,16 @@
 desktop.ini
 *.tmp
 Thumbs.db
+# Raccourcis Windows/Google Drive : illisibles par git, pointeurs machine-locaux
+*.lnk
 
 # ─── IDE / Claude settings ──────────────────────────────────────────────────
-.claude/
+# Config locale (settings.local.json, launch.json, worktrees) : jamais versionnée.
+# Exception : .claude/skills/ = skills d'équipe, ils doivent suivre le repo.
+**/.claude/*
+!**/.claude/skills/
+# Copie locale du skill produit assynco-erp : source de vérité = Scripts/mcp_server/skills/.
+Scripts/.claude/skills/assynco-erp/
 .vscode/
 .idea/
 

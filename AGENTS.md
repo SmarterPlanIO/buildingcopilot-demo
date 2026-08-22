@@ -38,7 +38,7 @@ Règle de rangement : `Scripts/` (racine, `mcp_server/`, `Streamlit Cloud/`) = *
 
 - **Sélection du client** : variable d'env `PALIM_CLIENT` (défaut `ncg`), lue par `pipeline_config.py` (charge `clients/<client>/client.json`) et `PALIM_config.py` (MCP, via env.json Lambda).
 - **Profil client** : `client_code`, `client_name`, `project_root` (null = racine du clone), `raw_root` (optionnel : source documentaire directe, ex. Drive partagé client en lecture seule), `db` (host/users/secrets — jamais de mot de passe), `assynco.syndic_labels` (allowlist tenant Airtable), `included_copros` (registre : `code → dossier` legacy, ou `code → {folder, lobby_code, label, immatriculation, raw_dir}` riche ; `raw_dir` = chemin ABSOLU/UNC de la source documentaire de la copro, lu directement — share VPN client, disque externe — sans recopie dans `Données brutes/` ; `folder` reste le nom RELATIF des sorties locales `Archives_Filtrees/`/`Archives_Extraites/`, on n'écrit jamais dans la source).
-- **Identité copro** : code canonique = **immatriculation RNIC** (`AA0000000`) pour les nouveaux clients, codes internes numériques pour NCG. `copro_id.py` (canon/validate/display) + `pipeline_config.resolve()` normalisent TOUTE entrée (tirets/espaces/casse, alias code Lobby) — un seul shard et un seul `code_ncg` par copro quelle que soit la graphie. Cf. `PLAN_IMMATRICULATION_RNIC.md` et `clients/delacour/docs/RNIC_CHECK_2026-08-17.md` (validation registre 24/25 GO).
+- **Identité copro** : code canonique = **immatriculation RNIC** (`AA0000000`) pour les nouveaux clients, codes internes numériques pour NCG. `copro_id.py` (canon/validate/display) + `pipeline_config.resolve()` normalisent TOUTE entrée (tirets/espaces/casse, alias code Lobby) — un seul shard et un seul `code_ncg` par copro quelle que soit la graphie. Cf. `PLAN_IMMATRICULATION_RNIC.md` et `ops/runbooks/delacour/RNIC_CHECK_2026-08-17.md` (validation registre 24/25 GO).
 - **Immatriculation en ATTRIBUT** : pour les clients à codes internes (NCG), l'immatriculation RNIC est un **attribut** de la copro, jamais une clé — champ `immatriculation` dans `included_copros` (validé au chargement, `pipeline_config.immatriculation_of()`), table DB `copros` (upsert 06b), exposée par `PALIM_list_copros` (+ recherche par immat, 2 graphies) et `PALIM_copro_overview`. En régime RNIC (Delacour+), l'attribut s'auto-dérive de la clé. Décision 19/08 : re-clé NCG sur RNIC rejeté (couverture partielle, ASL/AFUL hors RNIC).
 - **Précédence** : env > profil client. `db.host` vide → les scripts DB refusent de démarrer (`require_db_host()`, pas de fallback vers la DB d'un autre client).
 - **Assynco** : base Airtable du courtier partagée entre clients (Assynco est aussi le courtier de Delacour). L'isolation tenant se fait par `syndic_labels` ; côté MCP, allowlist vide = fail-closed (aucune copro ne résout). Env : `ASSYNCO_SYNDIC_ALLOWLIST` (l'ancien nom `ASSYNCO_SYNDIC_NCG` reste lu, rétro-compat env.json <= v8).
@@ -54,12 +54,15 @@ Règle de rangement : `Scripts/` (racine, `mcp_server/`, `Streamlit Cloud/`) = *
 ├── AGENTS.md                    # Ce fichier
 ├── .python-version              # 3.12
 ├── requirements.txt             # deps racine
+├── .claude/skills/              # Skills Claude Code d'équipe (interne) — palim-onboarding-tenant
+├── ops/                         # ⛔ INTERNE SmarterPlan, jamais livré : runbooks infra/deploy par tenant — cf. ops/README.md
 ├── Scripts/                     # ⭐ TOUT le code vit ici
 │   ├── pipeline_config.py       # Source de vérité : profil client (clients/<client>/client.json), map code copro→dossier, paths per-copro, DB
 │   ├── clients/                  # ⭐ Tout le spécifique client — cf. §2b, aucun secret
 │   │   ├── INSTRUCTIONS_TEMPLATE_PALIM.md  # Template produit des Project Instructions (placeholders {{...}}, versioning source unique) — chaque client instancie dans clients/<c>/docs/
-│   │   ├── ncg/                 # client.json + docs/ (INSTRUCTIONS_NCG_PROJECT v2.0, RUNBOOK_DEPLOY_V7) + tools/ (debug/diag one-offs, ex-07_query_rag_ui) + skills/ (ncg-redaction-livrable, ncg-note-juridique, ncg-fiche-decision)
-│   │   └── delacour/            # client.json + docs/ (RUNBOOK_PROVISION_DELACOUR)
+│   │   ├── ncg/                 # client.json + docs/ (INSTRUCTIONS_NCG_PROJECT v2.0 = LIVRÉ) + tools/ (debug/diag one-offs) + skills/ (ncg-redaction-livrable, ncg-note-juridique, ncg-fiche-decision = LIVRÉS)
+│   │   ├── delacour/            # client.json + dedup_rules.json (runbooks déplacés dans ops/, cf. ops/README.md)
+│   │   └── csg/                 # client.json (Cabinet Saint Germain, 1 copro AB0835843)
 │   ├── 00_inventaire.py         # Étape 0 : inventaire des fichiers d'archives
 │   ├── 01_filtrage.py           # Étape 0.2 : tri plans/photos/inutiles (règles + Vision Sonnet)
 │   ├── 02_extraction_optimized.py  # Étape 2 : extraction texte (Textract fire-all-then-collect)
@@ -226,7 +229,7 @@ generate_answer_stream()  → Sonnet 4.6, streaming, citations [Source N]
 | Project Instructions + skills client | `Scripts/clients/ncg/docs/INSTRUCTIONS_NCG_PROJECT.md` + `clients/ncg/skills/` (§11) |
 | Ingestion incrémentale d'une copro (CRUD) | `Scripts/ingest.py` |
 | Ajouter une copro à un client (pré-vol + recette) | `Scripts/add_copro.py` |
-| Onboarder un nouveau syndic (tenant complet) | skill `palim-onboarding-tenant` (`Scripts/.claude/skills/`) |
+| Onboarder un nouveau syndic (tenant complet) | skill `palim-onboarding-tenant` (`.claude/skills/`, interne) + `ops/README.md` |
 | Fiche synthèse par copro | `Scripts/09_copro_synthese.py` → table `copro_synthese` |
 | Modèle / réduction de coût ingestion | `Scripts/00a_cost_preflight.py`, `Scripts/PLAN_REDUCTION_COUT_COPRO.md` |
 | Plans (scale / analytique / coût / dédup) | `Scripts/PLAN_*.md` |
@@ -243,7 +246,7 @@ Serveur **FastMCP** (Python 3.12) déployé sur **AWS Lambda** en image containe
 - **Accès** : authless. Barrière = slug d'URL secret (`MCP_URL_SLUG`) plus resource policy de la Function URL. Pas d'OAuth/bearer. Protection DNS-rebinding FastMCP désactivée (rejetait le domaine `*.lambda-url.*.on.aws` en 421).
 - **Secrets (AWS Secrets Manager)** : `palim/mcp_ncg_reader` (DB, user **lecture seule** `mcp_ncg_reader`), `palim/airtable_pat` (Assynco). Env = fallback dev seulement, jamais loggé.
 - **Régions** : embeddings Titan eu-west-1, rerank Cohere eu-central-1, Secrets Manager + RDS eu-west-1.
-- **Build/deploy** : `build_and_push.sh <tag>` vendorise `dossiers_api.py` et `rerank.py` depuis `../Streamlit Cloud/`, build linux/amd64, push ECR ; puis `aws lambda update-function-code ... --image-uri ...:vN`. Runbook : `clients/ncg/docs/RUNBOOK_DEPLOY_V7.md`. Rollback = repointer sur l'image précédente.
+- **Build/deploy** : `build_and_push.sh <tag>` vendorise `dossiers_api.py` et `rerank.py` depuis `../Streamlit Cloud/`, build linux/amd64, push ECR ; puis `aws lambda update-function-code ... --image-uri ...:vN`. Runbook : `ops/runbooks/ncg/RUNBOOK_DEPLOY_V7.md`. Rollback = repointer sur l'image précédente.
 - **Tracing** : Langfuse optionnel via `PALIM_tracing.py` (no-op si pas de clés ; `langfuse==2.60.4`). `search_chunks`/`search_dossiers` renvoient un `trace_ref` pour rattacher le feedback.
 
 ### Les 13 tools `PALIM_*` (décorateurs `@mcp.tool()` dans `PALIM_server.py`)

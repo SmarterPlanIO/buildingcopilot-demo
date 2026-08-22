@@ -48,7 +48,7 @@ CloudShell ; le reste se fait depuis le poste.
 1. **Cadrage** (Claude). Perimetre (combien de copros), source documentaire, immatriculations RNIC,
    libelle syndic dans Airtable. Verifier chaque immatriculation au registre :
    `https://tabular-api.data.gouv.fr/api/resources/3ea8e2c3-0038-464a-b17e-cd5c91f65ce2/data/?numero_immatriculation__exact=<IMMAT>`
-   (forme sans tirets obligatoire). Modele de rapport : `clients/delacour/docs/RNIC_CHECK_2026-08-17.md`.
+   (forme sans tirets obligatoire). Modele de rapport : `ops/runbooks/delacour/RNIC_CHECK_2026-08-17.md`.
 2. **Profil client** (Claude). Creer `clients/<code>/client.json` en partant de `clients/csg/client.json`
    (mono-copro, le plus lisible) ou `clients/delacour/client.json` (multi-copro, riche). Valider par
    `PALIM_CLIENT=<code> python -c "import pipeline_config as p; print(p.INCLUDED_COPROS, p.resolve('<alias>'))"`.
@@ -57,7 +57,7 @@ CloudShell ; le reste se fait depuis le poste.
    backups 7 j. Mot de passe master temporaire genere localement et **volontairement perdu** : le
    runbook le reinitialise vers le secret.
 4. **Runbook CloudShell** (Claude ecrit, Thai execute). Decliner
-   `clients/csg/docs/RUNBOOK_PROVISION_CSG.md` (le plus a jour). Il cree les secrets, reinitialise le
+   `ops/runbooks/csg/RUNBOOK_PROVISION_CSG.md` (le plus a jour). Il cree les secrets, reinitialise le
    mot de passe master, cree la policy et le role IAM, la Lambda sur l'image v10, la Function URL et
    le slug. Thai renvoie l'URL MCP (a garder secrete).
 5. **Schema et role lecteur** (Claude). `PALIM_CLIENT=<code> DB_PASSWORD=<secret ragadmin> python 06a_init_db.py`,
