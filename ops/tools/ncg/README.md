@@ -14,5 +14,5 @@ Exécution : depuis `Scripts/` (les scripts qui importent `pipeline_config`,
 comme `07_query_rag_ui.py`, ont besoin de `PYTHONPATH=.`) :
 
 ```bash
-PYTHONIOENCODING=utf-8 PYTHONPATH=. python "clients/ncg/tools/<script>.py"
+PYTHONIOENCODING=utf-8 PYTHONPATH=Scripts python "ops/tools/ncg/<script>.py"
 ```

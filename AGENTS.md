@@ -60,7 +60,7 @@ Règle de rangement : `Scripts/` (racine, `mcp_server/`, `Streamlit Cloud/`) = *
 │   ├── pipeline_config.py       # Source de vérité : profil client (clients/<client>/client.json), map code copro→dossier, paths per-copro, DB
 │   ├── clients/                  # ⭐ Tout le spécifique client — cf. §2b, aucun secret
 │   │   ├── INSTRUCTIONS_TEMPLATE_PALIM.md  # Template produit des Project Instructions (placeholders {{...}}, versioning source unique) — chaque client instancie dans clients/<c>/docs/
-│   │   ├── ncg/                 # client.json + docs/ (INSTRUCTIONS_NCG_PROJECT v2.0 = LIVRÉ) + tools/ (debug/diag one-offs) + skills/ (ncg-redaction-livrable, ncg-note-juridique, ncg-fiche-decision = LIVRÉS)
+│   │   ├── ncg/                 # client.json + docs/ (INSTRUCTIONS_NCG_PROJECT v2.0 = LIVRÉ) + skills/ (ncg-redaction-livrable, ncg-note-juridique, ncg-fiche-decision = LIVRÉS) — debug/diag déplacés dans ops/tools/ncg/
 │   │   ├── delacour/            # client.json + dedup_rules.json (runbooks déplacés dans ops/, cf. ops/README.md)
 │   │   └── csg/                 # client.json (Cabinet Saint Germain, 1 copro AB0835843)
 │   ├── 00_inventaire.py         # Étape 0 : inventaire des fichiers d'archives
@@ -112,7 +112,7 @@ Règle de rangement : `Scripts/` (racine, `mcp_server/`, `Streamlit Cloud/`) = *
     └── rag-prototype-guide.md   # Mémoire complète du pipeline (à maintenir)
 ```
 
-**Harness Streamlit** : la version déployée est `Scripts/Streamlit Cloud/streamlit_app.py` (rerank Cohere via `rerank.py`) — **c'est elle qu'on modifie**. L'ancienne UI locale (FlashRank) est archivée dans `clients/ncg/tools/07_query_rag_ui.py`.
+**Harness Streamlit** : la version déployée est `Scripts/Streamlit Cloud/streamlit_app.py` (rerank Cohere via `rerank.py`) — **c'est elle qu'on modifie**. L'ancienne UI locale (FlashRank) est archivée dans `ops/tools/ncg/07_query_rag_ui.py`.
 
 > **Important** : les deux apps Streamlit sont des **bancs de test internes (harness de debug)**. Le produit livré au client est le **backend MCP** (`Scripts/mcp_server/`, §10), interrogé par le LLM du client via les **Project Instructions** et **skills** (§11). Le pipeline d'ingestion et le schéma DB sont le socle commun aux deux.
 

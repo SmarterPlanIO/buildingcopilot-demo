@@ -31,6 +31,9 @@ communicables. Le reste (profil, outils de debug) est interne.
   - `csg/RUNBOOK_PROVISION_CSG.md` (le plus à jour, à décliner pour un nouveau syndic)
   - `delacour/RUNBOOK_PROVISION_DELACOUR.md` et `delacour/RNIC_CHECK_2026-08-17.md`
   - `ncg/RUNBOOK_DEPLOY_V7.md`
+- `tools/<client>/` — outils internes non produit : scripts de debug et de diagnostic
+  one-offs, ancienne UI Streamlit locale, utilitaires destructifs (`truncate.py`,
+  `purge_doublons.py`). Se lancent depuis la racine du repo avec `PYTHONPATH=Scripts`.
 
 ## Onboarding d'un nouveau syndic
 
