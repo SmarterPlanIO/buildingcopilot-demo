@@ -273,16 +273,30 @@ def run_analytical_query(conn, spec: Dict[str, Any],
     if conc:
         facets["concentration"] = conc
 
+    coverage = {
+        "n_copros_avec_donnees": len(copros_avec_donnees),
+        "n_copros_en_base": n_base,
+        "note": ("les copros absentes du résultat n'ont aucune donnée matchant ces filtres ; "
+                 "annoncer cette couverture dans la réponse"),
+    }
+    if copro_filter:
+        # Périmètre explicite : la couverture se mesure sur les copros DEMANDÉES,
+        # pas sur le parc entier (« 9 sur 9 » et non « 9 sur 19 »).
+        demandees = ([copro_filter] if isinstance(copro_filter, str)
+                     else [c for c in copro_filter if c])
+        coverage["n_copros_demandees"] = len(demandees)
+        manquantes = [c for c in demandees if c not in copros_avec_donnees]
+        if manquantes:
+            coverage["copros_sans_donnees"] = sorted(manquantes)
+        coverage["note"] = ("périmètre explicite : annoncer la couverture sur les copros "
+                            "DEMANDÉES (n_copros_avec_donnees / n_copros_demandees) ; "
+                            "citer copros_sans_donnees si présent")
+
     return {
         "ok": True,
         "rows": out_rows,
         "n_rows": len(rows),
         "truncated": truncated,
-        "coverage": {
-            "n_copros_avec_donnees": len(copros_avec_donnees),
-            "n_copros_en_base": n_base,
-            "note": ("les copros absentes du résultat n'ont aucune donnée matchant ces filtres ; "
-                     "annoncer cette couverture dans la réponse"),
-        },
+        "coverage": coverage,
         "facets": facets,
     }

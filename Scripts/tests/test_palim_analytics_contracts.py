@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(SCRIPTS, "mcp_server"))
 sys.path.insert(0, SCRIPTS)  # copro_id pour l'import dev de PALIM_scope/copros
 
 from PALIM_analytics import (  # noqa: E402
-    WHITELIST, _MAX_LIST_ROWS, build_analytical_sql, validate_spec,
+    WHITELIST, _MAX_LIST_ROWS, build_analytical_sql, run_analytical_query, validate_spec,
 )
 
 
@@ -105,6 +105,41 @@ def test_cas_special_partie():
     print("OK cas special partie (UNNEST) + refus cote dossiers")
 
 
+class _FakeCur:
+    """Curseur minimal : 1er execute = la requete analytique, 2e = le COUNT parc."""
+    def __init__(self, rows, n_base):
+        self.rows, self.n_base, self.calls = rows, n_base, 0
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def execute(self, sql, params=None): self.calls += 1
+    def fetchall(self): return self.rows
+    def fetchone(self): return (self.n_base,)
+
+
+class _FakeConn:
+    def __init__(self, rows, n_base): self._c = _FakeCur(rows, n_base)
+    def cursor(self): return self._c
+    def rollback(self): pass
+
+
+def test_coverage_perimetre_explicite():
+    """Perimetre demande -> couverture mesuree sur les copros DEMANDEES (pas le parc)."""
+    rows = [("5412", "TOUR LYON BERCY", 12), ("5750", "PARKING RODIN", 7)]
+    spec = _spec(operation="count", source="documents")
+    # 3 copros demandees, 2 ont des donnees, 19 copros en base
+    res = run_analytical_query(_FakeConn(rows, 19), spec, copro_filter=["5412", "5750", "5757"])
+    cov = res["coverage"]
+    assert cov["n_copros_demandees"] == 3, cov
+    assert cov["n_copros_avec_donnees"] == 2, cov
+    assert cov["copros_sans_donnees"] == ["5757"], cov
+    assert cov["n_copros_en_base"] == 19          # reste dispo, mais n'est plus le denominateur
+    assert "DEMAND" in cov["note"].upper()
+    # Parc entier : pas de n_copros_demandees, note generique
+    res2 = run_analytical_query(_FakeConn(rows, 19), spec, copro_filter=None)
+    assert "n_copros_demandees" not in res2["coverage"]
+    print("OK coverage perimetre explicite (denominateur = copros demandees)")
+
+
 def test_parite_whitelist_streamlit():
     """La whitelist MCP doit rester identique à celle du harness Streamlit."""
     sys.path.insert(0, os.path.join(SCRIPTS, "Streamlit Cloud"))
@@ -126,5 +161,6 @@ if __name__ == "__main__":
     test_count_sum_list_deux_sources()
     test_copro_codes_none_un_n()
     test_cas_special_partie()
+    test_coverage_perimetre_explicite()
     test_parite_whitelist_streamlit()
     print("\nTous les tests contrats PALIM_analytics passent.")

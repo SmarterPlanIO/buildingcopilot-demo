@@ -24,7 +24,9 @@
     "5390": {"folder": "5390 - 2-6 BIS HENRI TARIEL", "immatriculation": "AB8635559"},
     "5412": {"folder": "5412 - TOUR LYON BERCY"},
     "5427": {"folder": "5427 - 33 VICTOR CRESSON", "immatriculation": "AB8644627"},
+    "5440": {"folder": "5440 - ASFL RODIN", "immatriculation": "AB1976737", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5440 - ASFL RODIN"},
     "5480": {"folder": "5480 - 88-90 GR GAL EBOUE", "immatriculation": "AB0403527"},
+    "5490": {"folder": "5490 -140 142 rue du CHEVALERET", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5490 -140 142 rue du CHEVALERET"},
     "5499": {"folder": "5499 - 22-24 GUILLEMIN", "immatriculation": "AF2237683"},
     "5532": {"folder": "5532 AFUL Cours SAINT LOUIS", "immatriculation": "AE3727559", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5532 AFUL Cours SAINT LOUIS"},
     "5548": {"folder": "5548 - VILLA HAUSSMANN", "immatriculation": "AB0593525"},
@@ -34,6 +36,7 @@
     "5752": {"folder": "5752 - AFUL FORT DE VANVES", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5752 - AFUL FORT DE VANVES"},
     "5756": {"folder": "5756 CONDORCET", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5756 CONDORCET"},
     "5757": {"folder": "5757 ABBE GREGOIRE", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5757 ABBE GREGOIRE"},
+    "5784": {"folder": "5784 - SDC PARC RODIN", "immatriculation": "AB8338899", "raw_dir": "//192.192.192.15/Copropriete Entreprise/5784 - SDC PARC RODIN"},
     "8030": {"folder": "8030 - 21 PATAY", "immatriculation": "AA9293150"},
     "8050": {"folder": "8050 - STYLE - 145 AVENUE DE FRANCE", "immatriculation": "AC0744680"}
   }
