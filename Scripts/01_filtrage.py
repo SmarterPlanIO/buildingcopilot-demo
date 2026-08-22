@@ -59,7 +59,10 @@ folder_decisions_cache = {}
 # Extensions à garder systématiquement (documents textuels)
 KEEP_EXTENSIONS = {
     ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv",
-    ".msg", ".eml", ".txt", ".rtf", ".ppt", ".pptx"
+    ".msg", ".eml", ".txt", ".rtf", ".ppt", ".pptx",
+    # Pages web enregistrees (etats de depenses sauves depuis OWA, cf. audit NGE
+    # 22/08) et OpenDocument : extraits par extractors_web.py cote 02.
+    ".htm", ".html", ".odt",
 }
 
 # Extensions d'images à trier (plan vs photo)
@@ -69,7 +72,10 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".
 PLAN_EXTENSIONS = {".dwg", ".dxf"}
 
 # Extensions à exclure
-EXCLUDE_EXTENSIONS = {".zip", ".rar", ".7z", ".exe", ".msi", ".dmg", ".mp4", ".avi", ".mov", ".mp3"}
+EXCLUDE_EXTENSIONS = {".zip", ".rar", ".7z", ".exe", ".msi", ".dmg", ".mp4", ".avi", ".mov", ".mp3",
+                      # Plomberie des pages web enregistrees + artefacts de telechargement :
+                      # jamais du contenu, et couteux a copier via le VPN.
+                      ".js", ".css", ".télécharger", ".telecharger"}
 
 # Fichiers système à ignorer
 SYSTEM_FILES = {".ds_store", "thumbs.db", "desktop.ini", ".gitkeep", ".dropbox"}
@@ -306,6 +312,10 @@ stats = {
 decisions_log = []
 
 for root, dirs, filenames in os.walk(ARCHIVES_ROOT):
+    # Dossiers compagnons des pages web enregistrees ("X.htm" + "X_fichiers/") :
+    # uniquement des .js/.css/images de plomberie, le contenu est dans le .htm.
+    # Elagues AVANT parcours pour ne pas les lister via le VPN.
+    dirs[:] = [d for d in dirs if not d.lower().endswith(("_fichiers", "_files"))]
     for fname in filenames:
         src_path = os.path.join(root, fname)
         rel_path = os.path.relpath(src_path, ARCHIVES_ROOT)

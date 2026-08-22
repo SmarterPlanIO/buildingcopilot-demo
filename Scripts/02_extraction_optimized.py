@@ -294,12 +294,16 @@ def extract_text_file(filepath):
     return ""
 
 
+from extractors_web import extract_html, extract_odt
+
 DIRECT_EXTRACTORS = {
     "word": extract_docx,
     "excel": extract_excel,
     "email": extract_email_msg,
     "texte": extract_text_file,
     "pptx": extract_pptx,
+    "web": extract_html,     # pages web enregistrees (OWA), cf. extractors_web.py
+    "odt": extract_odt,
 }
 
 DIRECT_EXT_MAP = {
@@ -308,6 +312,8 @@ DIRECT_EXT_MAP = {
     ".msg": "email", ".eml": "email",
     ".txt": "texte", ".rtf": "texte", ".csv": "texte",
     ".ppt": "pptx", ".pptx": "pptx",
+    ".htm": "web", ".html": "web",
+    ".odt": "odt",
 }
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
