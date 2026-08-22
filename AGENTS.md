@@ -72,6 +72,7 @@ Règle de rangement : `Scripts/` (racine, `mcp_server/`, `Streamlit Cloud/`) = *
 │   ├── 06b_load_db.py           # Étape 6b : TRUNCATE + INSERT chunks/documents/dossiers
 │   ├── 08_airtable_sync.py      # Étape 8 : sync dossiers sinistres Airtable Assynco (OBLIGATOIRE après 06b)
 │   ├── ingest.py                # ⭐ Driver d'ingestion per-copro de bout en bout (CRUD docs) — voir §4
+│   ├── add_copro.py             # Pré-vol (RNIC + source + tenant Assynco + écriture client.json) et recette `--verify` d'une copro
 │   ├── run_pipeline_per_copro.py   # Orchestrateur Tier-1 : enchaîne 01→05b pour 1 copro
 │   ├── 09_copro_synthese.py     # Fiche synthèse pré-calculée par copro (table copro_synthese → PALIM_copro_overview)
 │   ├── 00a_cost_preflight.py    # Préflight coût ingestion (zéro appel AWS) — modèle de coût/copro
@@ -224,6 +225,8 @@ generate_answer_stream()  → Sonnet 4.6, streaming, citations [Source N]
 | Backend MCP produit (serveur, 13 tools, deploy) | `Scripts/mcp_server/` (§10) |
 | Project Instructions + skills client | `Scripts/clients/ncg/docs/INSTRUCTIONS_NCG_PROJECT.md` + `clients/ncg/skills/` (§11) |
 | Ingestion incrémentale d'une copro (CRUD) | `Scripts/ingest.py` |
+| Ajouter une copro à un client (pré-vol + recette) | `Scripts/add_copro.py` |
+| Onboarder un nouveau syndic (tenant complet) | skill `palim-onboarding-tenant` (`Scripts/.claude/skills/`) |
 | Fiche synthèse par copro | `Scripts/09_copro_synthese.py` → table `copro_synthese` |
 | Modèle / réduction de coût ingestion | `Scripts/00a_cost_preflight.py`, `Scripts/PLAN_REDUCTION_COUT_COPRO.md` |
 | Plans (scale / analytique / coût / dédup) | `Scripts/PLAN_*.md` |
