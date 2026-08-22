@@ -118,8 +118,8 @@ log = logging.getLogger(__name__)
 # ── Stats ──
 stats = {
     "pdf_natif": 0, "pdf_ocr": 0, "word": 0, "excel": 0,
-    "email": 0, "texte": 0, "pptx": 0, "image_ocr": 0,
-    "erreurs": 0, "vides": 0, "skipped_checkpoint": 0
+    "email": 0, "texte": 0, "pptx": 0, "web": 0, "odt": 0,
+    "erreurs": 0, "vides": 0, "skipped_checkpoint": 0, "image_ocr": 0,
 }
 
 
@@ -789,6 +789,8 @@ def print_report():
     print(f"  Emails                    : {stats['email']}")
     print(f"  Texte/CSV                 : {stats['texte']}")
     print(f"  PowerPoint                : {stats['pptx']}")
+    print(f"  Pages web (.htm/.html)    : {stats['web']}")
+    print(f"  OpenDocument (.odt)       : {stats['odt']}")
     print(f"  Images OCR (plans)        : {stats['image_ocr']}")
     print(f"  Fichiers vides/courts     : {stats['vides']}")
     print(f"  Erreurs                   : {stats['erreurs']}")
