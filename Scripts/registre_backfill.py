@@ -40,6 +40,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import unicodedata
+
 import psycopg2
 from psycopg2.extras import execute_values
 
@@ -49,6 +51,14 @@ from content_filter import analyze_file_quality
 # Aligne sur 01_filtrage.py : sert a distinguer FILTRAGE_PHOTO de FILTRAGE_AUTRE
 # dans le journal de filtrage, qui ne conserve que la decision brute "EXCLURE".
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".heic", ".webp"}
+
+
+def _nfc(s):
+    """Cle d'appariement : forme composee NFC. Les accents des fichiers crees
+    sur Mac voyagent en NFD et chaque filesystem traverse (SMB, NTFS,
+    GoogleDriveFS) restitue sa propre forme ; sans normalisation, le meme
+    document apparait 'orphelin' de part et d'autre de la jointure."""
+    return unicodedata.normalize("NFC", s or "")
 
 COLS = ("source_file", "code_ncg", "nom_fichier", "taille_octets", "sha256", "signature",
         "statut", "motif", "etape", "ref_source_file", "score", "doc_type",
@@ -137,7 +147,7 @@ def scan_copro(code):
         else:  # EXCLURE
             r["statut"], r["etape"] = "REJETE", "01"
             r["motif"] = "FILTRAGE_PHOTO" if ext in IMAGE_EXTENSIONS else "FILTRAGE_AUTRE"
-        rows[r["source_file"]] = r
+        rows[_nfc(r["source_file"])] = r
 
     # ── 2. Dedup exacte SHA-256 (00b) ──
     man = paths["per_copro"] / "dedup_manifest.json"
@@ -148,14 +158,14 @@ def scan_copro(code):
             kept, size = grp.get("kept"), grp.get("size")
             for rel in ([kept] if kept else []) + list(grp.get("removed") or []):
                 sf = full(rel)
-                r = rows.get(sf)
+                r = rows.get(_nfc(sf))
                 if r is None:
                     continue
                 r["sha256"] = sha
                 r["taille_octets"] = size
             for rel in (grp.get("removed") or []):
                 sf = full(rel)
-                r = rows.get(sf)
+                r = rows.get(_nfc(sf))
                 if r is None:
                     continue
                 lu["dedup"] += 1
@@ -168,7 +178,7 @@ def scan_copro(code):
         try:
             with open(ckpt, encoding="utf-8") as f:
                 for rel, sig in (json.load(f).get("sigs") or {}).items():
-                    r = rows.get(full(rel))
+                    r = rows.get(_nfc(full(rel)))
                     if r is not None and sig:
                         r["signature"] = sig
         except (json.JSONDecodeError, OSError):
@@ -191,8 +201,8 @@ def scan_copro(code):
             if not sf:
                 continue
             lu["extraits"] += 1
-            extraits[sf] = jp
-            r = rows.get(sf)
+            extraits[_nfc(sf)] = jp
+            r = rows.get(_nfc(sf))
             if r is not None:
                 r["nb_caracteres"] = doc.get("nb_caracteres")
 
@@ -206,7 +216,7 @@ def scan_copro(code):
                 sf = o.get("source_file")
                 if not sf:
                     continue
-                e = chunkes.setdefault(sf, [0, o.get("doc_type")])
+                e = chunkes.setdefault(_nfc(sf), [0, o.get("doc_type"), sf])
                 e[0] += 1
     lu["chunkes"] = len(chunkes)
 
@@ -217,8 +227,8 @@ def scan_copro(code):
             for line in f:
                 o = json.loads(line)
                 sf, dt = o.get("source_file"), o.get("doc_type_corrige") or o.get("doc_type")
-                if sf in chunkes and dt:
-                    chunkes[sf][1] = dt
+                if _nfc(sf) in chunkes and dt:
+                    chunkes[_nfc(sf)][1] = dt
 
     return {"rows": rows, "extraits": extraits, "chunkes": chunkes,
             "folder": folder, "lu": lu}, None
@@ -243,7 +253,7 @@ def resoudre(scan, en_base, run_id):
         # visible : `statut='INGERE' AND ref_source_file IS NOT NULL` liste les
         # doublons exacts qui ont fuite dans le RAG.
         if sf in chunkes or sf in en_base:
-            nb_shard, dt = chunkes.get(sf, (0, None))
+            nb_shard, dt = chunkes.get(sf, (0, None, None))[:2]
             if dt:
                 r["doc_type"] = dt
             if r["statut"] == "REJETE":
@@ -253,13 +263,17 @@ def resoudre(scan, en_base, run_id):
                 # nb_chunks porte le FAIT (ce qui est en base), pas le shard local :
                 # le registre decrit l'etat reel du RAG. L'ecart shard/base est une
                 # derive a signaler, pas a masquer.
-                r["nb_chunks"] = en_base[sf]
+                nb_db, sf_db = en_base[sf]
+                # La forme STOCKEE est celle de la DB : la jointure SQL avec
+                # chunks doit matcher octet a octet (NFD/NFC, cf. _nfc).
+                r["source_file"] = sf_db
+                r["nb_chunks"] = nb_db
                 r["statut"], r["etape"], r["motif"] = "INGERE", "06b", None
                 if sf not in chunkes:
                     incoherences["INGERE_HORS_SHARD"] = incoherences.get("INGERE_HORS_SHARD", 0) + 1
-                elif en_base[sf] != nb_shard:
+                elif nb_db != nb_shard:
                     incoherences["CHUNKS_HORS_SHARD"] = (
-                        incoherences.get("CHUNKS_HORS_SHARD", 0) + en_base[sf] - nb_shard)
+                        incoherences.get("CHUNKS_HORS_SHARD", 0) + nb_db - nb_shard)
             else:
                 r["nb_chunks"] = nb_shard
                 r["statut"], r["etape"], r["motif"] = "ERREUR", "06b", "CHARGEMENT_KO"
@@ -328,14 +342,14 @@ def main():
         with conn.cursor() as cur:
             cur.execute("SELECT source_file, count(*) FROM chunks WHERE code_ncg = %s "
                         "GROUP BY source_file", (code,))
-            en_base = dict(cur.fetchall())
+            en_base = {_nfc(sf): (n, sf) for sf, n in cur.fetchall()}
 
         infere, incoh = resoudre(scan, en_base, f"{code}-backfill-{stamp}")
         rows = list(scan["rows"].values())
 
         # Lignes de chunks en base sans document correspondant au registre :
         # chunks virtuels Airtable (08) ou reliquats. Comptes, jamais inventes.
-        orph = [sf for sf in en_base if sf not in scan["rows"]]
+        orph = [sf for sf in en_base if sf not in scan["rows"]]  # cles deja en NFC des 2 cotes
         orphelins_db += len(orph)
 
         par_statut = {}
