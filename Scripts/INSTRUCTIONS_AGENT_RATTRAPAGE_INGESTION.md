@@ -127,6 +127,7 @@ que son doc_type est plausible.
 | `shutil.copy2` WinError 1 / EINVAL sur `.gsheet` | GoogleDriveFS / placeholders Google natifs | deja gere par 01 (stream-copy + exclusion) — ne pas "corriger" |
 | `.git/index.lock` | GoogleDriveFS | pattern CLAUDE.md : `taskkill //F //IM git.exe; sleep 2; rm -f .git/index.lock` |
 | Log de tache fige 30-60 min | buffering + phase 01/02 silencieuse | verifier l'activite disque (section 4), ne pas tuer |
+| `06b` tres long sur "Generation de l'index full-text BM25" (57 min mesurees sur 285 k lignes, 24/08) | l'UPDATE `WHERE text_search IS NULL` seul force un seq scan de TOUTE la table (+ concurrence autovacuum), et sature les IOPS de la t4g.micro | fix = filtre `AND code_ncg = %s` en mode per-copro (parcours via l'index btree). Verifier sa presence dans TON clone : `grep -n "AND code_ncg" Scripts/06b_load_db.py` pres de `_SQL_BM25`. Plus la base grossit, plus l'absence du fix coute cher (chaque copro ajoutee ralentit les 06b de TOUTES les suivantes) |
 
 Ne JAMAIS : tuer `GoogleDriveFS.exe` ; ecrire dans le Drive source d'un client (lecture
 seule stricte) ; lancer `06b` global sans `--copro` (TRUNCATE toute la base) ; retirer un
