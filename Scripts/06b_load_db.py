@@ -228,12 +228,21 @@ count = cur.fetchone()[0]
 # Weight A = texte original (poids 1.0), Weight D = questions synthétiques (poids 0.1)
 # Les questions améliorent le recall (pont de vocabulaire) sans dominer le scoring
 print("\n⏳ Génération de l'index full-text BM25 avec setweight (Phase 1a)...")
-cur.execute("""
+# `text_search IS NULL` ne met à jour que les chunks fraîchement insérés, mais SEUL
+# il force un parcours séquentiel de TOUTE la table pour les trouver : 57 min sur
+# 285 k lignes le 24/08, en concurrence avec l'autovacuum. En mode per-copro le
+# périmètre est connu — le filtre `code_ncg` ramène le parcours à l'index btree de
+# la copro rechargée. Mode legacy (TRUNCATE global) : pas de périmètre, on scanne.
+_SQL_BM25 = """
     UPDATE chunks
     SET text_search = setweight(to_tsvector('french', text), 'A')
                    || setweight(to_tsvector('french', COALESCE(synthetic_questions, '')), 'D')
-    WHERE text_search IS NULL;
-""")
+    WHERE text_search IS NULL
+"""
+if COPRO:
+    cur.execute(_SQL_BM25 + " AND code_ncg = %s;", (COPRO,))
+else:
+    cur.execute(_SQL_BM25 + ";")
 conn.commit()
 updated = cur.rowcount
 print(f"✅ Index full-text peuplé pour {updated} chunks (setweight A=texte, D=questions)")
