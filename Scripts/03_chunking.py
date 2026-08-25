@@ -34,6 +34,7 @@ import boto3
 # Filtre de contenu binaire / garbage (v2)
 from content_filter import analyze_file_quality, filter_chunks, make_placeholder_chunk
 import dedup_confirm  # confirmation des doublons proches (etage de verification)
+import publipostage  # factorisation intra-document des bundles de publipostage
 from pipeline_config import paths_for, RESULTS_ROOT, EXTRACTED_ROOT
 import bedrock_cost
 
@@ -53,6 +54,7 @@ if _args.copro:
     RES_FORMAT_CACHE_FILE = str(_paths["per_copro"] / "resolution_format_cache.json")
     DEDUP_PROCHE_MANIFEST = str(_paths["per_copro"] / "dedup_proche_manifest.json")
     VERSION_CHAINS_MANIFEST = str(_paths["per_copro"] / "version_chains_manifest.json")
+    PUBLIPOSTAGE_MANIFEST = str(_paths["per_copro"] / "publipostage_manifest.json")
     print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
 else:
     EXTRACTED_DIR = str(EXTRACTED_ROOT)
@@ -61,6 +63,7 @@ else:
     RES_FORMAT_CACHE_FILE = os.path.join(os.path.dirname(OUTPUT_FILE), "resolution_format_cache.json")
     DEDUP_PROCHE_MANIFEST = os.path.join(os.path.dirname(OUTPUT_FILE), "dedup_proche_manifest.json")
     VERSION_CHAINS_MANIFEST = os.path.join(os.path.dirname(OUTPUT_FILE), "version_chains_manifest.json")
+    PUBLIPOSTAGE_MANIFEST = os.path.join(os.path.dirname(OUTPUT_FILE), "publipostage_manifest.json")
 
 # Taille cible des chunks (en caractères)
 CHUNK_TARGET_SIZE = 1500    # ~375 tokens français
@@ -1199,6 +1202,8 @@ _dedup_excluded = set()  # source_file à exclure du chunking
 _dedup_stats = {"groups_checked": 0, "candidats": 0, "duplicates_found": 0, "candidats_ecartes": 0}
 _dedup_motifs = {}     # motif -> compte (pourquoi un candidat a été écarté ou retenu)
 _dedup_detail = {}     # source_file exclu -> {garde, score, motif} : traçabilité du registre
+_publi_stats = {"documents": 0, "chunks_avant": 0, "chunks_apres": 0}
+_publi_detail = {}     # source_file -> {profil, redondance, bruts, uniques}
 
 
 @lru_cache(maxsize=64)
@@ -1439,8 +1444,27 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
         # édition locale, ne re-embedde que le chunk touché). L'index i n'entre PAS
         # dans le hash. Deux chunks au texte identique dans le même doc sont
         # désambiguïsés par un compteur d'occurrence déterministe (ordre d'apparition).
+        # FACTORISATION PUBLIPOSTAGE (P2, cf. publipostage.py) : un bundle
+        # "corps commun recopie par destinataire" n'ecrit son corps qu'une fois,
+        # le chunk survivant portant nb_occurrences. Hors profil PUBLIPOSTAGE,
+        # `gardes` rend TOUS les chunks avec nb_occurrences=1 : comportement
+        # strictement identique a l'existant.
+        _fact = publipostage.factoriser(chunks)
+        if _fact.profil == "PUBLIPOSTAGE":
+            _publi_stats["documents"] += 1
+            _publi_stats["chunks_avant"] += _fact.bruts
+            _publi_stats["chunks_apres"] += len(_fact.gardes)
+            tqdm.write(f"  📮 Publipostage ({_fact.redondance:.0%} redondant) : "
+                       f"{_fact.bruts} → {len(_fact.gardes)} chunks — {nom_fichier[:48]}")
+        if _fact.profil:
+            _publi_detail[source_file] = {"profil": _fact.profil,
+                                          "redondance": round(_fact.redondance, 4),
+                                          "bruts": _fact.bruts, "uniques": _fact.uniques}
+
         _dup_seen = {}
-        for i, chunk_text in enumerate(chunks):
+        _total_apres = len(_fact.gardes)
+        for i_out, (i, _nb_occ) in enumerate(_fact.gardes):
+            chunk_text = chunks[i]
             _base = f"{doc['source_file']}||{chunk_text}"
             _occ = _dup_seen.get(_base, 0)
             _dup_seen[_base] = _occ + 1
@@ -1448,7 +1472,7 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
             chunk_id = hashlib.md5(_id_key.encode()).hexdigest()[:12]
             
             # Classification résolution PV_AG (Phase 1a)
-            res_cat = classify_resolution_category(chunk_text, doc_type, i)
+            res_cat = classify_resolution_category(chunk_text, doc_type, i_out)
             if res_cat:
                 _resolution_category_stats[res_cat] = _resolution_category_stats.get(res_cat, 0) + 1
 
@@ -1458,10 +1482,11 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
                 "source_file": doc.get("source_file", ""),
                 "nom_fichier": doc.get("nom_fichier", ""),
                 "doc_type": doc_type,
-                "chunk_index": i,
-                "total_chunks": len(chunks),
+                "chunk_index": i_out,
+                "total_chunks": _total_apres,
                 "text": chunk_text,
                 "nb_caracteres": len(chunk_text),
+                "nb_occurrences": _nb_occ,
                 "resolution_category": res_cat
             }
             
@@ -1477,6 +1502,17 @@ print("\n" + "=" * 50)
 print("RAPPORT DE CHUNKING")
 print("=" * 50)
 print(f"\nTotal chunks generes : {total_chunks}")
+if _publi_stats["documents"]:
+    print(f"\n--- Factorisation publipostage ---")
+    print(f"  Documents factorisés     : {_publi_stats['documents']}")
+    print(f"  Chunks avant / après     : {_publi_stats['chunks_avant']} → {_publi_stats['chunks_apres']}")
+    print(f"  Chunks factorisés        : {_publi_stats['chunks_avant'] - _publi_stats['chunks_apres']}")
+try:
+    with open(PUBLIPOSTAGE_MANIFEST, "w", encoding="utf-8") as _f:
+        json.dump(_publi_detail, _f, ensure_ascii=False, indent=1)
+except OSError as _e:
+    print(f"  ⚠️ manifest publipostage non écrit : {_e}")
+
 print(f"\nPar type de document :")
 for doc_type, count in sorted(doc_type_stats.items(), key=lambda x: -x[1]):
     print(f"  {doc_type:20s} : {count:5d} documents")

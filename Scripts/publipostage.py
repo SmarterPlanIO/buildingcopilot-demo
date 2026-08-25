@@ -37,7 +37,7 @@ from __future__ import annotations
 from collections import namedtuple
 
 # ── Seuils, deduits de la mesure du 23/08 (plan §6), pas choisis a priori ────
-SEUIL_PUBLIPOSTAGE = 0.80   # redondance a partir de laquelle on factorise
+SEUIL_PUBLIPOSTAGE = 0.70   # redondance a partir de laquelle on factorise (0.80 a l origine ; abaisse le 25/08 apres mesure : bande 70-80% = 24/24 publipostages averes sur NCG+Delacour, types non-COURRIER n apparaissant que sous 60%)
 SEUIL_SUSPECT      = 0.60   # simple observation, AUCUN traitement
 MIN_CHUNKS         = 20     # en deca, la redondance n'est pas significative
 MIN_UNIQUES        = 2      # jamais de document reduit a un seul texte

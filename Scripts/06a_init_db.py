@@ -304,10 +304,37 @@ print(f"✅ Migration Airtable : {_added} colonnes ajoutées à la table dossier
 # ── Colonne dossier_id sur chunks (lien chunk → dossier) ──
 cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS dossier_id TEXT;")
 
+# ── Profil répétitif (publipostage) — P1 de PLAN_PUBLIPOSTAGE_FACTORISATION.md ──
+# Attributs d'OBSERVATION : ils décrivent la redondance interne d'un document
+# (texte répété à l'intérieur du même fichier, cas des bundles de publipostage
+# "un PV recopié par destinataire"). Aucun effet automatique en V1 : ils servent
+# au debug, à l'audit de coût, et alimenteront la factorisation (P2) et le cap
+# de diversité au retrieval (P4).
+cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS chunks_bruts INTEGER;")
+cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS chunks_uniques INTEGER;")
+cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS redondance_interne NUMERIC;")
+cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS profil_repetitif TEXT;")
+cur.execute("""
+    DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_documents_profil_repetitif') THEN
+            ALTER TABLE documents ADD CONSTRAINT chk_documents_profil_repetitif
+                CHECK (profil_repetitif IS NULL
+                       OR profil_repetitif IN ('PUBLIPOSTAGE', 'REPETITIF_SUSPECT'));
+        END IF;
+    END $$;
+""")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_profil_repetitif "
+            "ON documents (profil_repetitif) WHERE profil_repetitif IS NOT NULL;")
+print("✅ Colonnes profil répétitif (publipostage) sur documents")
+
 # ── Soft delete (version chains / variantes, cf. version_chains.py) ──
 # retrieval_exclu=TRUE : chunk exclu du retrieval PAR DEFAUT (patron BORDEREAU_AR),
 # toujours en base et accessible par chunk_id (get_chunks / get_full_document).
 # Reversible : UPDATE chunks SET retrieval_exclu=FALSE WHERE source_file=...
+# nb_occurrences : factorisation publipostage (P2, cf. publipostage.py). Un chunk
+# dont le texte se repete N fois dans le MEME document n'est ecrit qu'une fois et
+# porte N. Le texte repete n'est pas perdu : il est present, avec son compte.
+cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS nb_occurrences INTEGER NOT NULL DEFAULT 1;")
 cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS retrieval_exclu BOOLEAN NOT NULL DEFAULT FALSE;")
 cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS motif_exclusion TEXT;")
 cur.execute("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS ref_source_file TEXT;")
@@ -449,6 +476,26 @@ cur.execute("""
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 """)
+# QUARANTAINE + VOLUME_EXCESSIF (mécanisme C de PLAN_PUBLIPOSTAGE_FACTORISATION.md).
+# QUARANTAINE n'est PAS un rejet : le document ne doit pas passer dans le pipeline
+# standard (volume hors limites Textract, structure exigeant un traitement spécial)
+# et attend une décision, sans être ni ingéré ni perdu ni retenté automatiquement.
+# Contraintes recréées à l'identique sur les installations existantes (idempotent).
+cur.execute("ALTER TABLE ingestion_registre DROP CONSTRAINT IF EXISTS ingestion_registre_statut_check;")
+cur.execute("""
+    ALTER TABLE ingestion_registre ADD CONSTRAINT ingestion_registre_statut_check
+    CHECK (statut IN ('DECOUVERT','EXTRAIT','INGERE','REJETE','SUPPRIME','ERREUR','QUARANTAINE'));
+""")
+cur.execute("ALTER TABLE ingestion_registre DROP CONSTRAINT IF EXISTS ingestion_registre_motif_check;")
+cur.execute("""
+    ALTER TABLE ingestion_registre ADD CONSTRAINT ingestion_registre_motif_check
+    CHECK (motif IS NULL OR motif IN (
+        'FILTRAGE_PHOTO','FILTRAGE_PLAN','FILTRAGE_SYSTEME','FILTRAGE_AUTRE',
+        'FILTRAGE_GOOGLE_NATIF','DOUBLON_EXACT','TEXTE_VIDE','NON_EXPLOITABLE',
+        'DOUBLON_PROCHE','EXTRACTION_KO','CHARGEMENT_KO','COPIE_KO','VOLUME_EXCESSIF'));
+""")
+print("OK Statut QUARANTAINE + motif VOLUME_EXCESSIF autorises au registre")
+
 cur.execute("CREATE INDEX IF NOT EXISTS idx_registre_copro ON ingestion_registre (code_ncg, statut);")
 cur.execute("CREATE INDEX IF NOT EXISTS idx_registre_motif ON ingestion_registre (statut, motif);")
 cur.execute("CREATE INDEX IF NOT EXISTS idx_registre_sha   ON ingestion_registre (sha256);")

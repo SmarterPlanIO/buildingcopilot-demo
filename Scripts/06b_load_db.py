@@ -39,6 +39,7 @@ if not DB_PASSWORD:
     raise SystemExit("❌ DB_PASSWORD manquant. Lance : DB_PASSWORD=... python 06b_load_db.py")
 
 BATCH_SIZE = 100  # Insérer par lots de 100
+_obsoletes = 0    # chunks du shard d'embeddings absents de chunks.jsonl (filtrés)
 
 # =====================================================
 # Connexion
@@ -48,6 +49,38 @@ conn = psycopg2.connect(
     user=DB_USER, password=DB_PASSWORD
 )
 cur = conn.cursor()
+
+# ── Filtre anti-obsolètes ───────────────────────────────────────────────────
+# INPUT_FILE (embeddings) est alimenté EN APPEND par 05 : il conserve les chunks
+# des runs précédents, y compris ceux qu'un re-run de 03 ne produit plus
+# (document supprimé de la source, ou chunk factorisé par la brique
+# publipostage). Sans ce filtre, 06b les rechargerait et la base divergerait
+# silencieusement du shard courant.
+# chunks.jsonl est aussi la SOURCE DE VÉRITÉ des champs posés par 03
+# (retrieval_exclu, motif_exclusion, ref_source_file, nb_occurrences) : 05 en
+# mode incrémental recopie les anciennes lignes du shard d'embeddings, qui ne
+# portent pas ces champs pour les chunk_id réutilisés. On les rafraîchit donc
+# ici depuis chunks.jsonl au moment du chargement.
+_CHUNKS_VIVANTS = None
+_CHAMPS_03 = {}
+if COPRO:
+    _shard = str(pcfg.paths_for(COPRO)["chunks_jsonl"])
+    if os.path.exists(_shard):
+        _CHUNKS_VIVANTS = set()
+        with open(_shard, "r", encoding="utf-8") as f:
+            for _l in f:
+                try:
+                    _c = json.loads(_l)
+                    _CHUNKS_VIVANTS.add(_c["chunk_id"])
+                except (json.JSONDecodeError, KeyError):
+                    continue
+                _CHAMPS_03[_c["chunk_id"]] = (
+                    bool(_c.get("retrieval_exclu", False)),
+                    _c.get("motif_exclusion"),
+                    _c.get("ref_source_file"),
+                    int(_c.get("nb_occurrences", 1) or 1),
+                )
+        print(f"🧹 Filtre shard : {len(_CHUNKS_VIVANTS)} chunk_id vivants dans chunks.jsonl")
 
 # Compter les lignes
 with open(INPUT_FILE, "r", encoding="utf-8") as f:
@@ -119,6 +152,16 @@ with open(INPUT_FILE, "r", encoding="utf-8") as f:
     for line in tqdm(f, total=total, desc="Chargement DB"):
         chunk = json.loads(line)
 
+        # Obsolète : présent dans le shard d'embeddings mais plus dans chunks.jsonl
+        if _CHUNKS_VIVANTS is not None and chunk.get("chunk_id") not in _CHUNKS_VIVANTS:
+            _obsoletes += 1
+            continue
+
+        # Rafraîchir les champs 03 (les lignes recopiées par 05 sont périmées)
+        _f03 = _CHAMPS_03.get(chunk.get("chunk_id"))
+        if _f03 is not None:
+            chunk["retrieval_exclu"], chunk["motif_exclusion"],                 chunk["ref_source_file"], chunk["nb_occurrences"] = _f03
+
         # Nettoyer les caractères NUL (0x00) que PostgreSQL refuse
         def clean(s):
             return s.replace("\x00", "") if isinstance(s, str) else s
@@ -150,6 +193,7 @@ with open(INPUT_FILE, "r", encoding="utf-8") as f:
             bool(chunk.get("retrieval_exclu", False)),    # Soft delete (version chains)
             chunk.get("motif_exclusion"),
             chunk.get("ref_source_file"),
+            int(chunk.get("nb_occurrences", 1) or 1),   # factorisation publipostage
         )
         
         batch.append(row)
@@ -161,7 +205,7 @@ with open(INPUT_FILE, "r", encoding="utf-8") as f:
                  chunk_index, total_chunks, themes, theme_scores,
                  text, nb_caracteres, embedding,
                  resolution_category, synthetic_questions, dossier_id, code_ncg,
-                 retrieval_exclu, motif_exclusion, ref_source_file)
+                 retrieval_exclu, motif_exclusion, ref_source_file, nb_occurrences)
                 VALUES %s
                 ON CONFLICT (chunk_id) DO UPDATE SET
                     copropriete = EXCLUDED.copropriete,
@@ -169,6 +213,7 @@ with open(INPUT_FILE, "r", encoding="utf-8") as f:
                     nom_fichier = EXCLUDED.nom_fichier,
                     doc_type = EXCLUDED.doc_type,
                     chunk_index = EXCLUDED.chunk_index,
+                    nb_occurrences = EXCLUDED.nb_occurrences,
                     retrieval_exclu = EXCLUDED.retrieval_exclu,
                     motif_exclusion = EXCLUDED.motif_exclusion,
                     ref_source_file = EXCLUDED.ref_source_file,
@@ -195,7 +240,7 @@ if batch:
          chunk_index, total_chunks, themes, theme_scores,
          text, nb_caracteres, embedding,
          resolution_category, synthetic_questions, dossier_id, code_ncg,
-         retrieval_exclu, motif_exclusion, ref_source_file)
+         retrieval_exclu, motif_exclusion, ref_source_file, nb_occurrences)
         VALUES %s
         ON CONFLICT (chunk_id) DO UPDATE SET
             copropriete = EXCLUDED.copropriete,
@@ -203,6 +248,7 @@ if batch:
             nom_fichier = EXCLUDED.nom_fichier,
             doc_type = EXCLUDED.doc_type,
             chunk_index = EXCLUDED.chunk_index,
+            nb_occurrences = EXCLUDED.nb_occurrences,
             retrieval_exclu = EXCLUDED.retrieval_exclu,
             motif_exclusion = EXCLUDED.motif_exclusion,
             ref_source_file = EXCLUDED.ref_source_file,

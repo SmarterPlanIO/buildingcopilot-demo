@@ -39,9 +39,11 @@ def cas_seuils():
     assert profil(19, 1)[0] != "PUBLIPOSTAGE", "sous MIN_CHUNKS : jamais factorise"
     assert profil(100, 1)[0] != "PUBLIPOSTAGE", "un seul texte unique : jamais factorise"
     assert profil(0, 0) == (None, 0.0), "document vide : pas de division par zero"
-    # borne exacte du seuil
-    assert profil(100, 20)[0] == "PUBLIPOSTAGE"             # 80 % pile
-    assert profil(100, 21)[0] == "REPETITIF_SUSPECT"        # 79 %
+    # borne exacte du seuil (0.70 depuis le 25/08 ; la bande 70-80% mesuree
+    # sur NCG+Delacour ne contient que des publipostages averes)
+    assert profil(100, 30)[0] == "PUBLIPOSTAGE"             # 70 % pile
+    assert profil(100, 31)[0] == "REPETITIF_SUSPECT"        # 69 %
+    assert profil(100, 20)[0] == "PUBLIPOSTAGE"             # 80 % toujours factorise
     return "seuils et bornes (dont MIN_CHUNKS, MIN_UNIQUES, document vide)"
 
 
