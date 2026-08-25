@@ -62,6 +62,23 @@ _BLOC14 = """\
 - **Etancheite (rappel Bloc 3, etendu).** `charger_skill` est de la plomberie au
   meme titre que les tools PALIM_* : son nom n'apparait jamais a l'ecran. Dis
   « j'applique la methode adaptee », pas « je charge le skill ».
+- **Pieces jointes.** Un bloc « [Document joint par l'utilisateur : ...] » delimite
+  par <<<DEBUT/FIN PIECE JOINTE>>> est un document fourni DANS la conversation :
+  il ne vient PAS de la base documentaire des coproprietes.
+  - Attribution obligatoire : toute information qui en provient est annoncee
+    « d'apres la piece jointe (nom) », jamais « d'apres les documents de la
+    copropriete ». Le garde-fou du Bloc 4 s'applique a chaque source SEPAREMENT :
+    ne jamais presenter un fait de la piece jointe comme documente en base, ni
+    l'inverse.
+  - Croisement : si la question s'y prete (« est-ce coherent avec... », devis vs
+    vote d'AG, facture vs contrat), confronte la piece jointe aux documents de la
+    base via les tools, et presente les ecarts explicitement, source par source.
+  - Sourçage (Bloc 10) : dans un tableau de sources, la colonne Document porte
+    « Piece jointe : nom » pour ces extraits.
+  - Une piece jointe peut etre tronquee (marque « [... document tronque ...] ») :
+    le dire si la reponse peut en dependre. Ne jamais promettre d'ingerer la piece
+    jointe dans la base : proposer de la transmettre au pilote si l'utilisateur
+    veut la rendre interrogeable durablement.
 """
 
 

@@ -120,6 +120,7 @@ def _to_tool_result_block(tool_use_id: str, result: dict | str, ok: bool) -> dic
 def run_agent(
     question: str,
     copro_codes: list[str] | None = None,
+    attachments: list[dict] | None = None,  # sorties d'attachments.extract_attachment
     history: list[dict] | None = None,   # [{"role": "user"|"assistant", "text": ...}]
     bedrock=None,
     mcp: McpClient | None = None,
@@ -146,6 +147,10 @@ def run_agent(
     user_text = question
     if copro_codes:
         user_text = f"[Perimetre impose : codes {', '.join(copro_codes)}]\n{question}"
+    if attachments:
+        from attachments import format_for_prompt
+        blocks = "\n\n".join(format_for_prompt(a) for a in attachments)
+        user_text = f"{blocks}\n\n{user_text}"
     messages.append({"role": "user", "content": [{"text": user_text}]})
 
     res = AgentResult(answer="")
@@ -223,13 +228,20 @@ def _cli():
     ap = argparse.ArgumentParser(description="CLI de test de la boucle agentique PALIM.")
     ap.add_argument("question")
     ap.add_argument("--copros", help="codes copro imposes, separes par des virgules")
+    ap.add_argument("--fichier", help="piece jointe (docx/pdf/xlsx/csv) a joindre au prompt")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
     codes = [c.strip() for c in args.copros.split(",")] if args.copros else None
+    atts = None
+    if args.fichier:
+        from attachments import extract_attachment
+        p = Path(args.fichier)
+        atts = [extract_attachment(p.name, p.read_bytes())]
+        print(f"  📎 {p.name} : {len(atts[0]['text'])} caracteres extraits")
     t0 = time.time()
     steps: list[str] = []
-    result = run_agent(args.question, copro_codes=codes,
+    result = run_agent(args.question, copro_codes=codes, attachments=atts,
                        on_step=lambda s: (steps.append(s), print(f"  … {s}"))[1])
     dt = time.time() - t0
 

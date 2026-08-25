@@ -76,6 +76,17 @@ EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 LLM_MODEL = "eu.anthropic.claude-sonnet-4-6"
 LLM_MODEL_FAST = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 
+# ── Mode agent (option A) : boucle agentique instructions v3.3 + skills + tools MCP ──
+# Secret requis : [mcp] url = "https://<lambda>/<slug>" (fail-safe : mode classique).
+_MCP_AGENT_URL = ""
+try:
+    _MCP_AGENT_URL = st.secrets["mcp"]["url"]
+except (KeyError, TypeError):
+    _MCP_AGENT_URL = os.environ.get("MCP_URL", "")
+if _MCP_AGENT_URL:
+    os.environ["MCP_URL"] = _MCP_AGENT_URL  # lu par mcp_client.py
+AGENT_AVAILABLE = bool(_MCP_AGENT_URL)
+
 # Prix Bedrock eu-west-1 ($/M tokens) — mise à jour : 2026-04
 _MODEL_COSTS = {
     LLM_MODEL:      {"input": 3.00, "output": 15.00},
@@ -2146,6 +2157,75 @@ def render_feedback_buttons(trace_id, msg_index, key_suffix=""):
 # =====================================================
 # FILTRAGE — Prompts hors-sujet (classification Haiku)
 # =====================================================
+def _run_agent_turn(user_input, copro_filter, attachments, trace, sid):
+    """Tour de conversation en mode agent — glue UI pure, la logique vit dans agent.py."""
+    from agent import run_agent
+    from attachments import format_for_prompt
+
+    # Historique : derniers tours en texte ; les pieces jointes passees sont reinjectees
+    _hist = []
+    for m in st.session_state.chat_history[:-1][-8:]:
+        _t = m.get("content", "")
+        if m.get("role") == "user" and m.get("attachments"):
+            _t = "\n\n".join(format_for_prompt(a) for a in m["attachments"]) + "\n\n" + _t
+        _hist.append({"role": m["role"], "text": _t})
+
+    _steps = []
+    _t0 = _time.time()
+    with st.chat_message("assistant"):
+        _status = st.status("🔎 Je travaille sur votre question…", expanded=False)
+
+        def _on_step(label):
+            _steps.append(label)
+            _status.update(label=f"⏳ {label}…")
+
+        try:
+            _res = run_agent(
+                user_input,
+                copro_codes=copro_filter,
+                attachments=attachments or None,
+                history=_hist,
+                bedrock=get_bedrock_client(),
+                on_step=_on_step,
+                tracer=trace,
+            )
+        except Exception as _e:
+            _status.update(label="❌ Échec de la recherche", state="error")
+            st.error("Le mode agent a échoué. Réessayez, ou décochez « Mode agent » "
+                     "dans la barre latérale pour repasser en mode classique.")
+            print(f"⚠️ agent error: {type(_e).__name__}: {_e}")
+            return
+        _dt = _time.time() - _t0
+        _status.update(label=f"✅ {len(_res.tool_calls)} recherche(s) en {_dt:.0f} s",
+                       state="complete")
+        st.markdown(_res.answer)
+        if _steps:
+            with st.expander("🔎 Recherches effectuées"):
+                for _s in _steps:
+                    st.caption(f"• {_s}")
+
+        st.session_state.chat_history.append({
+            "role": "assistant", "content": _res.answer,
+            "source_count": 0, "n_displayed": 0, "agent": True,
+            "steps": _steps, "trace_id": (trace.id if trace else None),
+        })
+        _midx = len(st.session_state.chat_history) - 1
+        _ = render_action_buttons(_res.answer, key_suffix=f"a-{_midx}", question=user_input)
+        if trace:
+            render_feedback_buttons(trace_id=trace.id, msg_index=_midx, key_suffix=f"a-{_midx}")
+
+    if trace:
+        try:
+            trace.update(output=_res.answer, tags=["agent"],
+                         metadata={"mode": "agent", "iterations": _res.iterations,
+                                   "tool_calls": len(_res.tool_calls),
+                                   "cost_usd": round(_res.cost_usd, 4)})
+            langfuse_client.flush()
+        except Exception:
+            pass
+    _save_chat_session(sid, st.session_state.chat_history, st.session_state.selected_dossier)
+
+
 def classify_prompt_relevance(prompt):
     """Retourne True si le prompt est pertinent pour la gestion de copropriété."""
     bedrock = get_bedrock_client()
@@ -2255,6 +2335,22 @@ with st.sidebar:
     )
     if not selected_copros:
         st.caption("🌐 Recherche sur **toutes** les copropriétés")
+
+    # ── Mode agent (option A) — PALIM complet : instructions + skills + tools MCP ──
+    _ = st.markdown("---")
+    if AGENT_AVAILABLE:
+        _ = st.toggle(
+            "🤖 Mode agent (PALIM complet)",
+            value=st.session_state.get("agent_mode", True),
+            key="agent_mode",
+            help="Boucle agentique : instructions v3.3 + skills + outils PALIM, pièces "
+                 "jointes acceptées. Décocher = pipeline classique (debug).",
+        )
+        if st.session_state.get("agent_mode", True):
+            st.caption("Assistant Copro NCG v3.3-app")
+    else:
+        st.session_state["agent_mode"] = False
+        st.caption("🤖 Mode agent indisponible (secret [mcp] absent) — pipeline classique.")
     # ── Mes dossiers (Module Gestion de Projet) ──
     _ = st.markdown("---")
     try:
@@ -2471,7 +2567,25 @@ if st.session_state.get("selected_dossier") and st.session_state.get("dossier_fi
         )
 
 # ── Saisie utilisateur (barre fixe en bas) ──
-user_input = st.chat_input("Posez votre question sur les archives de copropriété…")
+# Mode agent : pieces jointes acceptees (P2bis) ; mode classique : texte seul.
+_user_files = []
+if AGENT_AVAILABLE and st.session_state.get("agent_mode", True):
+    from attachments import SUPPORTED_TYPES as _ATT_TYPES
+    _chat_val = st.chat_input(
+        "Posez votre question… (pièce jointe possible : PDF, Word, Excel)",
+        accept_file="multiple", file_type=_ATT_TYPES,
+    )
+    if _chat_val is None:
+        user_input = None
+    elif isinstance(_chat_val, str):
+        user_input = _chat_val
+    else:
+        user_input = (_chat_val.text or "").strip()
+        _user_files = list(_chat_val.files or [])
+        if _user_files and not user_input:
+            user_input = "Analyse le document joint."
+else:
+    user_input = st.chat_input("Posez votre question sur les archives de copropriété…")
 # Handle resubmit from interrupted query recovery
 if not user_input and "_resubmit" in st.session_state:
     user_input = st.session_state["_resubmit"]
@@ -2496,6 +2610,8 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
             # Anchor for sidebar navigation
             st.markdown(f'<div id="q-anchor-{msg_idx}"></div>', unsafe_allow_html=True)
             st.markdown(msg["content"])
+            if msg.get("attachments"):
+                st.caption("📎 " + ", ".join(a["name"] for a in msg["attachments"]))
         else:
             n_disp = msg.get("n_displayed", 0)
             apfx = f"m{msg_idx}"
@@ -2521,6 +2637,22 @@ for msg_idx, msg in enumerate(st.session_state.chat_history):
                 _ = render_sources(all_msg_sources, display_k=len(all_msg_sources),
                                    key_prefix=f"h-{msg_idx}", anchor_prefix=apfx,
                                    collapsed=True)
+            elif msg.get("agent"):
+                # Reponse du mode agent : boutons action + feedback + traçabilite
+                _prev_q = ""
+                for _pi in range(msg_idx - 1, -1, -1):
+                    if st.session_state.chat_history[_pi]["role"] == "user":
+                        _prev_q = st.session_state.chat_history[_pi]["content"]
+                        break
+                _ = render_action_buttons(msg["content"], key_suffix=f"h-{msg_idx}", question=_prev_q)
+                if msg.get("trace_id"):
+                    render_feedback_buttons(
+                        trace_id=msg["trace_id"], msg_index=msg_idx, key_suffix=f"h-{msg_idx}",
+                    )
+                if msg.get("steps"):
+                    with st.expander("🔎 Recherches effectuées"):
+                        for _s in msg["steps"]:
+                            st.caption(f"• {_s}")
             else:
                 sc = msg.get("source_count", 0)
                 if sc:
@@ -2534,8 +2666,23 @@ if user_input:
         and st.session_state.chat_history[-1]["role"] == "user"
         and st.session_state.chat_history[-1]["content"] == user_input
     )
+    # ── Pieces jointes (mode agent) : extraction texte avant le tour ──
+    _attachments = []
+    if _user_files:
+        from attachments import extract_attachment, AttachmentError
+        for _f in _user_files:
+            try:
+                _attachments.append(extract_attachment(_f.name, _f.getvalue()))
+            except AttachmentError as _ae:
+                st.warning(f"📎 {_f.name} : {_ae}")
     if not _last_already:
-        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        _user_entry = {"role": "user", "content": user_input}
+        if _attachments:
+            _user_entry["attachments"] = [
+                {"name": a["name"], "text": a["text"], "truncated": a["truncated"]}
+                for a in _attachments
+            ]
+        st.session_state.chat_history.append(_user_entry)
     # Persist with pending flag (in case of disconnect during LLM call)
     _save_chat_session(_current_sid, st.session_state.chat_history,
                       st.session_state.selected_dossier, pending_query=user_input)
@@ -2543,6 +2690,8 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(f'<div id="q-anchor-{_new_msg_idx}"></div>', unsafe_allow_html=True)
         st.markdown(user_input)
+        if _attachments:
+            st.caption("📎 " + ", ".join(a["name"] for a in _attachments))
 
     # ── Paramètres ──
     # None = toutes ; liste de codes = scope multi-copro (peut être réduit à 1 par l'auto-scoping plus bas)
@@ -2600,6 +2749,12 @@ if user_input:
             "role": "assistant", "content": _filtered_answer,
             "source_count": 0, "n_displayed": 0,
         })
+        st.stop()
+
+    # ── Mode agent (option A) : boucle agentique complete, court-circuite le
+    # pipeline classique (route analytique, strategie Haiku, retrieval local) ──
+    if AGENT_AVAILABLE and st.session_state.get("agent_mode", True):
+        _run_agent_turn(user_input, copro_filter, _attachments, _trace, _current_sid)
         st.stop()
 
     # ── Route analytique (agrégations SQL multi-copro) ──
