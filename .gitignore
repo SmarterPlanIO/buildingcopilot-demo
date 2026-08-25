@@ -11,7 +11,7 @@ Thumbs.db
 # Exception : .claude/skills/ = skills d'équipe, ils doivent suivre le repo.
 **/.claude/*
 !**/.claude/skills/
-# Copie locale du skill produit assynco-erp : source de vérité = Scripts/mcp_server/skills/.
+# Copie locale du skill produit assynco-erp : source de vérité = Scripts/Streamlit Cloud/skills_bundle/ncg/.
 Scripts/.claude/skills/assynco-erp/
 .vscode/
 .idea/
@@ -71,3 +71,12 @@ Résultats bruts/dossiers.jsonl.bak
 
 # ─── Données client Delacour (hors repo) ────────────────────────────────────
 Scripts/clients/delacour/docs/LOTS_PRINCIPAUX_*.md
+
+# ── Hors-repo : dossiers d'affaires et livraisons client (jamais sur GitHub) ──
+Admin/
+Livraison_*/
+
+# ── Outillage personnel / artefacts de packaging ──
+*.code-workspace
+Scripts/assynco-erp.skill
+Scripts/mcp_server/skills/assynco-erp.zip/
