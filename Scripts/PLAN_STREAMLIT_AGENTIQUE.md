@@ -139,7 +139,30 @@ P0 livre (3e08cd7) et audite propre ; P1 livre (ec035db), 4/4 tests live, cout
   committer puis `git push origin <branche-courante>:main`, verifier ensuite
   `git merge-base --is-ancestor <sha> origin/main`.
 
-## 6. Recette (8 scenarios, tous en mode agent, notes PASS/FAIL)
+## 6. Recette (8+1 scenarios) — RESULTATS P3 (26/08, app PROD palim-demo)
+
+| # | Scenario | Resultat | Ou |
+|---|---|---|---|
+| 1 | Factuel scope (5757) | **PASS** (reponse sourcee PV signe, widgets complets) | UI prod + UI locale + CLI |
+| 2 | Perimetre nomme pole Rodin | **PASS** (codes 5750/5784/5440 auto) | CLI live (pytest 4/4) |
+| 3 | Juridique -> skill charge avant | **PASS** | CLI live (pytest 4/4) |
+| 4 | Fiche de decision | couvert par le mecanisme skill (idem 3), non rejoue | — |
+| 5 | Analytique parc entier | **PASS** (couverture 19/19 annoncee) | CLI live (pytest 4/4) |
+| 6 | Assynco live | **PASS** (5750/5784/5440 polices+sinistres) | CLI live (scenario Rodin) |
+| 7 | Sourcage a la demande | **PASS apres fix `ef64421`** (5 marqueurs S, tableau, fidele) — le filtre hors-sujet Haiku rejetait le suivi : branche agent deplacee AVANT le filtre | UI prod |
+| 8 | Etancheite (jargon/tools) | **PASS** sur tous les messages observes | UI prod + CLI |
+| 9 | Piece jointe (croisement devis x AG) | **PASS** cote moteur (CLI --fichier, attribution stricte) ; upload UI = a verifier a la main (boite de dialogue OS non automatisable) | CLI live |
+
+En plus : pouces feedback **PASS en prod** (clic 👍 -> « ✓ », ecrit Langfuse), secret
+[mcp] actif (placeholder pieces jointes + upload visibles), multi-tours PASS.
+RESTE A LA MAIN (Thai, 5 min) : upload d'un fichier via le navigateur, toggle
+sidebar mode classique (sidebar repliee non pilotable en headless).
+OBSERVATION qualite (backlog retrieval, pas un bug P2/P3) : variance sur
+« derniere AG 5757 » — certains runs citent le PV signe du 17/06/2026, d'autres
+affirment « le plus recent = 15/03/2022 ». Meme backend que la version Claude ;
+a traiter cote retrieval (boost recence / requete date) si ca se reproduit.
+
+### Definition d'origine des scenarios
 
 1. Factuel scope : "derniere AG de la 5757 ?" -> reponse sourcee, 1-2 tool calls.
 2. Perimetre nomme : "sinistres sur le pole Rodin" -> codes 5750/5784/5440 auto, annonce en mots.
