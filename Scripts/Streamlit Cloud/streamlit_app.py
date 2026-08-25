@@ -2721,6 +2721,14 @@ if user_input:
             print(f"⚠️ Langfuse trace creation failed: {_trace_err}")
             _trace = None
 
+    # ── Mode agent (option A) : boucle agentique complete, court-circuite le
+    # pipeline classique DES ICI — y compris le filtre hors-sujet Haiku, qui
+    # jugerait isolement des suivis legitimes ("republie avec tes sources ?",
+    # Bloc 10) ; les instructions v3.3 portent leur propre etancheite.
+    if AGENT_AVAILABLE and st.session_state.get("agent_mode", True):
+        _run_agent_turn(user_input, copro_filter, _attachments, _trace, _current_sid)
+        st.stop()
+
     # ── Filtrage prompt hors-sujet ──
     _prompt_relevant = classify_prompt_relevance(user_input)
     if not _prompt_relevant:
@@ -2749,12 +2757,6 @@ if user_input:
             "role": "assistant", "content": _filtered_answer,
             "source_count": 0, "n_displayed": 0,
         })
-        st.stop()
-
-    # ── Mode agent (option A) : boucle agentique complete, court-circuite le
-    # pipeline classique (route analytique, strategie Haiku, retrieval local) ──
-    if AGENT_AVAILABLE and st.session_state.get("agent_mode", True):
-        _run_agent_turn(user_input, copro_filter, _attachments, _trace, _current_sid)
         st.stop()
 
     # ── Route analytique (agrégations SQL multi-copro) ──
