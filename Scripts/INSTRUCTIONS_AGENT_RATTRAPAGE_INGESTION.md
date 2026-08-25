@@ -19,8 +19,8 @@
   (le `06b` fait DELETE+INSERT per-copro : deux writers sur la meme copro se corrompent).
 - Le selecteur de client est la variable d'env `PALIM_CLIENT` (defaut `ncg`).
   Delacour : `PALIM_CLIENT=delacour`. Toujours l'exporter explicitement, jamais l'assumer.
-- **Exception absolue : la copro Delacour `AE8711459` (105 av. de Verdun) ne se lance que
-  sur signal explicite de Thai.** Ne jamais l'inclure dans un lot.
+- **Copro Delacour `AE8711459` (105 av. de Verdun) : blocage LEVÉ le 26/08/2026** (mandat
+  renouvelé avec Delacour, confirmé par Thai). Ingestion autorisée comme les autres copros.
 
 ## 1. Preflight (10 min, obligatoire)
 

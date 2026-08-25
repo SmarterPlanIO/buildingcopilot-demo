@@ -18,7 +18,7 @@
     "enabled": true,
     "syndic_labels": ["DELACOUR PATRIMOINE", "Delacour Patrimoine"]
   },
-  "_comment_copros": "Clés = immatriculations RNIC canoniques (validées 24/25 GO au registre le 17/08, cf. docs/RNIC_CHECK_2026-08-17.md ; AE8711459 en cours de régularisation au registre par Delacour). lobby_code = alias de résolution (codes internes relevés dans les documents ; 0810/0204/1171 plausibles non confirmés, 0619/0325/0053 possiblement hérités d'anciens syndics — sans impact : l'alias pointe vers le bon dossier quoi qu'il en soit).",
+  "_comment_copros": "Clés = immatriculations RNIC canoniques (validées 24/25 GO au registre le 17/08, cf. docs/RNIC_CHECK_2026-08-17.md ; AE8711459 : blocage d'ingestion levé le 26/08/2026, mandat renouvelé avec Delacour (confirmé par Thai). Point distinct et toujours ouvert : la mise à jour de la fiche au registre RNIC reste à faire par Delacour, sans impact sur l'ingestion). lobby_code = alias de résolution (codes internes relevés dans les documents ; 0810/0204/1171 plausibles non confirmés, 0619/0325/0053 possiblement hérités d'anciens syndics — sans impact : l'alias pointe vers le bon dossier quoi qu'il en soit).",
   "included_copros": {
     "AA6219950": {"folder": "SDC 50 rue Vaneau - 75007", "lobby_code": "0200", "label": "SDC 50 rue Vaneau, 75007 Paris"},
     "AC9872896": {"folder": "127 Avenue Felix Faure - 92000", "lobby_code": "0179", "label": "127 avenue Félix Faure, 92000 Nanterre"},
