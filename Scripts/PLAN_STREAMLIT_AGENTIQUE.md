@@ -84,12 +84,50 @@ visite 3D, analytique, perimetres nommes).
   analytique parc entier appelle PALIM_run_analytical_query ; jamais plus de 8 iterations.
 - **P2 — UI (0,5-1 j)** : toggle + streaming + expander + branchements feedback/Word.
   Critere : les 2 modes coexistent, sessions sauvegardees compatibles.
-- **P3 — recette (0,5 j)** : les 8 scenarios (section 6) passes en local, ajustements prompt.
+- **P2bis — pieces jointes (0,5-1 j, VALIDE sur le principe 25/08 soir)** : upload
+  Word/PDF/Excel dans le prompt. `st.chat_input(accept_file=True)` ; extraction
+  python-docx (present) + pypdf + openpyxl (a ajouter) ; texte injecte en bloc
+  "[Document joint : nom]" tronque 30-50k chars + cachePoint messages ; extension
+  Bloc 14 : TOUJOURS distinguer "d'apres la piece jointe" vs "d'apres les documents
+  de la copropriete" (Bloc 4/sourcage) ; PDF scanne (couche texte vide) = EXCLU v1,
+  message honnete (OCR Textract = option v2) ; scenario de recette supplementaire :
+  croisement piece jointe x RAG ("ce devis est-il coherent avec le vote d'AG ?").
+- **P3 — recette (0,5 j)** : les 8 scenarios (section 6) + le scenario piece jointe
+  passes en local, ajustements prompt.
 - **P4 — deploy** : VERSION 0.8.0, merge main, secret `[mcp]` pose dans Streamlit Cloud,
   smoke prod, verification affichage version sidebar. Rollback = toggle mode classique
   (2 clics) ou revert du merge.
 
 Total estime : **2,5 a 3,5 jours dev**. P0+P1 faisables avant mardi si besoin demo.
+
+## 5bis. Etat d'avancement P2 (repere de reprise, 25/08 soir)
+
+P0 livre (3e08cd7) et audite propre ; P1 livre (ec035db), 4/4 tests live, cout
+0,05-0,10 $/question avec prompt caching. P2 EN COURS, reperage fait dans
+`streamlit_app.py` (2959 lignes) :
+- Toggle "Mode agent" : sidebar, pres du multiselect copros (~l.2250) + caption
+  version ("Assistant Copro NCG v3.3-app").
+- Branche agent : dans `if user_input:` (~l.2530+), APRES la creation de trace
+  Langfuse et le filtre hors-sujet `classify_prompt_relevance` (garde le filtre
+  Haiku, il economise un tour Sonnet), AVANT la route analytique — le mode agent
+  court-circuite route analytique + strategie Haiku + pipeline classique, puis
+  `st.stop()`.
+- Glue UI = fonction `_run_agent_turn(user_input, copro_filter, _trace)` fine :
+  st.status avec labels metier via on_step, appel `agent.run_agent` (history =
+  chat_history mappe en [{role,text}], derniers ~6 tours), append chat_history
+  au format existant {"role","content","source_count":0,"n_displayed":0,
+  "trace_id": trace.id} (compatible sessions sauvegardees + feedback +
+  render_action_buttons via le rendu historique).
+- MCP_URL : st.secrets["mcp"]["url"] en try/except (regle 3.6) ; si absent ->
+  warning + repli mode classique (fail-safe).
+- Streaming texte : soit converse_stream a assembler dans agent.py (evenements
+  contentBlockDelta text/toolUse input), soit st.status seul en premiere passe.
+- VIOLATION PREEXISTANTE reperee (pas a moi de la corriger en douce) :
+  `st.secrets["aws"].get(...)` a la l.58 de streamlit_app.py, contraire a la
+  regle 3.6 — signalee a Thai le 25/08.
+- Clone partage avec l'autre agent (HEAD change de branche sans prevenir) :
+  committer puis `git push origin <branche-courante>:main`, verifier ensuite
+  `git merge-base --is-ancestor <sha> origin/main`.
 
 ## 6. Recette (8 scenarios, tous en mode agent, notes PASS/FAIL)
 
