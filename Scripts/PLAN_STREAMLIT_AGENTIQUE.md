@@ -100,7 +100,17 @@ visite 3D, analytique, perimetres nommes).
 
 Total estime : **2,5 a 3,5 jours dev**. P0+P1 faisables avant mardi si besoin demo.
 
-## 5bis. Etat d'avancement P2 (repere de reprise, 25/08 soir)
+## 5bis. Etat d'avancement (MAJ 26/08 : P2+P2bis LIVRES, commit 4b659fd, v0.8.0)
+
+P2+P2bis commites et pushes sur main. Smoke UI local complet SAUF pouces feedback
+(le Python 3.14 local casse l'import langfuse — connu, prod = 3.12, meme code que
+le mode classique). Le deploy main SANS secret [mcp] laisse l'app en mode
+classique : fail-safe voulu, zero impact utilisateur.
+RESTE : P3 recette (8+1 scenarios sur l'app) ; P4 = poser le secret `[mcp] url`
+dans Streamlit Cloud (active le mode agent), verifier les pouces feedback en
+prod, recette pieces jointes dans l'UI navigateur (non testable en headless).
+
+### Reperes P2 d'origine (conserves pour histoire)
 
 P0 livre (3e08cd7) et audite propre ; P1 livre (ec035db), 4/4 tests live, cout
 0,05-0,10 $/question avec prompt caching. P2 EN COURS, reperage fait dans
