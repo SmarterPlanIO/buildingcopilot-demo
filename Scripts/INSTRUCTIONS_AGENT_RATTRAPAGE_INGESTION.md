@@ -19,6 +19,11 @@
   (le `06b` fait DELETE+INSERT per-copro : deux writers sur la meme copro se corrompent).
 - Le selecteur de client est la variable d'env `PALIM_CLIENT` (defaut `ncg`).
   Delacour : `PALIM_CLIENT=delacour`. Toujours l'exporter explicitement, jamais l'assumer.
+- **Separation des espaces de travail (26/08)** : tout travail Delacour se fait dans le
+  worktree dedie `G:\Mon Drive\Projet SmarterPlan\Sales\Prospects\Delacour Patrimoine\202608 PALIM Delacour Patrimoine`
+  sur la branche `PALIM_Delacour_Patrimoine` (branche ORPHELINE de livraison, historique
+  separe : ne jamais la merger avec main ni pousser du Delacour sur main depuis le clone
+  NCG). Le clone NCG (mission 202512) reste dedie a NCG/produit generique.
 - **Copro Delacour `AE8711459` (105 av. de Verdun) : blocage LEVÉ le 26/08/2026** (mandat
   renouvelé avec Delacour, confirmé par Thai). Ingestion autorisée comme les autres copros.
 
