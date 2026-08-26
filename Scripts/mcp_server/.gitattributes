@@ -1,0 +1,3 @@
+# Force LF sur les scripts shell : evite l'erreur "bad interpreter: bash\r"
+# quand build_and_push.sh est clone depuis Windows/Google Drive vers CloudShell.
+*.sh text eol=lf

@@ -1,0 +1,11 @@
+# Garde le contexte de build mince. Le Dockerfile ne COPY que requirements.txt
+# et les *.py top-level ; le reste n'a aucune raison d'etre envoye au demon.
+# NE PAS exclure dossiers_api_vendored.py / rerank_vendored.py (necessaires au build).
+sql/
+tests/
+__pycache__/
+*.pyc
+*.md
+*.skill
+desktop.ini
+env.json

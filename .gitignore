@@ -1,0 +1,82 @@
+# ─── Fichiers temporaires ───────────────────────────────────────────────────
+~$*
+desktop.ini
+*.tmp
+Thumbs.db
+# Raccourcis Windows/Google Drive : illisibles par git, pointeurs machine-locaux
+*.lnk
+
+# ─── IDE / Claude settings ──────────────────────────────────────────────────
+# Config locale (settings.local.json, launch.json, worktrees) : jamais versionnée.
+# Exception : .claude/skills/ = skills d'équipe, ils doivent suivre le repo.
+**/.claude/*
+!**/.claude/skills/
+# Copie locale du skill produit assynco-erp : source de vérité = Scripts/Streamlit Cloud/skills_bundle/ncg/.
+Scripts/.claude/skills/assynco-erp/
+.vscode/
+.idea/
+
+# ─── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ─── Documents business (racine) ────────────────────────────────────────────
+# Exclure PDFs / PPTX / DOCX / images à la racine du repo
+/*.pdf
+/*.pptx
+/*.pptm
+/*.docx
+/*.docm
+/*.png
+/*.jpg
+/*.jpeg
+/Retouche/
+# NB : pas de guillemets dans .gitignore — git les prend au pied de la lettre.
+# Les espaces sont littéraux, donc le pattern matche le dossier accentué tel quel.
+/Données brutes/
+
+# ─── Fichiers de log et sorties runtime ─────────────────────────────────────
+*.log
+Scripts/filtrage_rapport.json
+Scripts/inventaire_fichiers.csv
+Scripts/inventaire_stats.txt
+Scripts/metadata_cache.json
+
+# ─── Données lourdes (Résultats bruts) ──────────────────────────────────────
+# Patterns sans guillemets (cf. note plus haut). Couvre les sous-dossiers
+# volumineux (archives, runs, embeddings per-copro) + les sorties jsonl/csv.
+/Résultats bruts/Archives_Extraites/
+/Résultats bruts/Archives_Filtrees/
+/Résultats bruts/RUN ON 6 COPROS/
+/Résultats bruts/per_copro/
+/Résultats bruts/*.jsonl
+/Résultats bruts/*.csv
+
+# ─── Secrets locaux Streamlit ────────────────────────────────────────────────
+secrets.toml
+.env
+.env.local
+Scripts/mcp_server/skills/ncg-note-juridique.zip
+Scripts/mcp_server/skills/ncg-redaction-livrable.zip
+Scripts/PLAN_ANALYTIQUE_INTER_COPRO.md
+Scripts/PLAN_REDUCTION_COUT_COPRO.md
+Scripts/zip_content_analysis.py
+Scripts/mcp_server/RUNBOOK_DEPLOY_ASSYNCO_R1.md
+Admin/PALIM_Proposition_Tarifaire_NCG_bundle.docx
+Admin/PALIM_Proposition_Tarifaire_NCG_bundle.pdf
+Résultats bruts/dossiers_dedup_report.txt
+Résultats bruts/dossiers.jsonl.bak
+
+# ─── Données client Delacour (hors repo) ────────────────────────────────────
+Scripts/clients/delacour/docs/LOTS_PRINCIPAUX_*.md
+
+# ── Hors-repo : dossiers d'affaires et livraisons client (jamais sur GitHub) ──
+Admin/
+Livraison_*/
+
+# ── Outillage personnel / artefacts de packaging ──
+*.code-workspace
+Scripts/assynco-erp.skill
+Scripts/mcp_server/skills/assynco-erp.zip/

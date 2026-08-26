@@ -1,0 +1,11 @@
+
+# =====================================================
+# URLs de démo SmarterPlan — Jumeau Numérique
+# Format : MOT_CLE : URL_COMPLETE
+# (une paire par ligne, lignes vides et # ignorés)
+# =====================================================
+
+LEMEAU : https://demo.smarterplan.io/visit/1ee5ded6-e3db-4702-81b0-92e000c957e7/detail/6e82334f-93f1-489a-bf28-2912ca2f3586?deepParams=eyJzd2VlcElEIjoiZGQxNWQzMWFhMWJmNGQ4Mjg1YjI0YmRjM2Y1MzBmYTkiLCJyb3RhdGlvbiI6eyJ4IjoyNS41MDMyMTc2MDgxODI0MDMsInkiOi02My40ODQxMDQ1NzQzNDg4NH19&model3D=Uiq1Cq8TTzn
+
+EXTINCTEUR : https://demo.smarterplan.io/visit/1ee5ded6-e3db-4702-81b0-92e000c957e7/equip/b8683f9c-0028-4cdf-8c02-7446c6353b51?deepParams=eyJzd2VlcElEIjoiMGRhMTEyYjFlOTQ5NGJiZDg4Y2FiZjJmMWJlZGQ5YzMiLCJyb3RhdGlvbiI6eyJ4IjotMjIuNjYyNDQ1NTEyNTAxODQ3LCJ5IjotMTAzLjU0ODI3NDk3NDgzNzV9fQ%3D%3D&model3D=Uiq1Cq8TTzn
+

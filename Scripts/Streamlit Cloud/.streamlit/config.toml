@@ -1,0 +1,5 @@
+[runner]
+# Désactive le rendu automatique des expressions nues (magic mode)
+# Nécessaire en local avec Streamlit 1.54.0 qui rend le retour de st.markdown() comme "None"
+# La version Cloud n'a pas ce problème (gérée par le préfixe _ = dans le code)
+magicEnabled = false

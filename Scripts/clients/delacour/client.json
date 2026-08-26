@@ -1,0 +1,49 @@
+{
+  "_comment": "Profil client PALIM — Delacour Patrimoine. Utilisation : PALIM_CLIENT=delacour. project_root = dossier de travail LOCAL (sorties pipeline : Résultats bruts/, plus rapide et plus sûr que GDrive pour les gros JSONL). raw_root = Drive partagé du client, LECTURE SEULE, zéro recopie des sources. RDS dédiée provisionnée le 11/08/2026, infra MCP validée le 14/08 (cf. clients/delacour/docs/RUNBOOK_PROVISION_DELACOUR.md). Codes copro = codes Lobby 4 chiffres zéro-paddés, extraits des documents du Drive le 14/08 (préfixes de fichiers Delacour-era + en-têtes 'Immeuble :'), revalidés le 14/08 contre les zones de reprise des anciens syndics. ATTENTION : certains préfixes viennent de l'ANCIEN syndic (ex. 2190 = code Privilège Gestion pour 100 Bd Victor Hugo, retiré d'ici ; code Lobby probable 5807 via Ref client '5807/2190', à confirmer). Douteux à confirmer avant ingestion : 0619 (74 agent Sarre) et 0325 (1 Crillon), fichiers préfixés uniquement en zone reprise/archives ; 0053 (Didot) à revérifier. Manquent aussi : 1171/0810/0204 plausibles + 9 copros sans code — source qui tranche = liste des immeubles Lobby ou Delacour.",
+  "client_code": "delacour",
+  "client_name": "Delacour Patrimoine",
+  "project_root": "C:\\Users\\thai-\\palim-delacour",
+  "raw_root": "G:\\Drive partagés\\Cabinet Delacour Patrimoine\\Copropriétés",
+  "db": {
+    "host": "sp-rag-delacour-copros.c8ypoidw2hzb.eu-west-1.rds.amazonaws.com",
+    "port": 5432,
+    "name": "postgres",
+    "user_admin": "ragadmin",
+    "user_reader": "mcp_delacour_reader",
+    "secret_reader": "palim/delacour/mcp_reader",
+    "secret_admin": "palim/delacour/ragadmin"
+  },
+  "assynco": {
+    "_comment": "Assynco est aussi le courtier de Delacour : même base Airtable. Libellés relevés dans Organisation le 11/08/2026 : 'DELACOUR PATRIMOINE' (Syndic+Client, 31 copros liées) et 'Delacour Patrimoine' (doublon orphelin, gardé par sécurité, FIND sensible à la casse). ATTENTION : {Ref client} Airtable ne correspond PAS toujours au code Lobby ('234' vs 0179 pour Félix Faure) — faire aligner {Ref client} sur les codes Lobby par Assynco avant d'activer le sync 08 et les tools Assynco par code.",
+    "enabled": true,
+    "syndic_labels": ["DELACOUR PATRIMOINE", "Delacour Patrimoine"]
+  },
+  "_comment_copros": "Clés = immatriculations RNIC canoniques (validées 24/25 GO au registre le 17/08, cf. docs/RNIC_CHECK_2026-08-17.md ; AE8711459 : blocage d'ingestion levé le 26/08/2026, mandat renouvelé avec Delacour (confirmé par Thai). Point distinct et toujours ouvert : la mise à jour de la fiche au registre RNIC reste à faire par Delacour, sans impact sur l'ingestion). lobby_code = alias de résolution (codes internes relevés dans les documents ; 0810/0204/1171 plausibles non confirmés, 0619/0325/0053 possiblement hérités d'anciens syndics — sans impact : l'alias pointe vers le bon dossier quoi qu'il en soit).",
+  "included_copros": {
+    "AA6219950": {"folder": "SDC 50 rue Vaneau - 75007", "lobby_code": "0200", "label": "SDC 50 rue Vaneau, 75007 Paris"},
+    "AC9872896": {"folder": "127 Avenue Felix Faure - 92000", "lobby_code": "0179", "label": "127 avenue Félix Faure, 92000 Nanterre"},
+    "AE3410578": {"folder": "SDC 100 Boulevard Victor Hugo - 92200", "label": "SDC 100 boulevard Victor Hugo, 92200 Neuilly-sur-Seine"},
+    "AE8711459": {"folder": "105 Avenue de Verdun - 92130", "label": "105 avenue de Verdun, 92130 Issy-les-Moulineaux"},
+    "AE5618780": {"folder": "130 Rue d'Aboukir - 75002", "lobby_code": "0858", "label": "130 rue d'Aboukir, 75002 Paris"},
+    "AD5587183": {"folder": "19 Rue Montmartre - 75001", "label": "19 rue Montmartre, 75001 Paris"},
+    "AC4966461": {"folder": "SDC 20 rue Périer - 92120", "lobby_code": "0462", "label": "SDC 20 rue Périer, 92120 Montrouge"},
+    "AC5645007": {"folder": "SDC 208 RUE DE LA CROIX NIVERT - 75015", "label": "SDC 208 rue de la Croix Nivert, 75015 Paris"},
+    "AB7612138": {"folder": "SDC 33 ter rue de paris - 92190", "label": "SDC 33 ter rue de Paris, 92190 Meudon"},
+    "AB9195306": {"folder": "SDC 35 rue Lazare Carnot - 92140", "lobby_code": "0810", "label": "SDC 35 rue Lazare Carnot, 92140 Clamart"},
+    "AF5773049": {"folder": "SDC 45 Boulevard du Lycée - 92170", "label": "SDC 45 boulevard du Lycée, 92170 Vanves"},
+    "AA8054405": {"folder": "SDC 48-50 Rue de Sèvres - 92100", "lobby_code": "0320", "label": "SDC 48-50 rue de Sèvres, 92100 Boulogne-Billancourt"},
+    "AE4011581": {"folder": "6 6Bis rue de la briqueterie - 75014", "lobby_code": "1114", "label": "6-6bis rue de la Briqueterie, 75014 Paris"},
+    "AC8694200": {"folder": "60 Boulevard Magenta - 75010", "label": "60 boulevard Magenta, 75010 Paris"},
+    "AH7171655": {"folder": "SDC - 92100", "label": "SDC 67 rue Escudier, 92100 Boulogne-Billancourt (dossier Drive 'SDC - 92100')"},
+    "AA8321549": {"folder": "68 RUE DIDOT - 75014", "lobby_code": "0053", "label": "68 rue Didot, 75014 Paris"},
+    "AB9687013": {"folder": "SDC 71 rue Guynemer - 92130", "lobby_code": "1171", "label": "SDC 71 rue Guynemer, 92130 Issy-les-Moulineaux"},
+    "AD2661718": {"folder": "74 avenue de l’agent Sarre - 92700", "lobby_code": "0619", "label": "74 avenue de l'Agent Sarre, 92700 Colombes"},
+    "AB8546467": {"folder": "SDC 79-81 BOULEVARD EXELMANS - 75016", "lobby_code": "6344", "label": "SDC 79-81 boulevard Exelmans, 75016 Paris"},
+    "AE1302603": {"folder": "SDC 86 avenue de Versailles 92500 Rueil Malmaison - 92500", "lobby_code": "0037", "label": "SDC 86 avenue de Versailles, 92500 Rueil-Malmaison"},
+    "AJ6978050": {"folder": "SDC 9 rue Edmond Nocard - 94410", "label": "SDC 9 rue Edmond Nocard, 94410 Saint-Maurice"},
+    "AA8785875": {"folder": "SDC 94 Boulevard Victor Hugo - 92200", "lobby_code": "0204", "label": "SDC 94 boulevard Victor Hugo, 92200 Neuilly-sur-Seine"},
+    "AE3913340": {"folder": "SDC 99 Avenue de Verdun - 92130", "lobby_code": "0154", "label": "SDC 99 avenue de Verdun, 92130 Issy-les-Moulineaux"},
+    "AF8745119": {"folder": "4 rue des Villas - 94800 Villejuif", "label": "Résidence 4/6 rue des Villas, 94800 Villejuif"},
+    "AC0390328": {"folder": "SDC 1 rue de crillon - 92210", "lobby_code": "0325", "label": "SDC 1 rue de Crillon, 92210 Saint-Cloud"}
+  }
+}
