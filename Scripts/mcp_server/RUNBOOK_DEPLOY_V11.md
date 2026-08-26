@@ -2,7 +2,10 @@
 
 > Date : 24/08/2026. A executer en AWS CloudShell (console, compte 046004768626,
 > region eu-west-1, Docker preinstalle, creds heritees). Duree ~10 min.
-> Prod actuelle : **v10** sur les 2 Lambdas (verifie le 24/08).
+> Prod actuelle : **v11 sur les 2 Lambdas** — NCG le 24/08, Delacour le 26/08
+> (etape 2 executee, smokes verts : boot 13 tools, soft delete AE3410578 — les 2 v1
+> flaguees absentes du retrieval, v2 servie, get_chunks repond toujours —, variantes
+> _RGPD AA8785875 absentes, list_copros 25 copros dont AE8711459). RUNBOOK CLOS.
 >
 > REGLE ABSOLUE, heritee du post-mortem v9 : on rebuilde toujours sous un tag
 > NEUF, JAMAIS en ecrasant un tag existant. Le 1er build v9 avait casse les deux
