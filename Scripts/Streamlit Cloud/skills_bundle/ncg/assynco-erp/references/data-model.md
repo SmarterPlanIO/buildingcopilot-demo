@@ -22,10 +22,13 @@ de `08_airtable_sync.py` (raccourci texte).
 🏄Sinistre ── "Copropriete"                            → 🏢 Copropriétés
 ```
 
-**Scope copro (R1)** : résoudre code NCG → record Copropriété via **`{Ref client}="<code>"`**
-(le code NCG vit dans `Ref client`, PAS dans `Nom` qui est l'adresse/nom d'immeuble — vérifié
-live le 03/06 ; le `(code)` dans `{Name}` ne vaut que pour la table Sinistre). Puis lire les
-liens `Polices` / `Sinistres` du record copro (record IDs → `OR(RECORD_ID()=...)`).
+**Scope copro (R1, màj v9)** : résolution serveur en deux régimes selon la forme du code —
+si le code est une **immatriculation RNIC** (`AA0000000`, canonisée côté serveur), match sur
+**`{Numéro d'immatriculation}`** (SUBSTITUTE des tirets/espaces) ; sinon (code numérique),
+match sur **`{Ref client}="<code>"`** (le code numérique vit dans `Ref client`, PAS dans
+`Nom` qui est l'adresse/nom d'immeuble — vérifié live le 03/06 ; le `(code)` dans `{Name}`
+ne vaut que pour la table Sinistre). Puis lire les liens `Polices` / `Sinistres` du record
+copro (record IDs → `OR(RECORD_ID()=...)`).
 Caveat : quelques codes matchent >1 record copro (ex. 5548, doublon Assynco) → on retient le 1er.
 
 **Gotcha linked-fields (pour le futur CRUD)** : en lecture/filtre on manipule le *display value*
@@ -41,9 +44,9 @@ Registre copro Assynco. Sert aussi l'annuaire `PALIM_list_copros`.
 
 | Champ | Type | Note |
 |---|---|---|
-| Nom | singleLineText | PK = adresse / nom d'immeuble (PAS le code NCG) |
-| **Ref client** | singleLineText | **= code NCG** (clé de scope : `{Ref client}="5390"`) |
-| Numéro d'immatriculation | singleLineText | immat. copro |
+| Nom | singleLineText | PK = adresse / nom d'immeuble (PAS le code copro) |
+| **Ref client** | singleLineText | **= code copro numérique du syndic** (clé de scope des codes numériques : `{Ref client}="5390"`) |
+| Numéro d'immatriculation | singleLineText | immat. RNIC (clé de scope des immatriculations, cf. R1) |
 | Type de Syndicat | singleSelect | |
 | Nombre de copropriétaires | number | |
 | Nombre de sinistre | count | rollup |

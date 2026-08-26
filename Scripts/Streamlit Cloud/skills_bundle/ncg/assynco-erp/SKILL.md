@@ -1,7 +1,7 @@
 ---
 name: assynco-erp
 description: >-
-  Accès en LECTURE aux données d'assurance Assynco (le courtier de NCG) pour une
+  Accès en LECTURE aux données d'assurance Assynco (le courtier du syndic) pour une
   copropriété : police(s) souscrite(s), type de contrat (MRI / RCS / PJ), primes,
   statut, dates d'effet/résiliation, assureur, et sinistres (cause, garantie
   impactée, montants, pipeline d'avancement). À utiliser dès qu'une question porte
@@ -18,7 +18,7 @@ description: >-
 Ce skill interroge l'ERP du courtier **Assynco** (base Airtable) **via 3 tools MCP
 PALIM**. Toute la mécanique Airtable (filtres, champs liés, pagination) est gérée
 côté serveur : tu n'écris **jamais** de `filterByFormula` ni de `baseId` — tu appelles
-les tools avec un **code NCG**.
+les tools avec le **code copro interne du syndic** (paramètre `code_ncg`).
 
 Périmètre V1 (read-only) : **Copropriété + Police + Sinistre**. Pas de création ni de
 modification. Les plafonds/capitaux détaillés par garantie ne sont pas exposés (V1).
@@ -33,15 +33,17 @@ modification. Les plafonds/capitaux détaillés par garantie ne sont pas exposé
 
 ## Workflow obligatoire : résoudre la copro D'ABORD
 
-Les 3 tools exigent un **code NCG** (ex. `"5390"`). Si l'utilisateur ne donne qu'un
-nom, une adresse ou un alias :
+Les 3 tools exigent le **code copro interne** (paramètre `code_ncg`) : code numérique
+(ex. `"5390"` chez NCG) ou immatriculation RNIC (ex. `"AE8711459"` chez Delacour —
+les graphies avec tirets ou espaces sont acceptées, normalisation côté serveur).
+Si l'utilisateur ne donne qu'un nom, une adresse ou un alias :
 
 1. Appeler **`PALIM_list_copros`** (query = le nom/adresse) → choisir le bon `code_ncg`
    parmi les candidats (un alias n'est pas unique ; une même rue peut viser plusieurs
    copros — faire valider si ambigu).
 2. Puis appeler le tool Assynco voulu avec ce `code_ncg`.
 
-Ne jamais deviner un code NCG. Sans code résolu, demander à l'utilisateur.
+Ne jamais deviner un code copro. Sans code résolu, demander à l'utilisateur.
 
 ## Comprendre les garanties (important)
 
