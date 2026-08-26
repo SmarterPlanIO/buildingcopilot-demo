@@ -3,8 +3,7 @@
 > Set d'instructions à coller dans les Project Instructions des comptes Claude Delacour Patrimoine.
 > Instancié depuis `Scripts/clients/INSTRUCTIONS_TEMPLATE_PALIM.md` (template produit).
 > Calé sur les tools réellement exposés par le serveur MCP PALIM. Pas de routeur en V1.
-> Cadre de réponse en 2 axes (Destinataire x Tâche). Procédures lourdes déportées dans des
-> une skill unique en V1.0 : `assynco-erp` (ERP assurance, skill produit). Les skills
+> Cadre de réponse en 2 axes (Destinataire x Tâche). Une skill unique en V1.0 : `assynco-erp` (ERP assurance, skill produit). Les skills
 > brandées client (rédaction, juridique, fiche de décision) seront ajoutées dans une
 > version majeure ultérieure — leurs exigences essentielles sont inline dans les blocs.
 >
