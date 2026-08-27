@@ -120,7 +120,37 @@ stats = {
     "pdf_natif": 0, "pdf_ocr": 0, "word": 0, "excel": 0,
     "email": 0, "texte": 0, "pptx": 0, "web": 0, "odt": 0,
     "erreurs": 0, "vides": 0, "skipped_checkpoint": 0, "image_ocr": 0,
+    "couche_ocr_degradee": 0,
 }
+
+# ── Gate de qualite de la couche texte (fix cas 320, cf. ocr_quality.py) ──
+# Une couche embarquee volumineuse mais pourrie ne doit plus court-circuiter
+# Textract. Rejets traces dans ocr_quality_manifest.json (a cote du checkpoint)
+# en attendant le cablage registre (motif COUCHE_OCR_DEGRADEE).
+import ocr_quality
+
+_bedrock_client = None
+
+def _bedrock_factory():
+    global _bedrock_client
+    if _bedrock_client is None:
+        _bedrock_client = boto3.client("bedrock-runtime", region_name=AWS_REGION,
+                                       config=boto_config)
+    return _bedrock_client
+
+ocr_quality_rejets = {}
+
+def save_ocr_quality_manifest():
+    if not ocr_quality_rejets:
+        return
+    path = os.path.join(os.path.dirname(CHECKPOINT_FILE), "ocr_quality_manifest.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(ocr_quality_rejets, f, ensure_ascii=False, indent=1)
+        log.info(f"🧪 {len(ocr_quality_rejets)} couche(s) texte degradee(s) -> Textract "
+                 f"(manifest : {path})")
+    except OSError as e:
+        log.warning(f"manifest ocr_quality non ecrit : {e}")
 
 
 # =====================================================
@@ -224,6 +254,20 @@ def extract_pdf_native(filepath):
             if coverage < MIN_COVERAGE_RATIO:
                 log.info(f"PDF mixte détecté ({coverage:.0%} couverture, {pages_with_text}/{page_count} pages) → OCR: {os.path.basename(filepath)}")
                 return "", False
+
+        # Critère 3 (fix cas 320) : QUALITE de la couche. Le volume ne suffit pas —
+        # un OCR embarqué pourri (scanner syndic, export Lobby) passe les critères
+        # 1 et 2. Verdict mémoïsé (fonction appelée 2x par fichier : routing + extraction).
+        verdict, score, methode = ocr_quality.verdict_couche(
+            full_text, cache_key=filepath, bedrock_factory=_bedrock_factory)
+        if verdict == "DEGRADE":
+            if filepath not in ocr_quality_rejets:
+                stats["couche_ocr_degradee"] += 1
+                ocr_quality_rejets[filepath] = {
+                    "motif": "COUCHE_OCR_DEGRADEE", "score": score, "methode": methode}
+                log.info(f"Couche texte dégradée (score {score:.2f}, {methode}) → OCR Textract : "
+                         f"{os.path.basename(filepath)}")
+            return "", False
 
         return full_text.strip(), True
 
@@ -792,8 +836,10 @@ def print_report():
     print(f"  Pages web (.htm/.html)    : {stats['web']}")
     print(f"  OpenDocument (.odt)       : {stats['odt']}")
     print(f"  Images OCR (plans)        : {stats['image_ocr']}")
+    print(f"  Couches texte dégradées   : {stats['couche_ocr_degradee']} (re-routées Textract)")
     print(f"  Fichiers vides/courts     : {stats['vides']}")
     print(f"  Erreurs                   : {stats['erreurs']}")
+    save_ocr_quality_manifest()
     t = stats['pdf_ocr'] + stats['image_ocr']
     print(f"\n  TOTAL Textract            : {t} fichiers")
     # 0,0015 $ / PAGE (pas par fichier). Pilote Delacour mesuré ~10 pages/fichier
