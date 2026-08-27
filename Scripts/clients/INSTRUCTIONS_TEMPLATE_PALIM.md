@@ -7,7 +7,7 @@
 >
 > ## Placeholders
 >
-> | Placeholder | Rôle | NCG (v3.1) | Delacour (à instancier en P2) |
+> | Placeholder | Rôle | NCG (v3.4) | Delacour (à instancier en P2) |
 > |---|---|---|---|
 > | `{{CLIENT}}` | Nom court du syndic | NCG | Delacour Patrimoine |
 > | `{{BETA_USERS}}` | Prénoms des beta-testeurs | Quentin, Johan, Christophe | à définir |
@@ -15,23 +15,37 @@
 > | `{{REGIME_CODES}}` | Régime d'identification des copros | codes internes NCG (ex. 8050) | immatriculation RNIC + graphies du nom (canonicalisation côté serveur) |
 > | `{{MOTS_CLES_3D}}` | Mots-clés à modèle 3D (Bloc 11) | `LEMEAU` (copropriété), `EXTINCTEUR` (équipement) | aucun au départ |
 > | `{{PERIMETRES_NOMMES}}` | Tableau des regroupements métier (Bloc 13) | bureau Grands Ensembles, pôle Rodin, secteur Paris 13 | à définir |
-> | `{{VERSION}}` / `{{DATE}}` | Compteur de version du client | 3.1 / 2026-08-22 | 1.0 / date de mise en service |
+> | `{{VERSION}}` / `{{DATE}}` | Version produit + date de recollage (voir Versioning) | 3.4 / 2026-08-26 | 1.0 / date de mise en service |
 >
-> Chaque client a **son propre compteur de version** ; le template n'a pas de compteur
-> collé côté client (son historique est le git du repo).
+> ## Versioning — numéro produit transverse, date de recollage (décision Thai 27/08/2026)
 >
-> ## Versioning — source unique (règle produit)
+> Les CONTENUS divergent entre clients par construction (nom du client, périmètres, mots-clés
+> 3D, skills brandées) : ce n'est pas un drift, c'est l'instanciation. Ce qui est transverse,
+> c'est le **numéro de version** et la **date** :
+> - **Le numéro de version est celui du PRODUIT** (ce template). Tous les clients à jour de la
+>   même génération du template portent le MÊME numéro. Un client pas encore ré-instancié garde
+>   le dernier numéro reçu — un numéro en retard est un indicateur de retard visible, pas un
+>   drift caché. Divergence majeure propre à un client (tool ou bloc en moins) → il reste sur
+>   son numéro tant qu'elle n'est pas résorbée.
+> - **La date est la date du recollage effectif** chez ce client. Deux textes différents ne
+>   portent JAMAIS le même couple (numéro, date) : toute édition du texte — dans le repo, dans
+>   la branche client, ou directement dans le collage — bump au minimum la date. Leçon du
+>   27/08 : deux « v1.0 (2026-08-26) » Delacour avec deux Bloc 11 différents = indétectable
+>   par l'écho de version.
+> - État courant : produit = **v3.4** (NCG) ; Delacour et CSG (v1.x) = instanciations
+>   antérieures, elles se raccrochent au numéro produit à leur prochaine ré-instanciation
+>   depuis le template.
 >
-> Dans un document instancié, la version active est écrite à **UN seul endroit** : la ligne
-> italique du Bloc 0. L'en-tête du fichier client n'écrit jamais de deuxième numéro de
-> version « décoratif » (cause historique de désynchronisation : Bloc 0 affichait v1.6 pour
-> un document v1.8). Check-list de release, à recopier dans l'en-tête de chaque fichier client :
-> 1. Bump : **mineur** (vX.Y+1) = wording / procédure, contrat tools inchangé ;
+> Dans un document instancié, version+date sont écrites à **UN seul endroit** : la ligne
+> italique du Bloc 0 (l'en-tête n'a jamais de deuxième numéro décoratif). Check-list de release :
+> 1. Bump du numéro produit : **mineur** (vX.Y+1) = wording / procédure, contrat tools inchangé ;
 >    **majeur** (vX+1.0) = le contrat change (tool ou skill ajouté/retiré, paramètre,
->    sémantique de sortie modifiée).
+>    sémantique de sortie modifiée). Une retouche propre à UN client sans changement produit =
+>    même numéro, date bumpée.
 > 2. Mettre à jour la ligne du Bloc 0 (version + date) — et elle seule.
-> 3. Recoller l'intégralité du document dans les Project Instructions Claude Teams du client.
-> 4. Ouvrir une conversation neuve et vérifier que l'écho de 1ʳᵉ réponse affiche la nouvelle version.
+> 3. Recoller l'intégralité du document dans les Project Instructions Claude Teams du client,
+>    avec la date du jour du recollage.
+> 4. Ouvrir une conversation neuve et vérifier que l'écho de 1ʳᵉ réponse affiche le couple attendu.
 >
 > ## Skills attendues dans le projet Claude Teams du client
 >
