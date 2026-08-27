@@ -6,10 +6,19 @@ volumineuse mais pourrie (scanner du syndic, export Lobby) passait ce test : le
 charabia entrait en base tel quel (cas prouve : 320-PV AG OCT 2024, AA8054405,
 resolution 22 illisible). Ce module ajoute le critere de QUALITE.
 
-Triage a 3 etages (cout maitrise) :
-  score heuristique < SEUIL_PROPRE  -> PROPRE  (aucun appel LLM ; la grande majorite)
-  score > SEUIL_DEGRADE             -> DEGRADE (aucun appel LLM ; charabia evident)
-  entre les deux                    -> arbitrage Haiku (~0,0005 $/doc, zone grise seule)
+Triage (cout maitrise) :
+  score heuristique < SEUIL_PROPRE  -> PROPRE  (aucun appel LLM ; ~85 % du parc)
+  score >= SEUIL_PROPRE             -> arbitrage Haiku (~0,0005 $/doc)
+  (sans arbitre disponible : repli heuristique, DEGRADE au-dessus de SEUIL_DEGRADE)
+
+MESURE DU 27/08 (echantillon 40 docs flagues, arbitrage Haiku de reference) : le
+score seul produit **57 % de faux positifs**, concentres sur les documents
+TABULAIRES ET NUMERIQUES sains (balances comptables, rapprochements bancaires,
+releves de compteurs, listes de tantiemes) : peu de mots-outils francais, tokens
+alphanumeriques colles -> score eleve alors que le texte est parfait. Un score
+haut ne vaut donc PAS condamnation : au-dessus de SEUIL_PROPRE on arbitre toujours
+avec Haiku quand il est disponible. Cout de l'arbitrage (0,0005 $) tres inferieur
+au cout d'un OCR inutile (~0,014 $/doc).
 
 Fail-open : si Bedrock est indisponible en zone grise, on garde le comportement
 historique (PROPRE + warning) — jamais pire qu'avant le fix.
@@ -88,10 +97,10 @@ def verdict_couche(text: str, cache_key: str | None = None, bedrock_factory=None
     score = score_texte(text)
     if score < SEUIL_PROPRE:
         result = ("PROPRE", score, "heuristique")
-    elif score > SEUIL_DEGRADE:
-        result = ("DEGRADE", score, "heuristique")
     elif bedrock_factory is None:
-        # pas d'arbitre : au-dessus du seuil bas on privilegie la qualite
+        # Pas d'arbitre : on privilegie la QUALITE. Un OCR inutile coute ~0,014 $ ;
+        # une couche pourrie en base coute une reponse fausse au gestionnaire
+        # (cas 320). Faux positifs assumes dans ce mode degrade.
         result = ("DEGRADE", score, "heuristique")
     else:
         try:

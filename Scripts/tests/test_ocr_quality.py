@@ -57,6 +57,40 @@ def test_verdict_sans_arbitre_privilegie_la_qualite():
     assert v == "DEGRADE"
 
 
+# Tableau dense et SAIN (balance comptable) : le score heuristique le condamne
+# (peu de mots-outils, tokens alphanumeriques colles) -> c'est la classe de faux
+# positifs mesuree a 57 % le 27/08. L'arbitrage doit le sauver.
+TABLE_SAINE = (
+    "0001P001001M. AMZALLAG Jean Pierre2710 12 Rue Félicien David75016 PARIS 16P "
+    "0002P001003M. AMZALLAG Jean-Pierre55 12 Rue Félicien David75016 PARIS 16P "
+    "0003P006001M. ou Mme FOTSE-NJOMGANG/ SEGOUIN Benoit ou Emeline924 20 Rue Perier92120 MONTROUGEP "
+    "0015P018004M. ou Mme RAVIZZA Guy1300 20 Rue Perier92120 MONTROUGEP "
+    "Total des tantièmes12500 CodeNuméroNom CopropriétaireTantièmesAdresse1CP VillePaysT "
+) * 3
+
+
+def test_table_saine_score_haut_mais_pas_condamnee_sans_arbitrage():
+    """Documente le faux positif : score eleve, mais l'heuristique seule ne doit
+    pas etre la voie normale — la gate arbitre des que Bedrock est dispo."""
+    assert ocr_quality.score_texte(TABLE_SAINE) >= ocr_quality.SEUIL_PROPRE
+    calls = []
+
+    def _factory():
+        calls.append(1)
+        raise ConnectionError("stub")  # force le fail-open, prouve l'appel
+
+    ocr_quality.verdict_couche(TABLE_SAINE, bedrock_factory=_factory)
+    assert calls, "un score au-dessus du seuil doit declencher l'arbitrage"
+
+
+@pytest.mark.skipif(not os.environ.get("BEDROCK_LIVE"), reason="BEDROCK_LIVE=1 requis")
+def test_table_saine_sauvee_par_haiku_live():
+    import boto3
+    factory = lambda: boto3.client("bedrock-runtime", region_name="eu-west-1")
+    v, _, methode = ocr_quality.verdict_couche(TABLE_SAINE, bedrock_factory=factory)
+    assert v == "PROPRE" and methode == "haiku"
+
+
 def test_fail_open_si_bedrock_casse():
     def _factory():
         raise ConnectionError("bedrock indisponible")
