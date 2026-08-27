@@ -26,6 +26,7 @@ from tqdm import tqdm
 
 from pipeline_config import paths_for, RESULTS_ROOT
 import bedrock_cost
+import sq_cache  # cache versionné A2 (cf. PLAN_05B_QUESTIONS_SYNTHETIQUES.md)
 
 # =====================================================
 # CONFIGURATION
@@ -39,10 +40,12 @@ if _args.copro:
     _paths["per_copro"].mkdir(parents=True, exist_ok=True)
     INPUT_FILE = str(_paths["embeddings_jsonl"])
     OUTPUT_FILE = str(_paths["embeddings_sq_jsonl"])
+    CACHE_FILE = str(_paths["per_copro"] / "synthetic_questions_cache.json")
     print(f"📌 Mode per-copro : {_args.copro} ({_paths['folder_name']})")
 else:
     INPUT_FILE = str(RESULTS_ROOT / "chunks_avec_embeddings.jsonl")
     OUTPUT_FILE = str(RESULTS_ROOT / "chunks_avec_embeddings_sq.jsonl")
+    CACHE_FILE = str(RESULTS_ROOT / "synthetic_questions_cache.json")
 
 AWS_REGION = "eu-west-1"
 
@@ -97,6 +100,7 @@ def generate_questions(chunk_text, chunk_id):
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 300,
+        "temperature": 0,  # A1 : sortie déterministe à modèle constant (spike validé 26/08)
         "messages": [{"role": "user", "content": prompt}]
     })
 
@@ -140,6 +144,16 @@ def generate_questions(chunk_text, chunk_id):
     return chunk_id, None
 
 
+def est_eligible(chunk):
+    if chunk.get("doc_type", "") not in ELIGIBLE_DOC_TYPES:
+        return False
+    if chunk.get("chunk_index", 0) == 0:  # pas le préambule
+        return False
+    if chunk.get("resolution_category") in EXCLUDED_CATEGORIES:
+        return False
+    return True
+
+
 # =====================================================
 # Execution
 # =====================================================
@@ -158,19 +172,7 @@ if __name__ == "__main__":
     print(f"  {len(all_chunks)} chunks charges")
 
     # Identifier les chunks eligibles
-    eligible = []
-    for chunk in all_chunks:
-        doc_type = chunk.get("doc_type", "")
-        chunk_index = chunk.get("chunk_index", 0)
-        res_cat = chunk.get("resolution_category")
-
-        if doc_type not in ELIGIBLE_DOC_TYPES:
-            continue
-        if chunk_index == 0:  # Pas le preambule
-            continue
-        if res_cat in EXCLUDED_CATEGORIES:
-            continue
-        eligible.append(chunk)
+    eligible = [chunk for chunk in all_chunks if est_eligible(chunk)]
 
     print(f"  {len(eligible)} chunks eligibles pour les questions synthetiques")
     print(f"  Pre-estim. grossiere : ~${len(eligible) * 0.0001:.2f} (cout REEL affiche en fin de run)")
@@ -182,26 +184,54 @@ if __name__ == "__main__":
         print(f"-> {OUTPUT_FILE}")
         exit(0)
 
-    # Generer les questions en parallele
-    eligible_ids = {c["chunk_id"] for c in eligible}
-    questions_map = {}  # chunk_id -> questions_str
+    # Cache A2 : lookup avant tout appel Bedrock ; le refus (SKIP) est caché comme un succès.
+    cache = sq_cache.charger(CACHE_FILE)
+    if not cache and os.path.exists(OUTPUT_FILE):
+        cache = sq_cache.amorcer_depuis_sq(OUTPUT_FILE, est_eligible,
+                                           sq_cache.PROMPT_VERSION, HAIKU_MODEL)
+        if cache:
+            sq_cache.sauver(CACHE_FILE, cache)
+            print(f"  Cache amorcé depuis le shard _sq existant : {len(cache)} entrées (seed, zéro appel)")
 
-    stats = {"generated": 0, "skipped": 0, "errors": 0}
+    questions_map = {}  # chunk_id -> questions_str
+    a_generer = []
+    stats = {"generated": 0, "skipped": 0, "errors": 0, "cache_hits": 0}
+    for chunk in eligible:
+        e = cache.get(chunk["chunk_id"])
+        if e is not None and sq_cache.valide(e, sq_cache.PROMPT_VERSION, HAIKU_MODEL):
+            stats["cache_hits"] += 1
+            q = sq_cache.questions_de(e)
+            if q:
+                questions_map[chunk["chunk_id"]] = q
+                stats["generated"] += 1
+            else:
+                stats["skipped"] += 1
+        else:
+            a_generer.append(chunk)
+    print(f"  Cache : {stats['cache_hits']} hits, {len(a_generer)} à générer")
 
     print(f"\nGeneration en cours ({MAX_WORKERS} workers)...")
+    _depuis_sauvegarde = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {}
-        for chunk in eligible:
+        for chunk in a_generer:
             future = executor.submit(generate_questions, chunk["text"], chunk["chunk_id"])
             futures[future] = chunk["chunk_id"]
 
         for future in tqdm(as_completed(futures), total=len(futures), desc="Questions synthetiques"):
             chunk_id, questions = future.result()
+            cache[chunk_id] = sq_cache.entree(questions, sq_cache.PROMPT_VERSION, HAIKU_MODEL)
+            _depuis_sauvegarde += 1
+            if _depuis_sauvegarde >= 1000:  # un run interrompu conserve ses acquis
+                sq_cache.sauver(CACHE_FILE, cache)
+                _depuis_sauvegarde = 0
             if questions:
                 questions_map[chunk_id] = questions
                 stats["generated"] += 1
             else:
                 stats["skipped"] += 1
+    if a_generer:
+        sq_cache.sauver(CACHE_FILE, cache)
 
     # Ecrire le fichier enrichi
     print(f"\nEcriture de {OUTPUT_FILE}...")
@@ -217,6 +247,7 @@ if __name__ == "__main__":
     print("RAPPORT QUESTIONS SYNTHETIQUES")
     print("=" * 50)
     print(f"  Chunks eligibles     : {len(eligible)}")
+    print(f"  Cache hits           : {stats['cache_hits']} (appels évités)")
     print(f"  Questions generees   : {stats['generated']}")
     print(f"  Skips (pas assez)    : {stats['skipped']}")
     print(f"  Taux d'enrichissement: {stats['generated']/max(len(eligible),1)*100:.1f}%")
