@@ -29,6 +29,7 @@ from pathlib import Path
 import psycopg2
 
 sys.path.insert(0, str(Path(__file__).parent))
+import pipeline_config as pcfg  # noqa: E402
 from ocr_quality import SEUIL_PROPRE, score_texte  # noqa: E402
 
 CLIENT = os.environ.get("PALIM_CLIENT", "ncg")
@@ -75,6 +76,8 @@ def main():
     ap.add_argument("--snapshot", required=True, help="snapshot AVANT (json)")
     ap.add_argument("--temoins", required=True, help="temoins a verite terrain (json)")
     ap.add_argument("--copro", help="restreindre a une copro")
+    ap.add_argument("--echantillon", type=int, default=30,
+                    help="taille de l'echantillon arbitre par Haiku (T2)")
     args = ap.parse_args()
 
     snap = json.loads(Path(args.snapshot).read_text(encoding="utf-8"))
@@ -99,7 +102,11 @@ def main():
              + (f" | manquants : {manquants}" if manquants else ""))
 
     # ---------- T2 a T6 : mesures sur les docs flagues ----------
-    print("\n--- T2 : score de charabia avant / apres (docs flagues)")
+    # T2 : le score heuristique est INUTILISABLE comme juge ici (57 % de faux
+    # positifs sur les tableaux, et le separateur de colonnes ` | ` gonfle sa
+    # composante ponctuation). Le juge est Haiku, sur un echantillon des docs
+    # dont le texte a REELLEMENT change (~0,03 $ par passage de recette).
+    print("\n--- T2 : qualite reelle avant/apres (arbitrage Haiku, echantillon)")
     cur.execute("""SELECT code_ncg, source_file,
                           STRING_AGG(LEFT(text, 2000), ' ' ORDER BY chunk_index)
                    FROM chunks WHERE chunk_index <= 1 AND source_file ILIKE '%.pdf'
@@ -109,50 +116,66 @@ def main():
     flagues = [sf for sf, v in snap["textes"].items()
                if score_texte(v["texte"] or "") >= 0.35
                and (not args.copro or v["code"] == args.copro)]
-    ameliores = degrades = disparus = 0
-    av_tot = ap_tot = 0.0
-    for sf in flagues:
-        s_av = score_texte(snap["textes"][sf]["texte"] or "")
-        if sf not in apres:
-            disparus += 1
-            continue
-        s_ap = score_texte(apres[sf][1] or "")
-        av_tot += s_av
-        ap_tot += s_ap
-        if s_ap < s_av - 0.05:
-            ameliores += 1
-        elif s_ap > s_av + 0.05:
-            degrades += 1
-    n = max(len(flagues) - disparus, 1)
-    note("T2 baisse du charabia", ap_tot / n < av_tot / n * 0.7,
-         f"score moyen {av_tot/n:.3f} -> {ap_tot/n:.3f} | {ameliores} ameliores, "
-         f"{degrades} degrades sur {n} docs flagues")
+    disparus = [sf for sf in flagues if sf not in apres]
+    modifies = [sf for sf in flagues if sf in apres
+                and (apres[sf][1] or "")[:400] != (snap["textes"][sf]["texte"] or "")[:400]]
+    if not modifies:
+        note("T2 qualite", False, "aucun document au texte modifie : rattrapage sans effet")
+    else:
+        import random
 
-    print("\n--- T3 : non-regression volumetrie (aucun document perdu)")
-    cur.execute("SELECT code_ncg, COUNT(DISTINCT source_file), COUNT(*) FROM chunks GROUP BY 1")
-    vol_ap = {c: {"documents": d, "chunks": k} for c, d, k in cur.fetchall()}
-    pertes = []
+        import boto3
+
+        from ocr_quality import _arbitrage_haiku
+        random.seed(11)
+        ech = random.sample(modifies, min(args.echantillon, len(modifies)))
+        bedrock = boto3.client("bedrock-runtime", region_name="eu-west-1")
+        av = sum(1 for sf in ech
+                 if _arbitrage_haiku(snap["textes"][sf]["texte"] or "", bedrock) == "PROPRE")
+        ap = sum(1 for sf in ech if _arbitrage_haiku(apres[sf][1] or "", bedrock) == "PROPRE")
+        note("T2 qualite (Haiku)", ap > av,
+             f"{len(modifies)} docs re-OCRises | juges PROPRE : {av}/{len(ech)} "
+             f"({av/len(ech):.0%}) -> {ap}/{len(ech)} ({ap/len(ech):.0%})")
+
+    # T3 : une baisse du nombre de documents n'est pas forcement une perte — la
+    # dedup exacte SHA-256 (00b) retire des doublons byte-identiques, et les copros
+    # ingerees avant son existence en perdent legitimement au premier re-passage
+    # (Delacour 27/08 : 46/46 disparitions expliquees par les manifests de dedup).
+    print("\n--- T3 : non-regression volumetrie (hors doublons retires par la dedup)")
+    cur.execute("SELECT code_ncg, COUNT(DISTINCT source_file) FROM chunks GROUP BY 1")
+    docs_ap = dict(cur.fetchall())
+    pertes, dedup_total = [], 0
     for code, v in snap["volumetrie"].items():
         if args.copro and code != args.copro:
             continue
-        apres_v = vol_ap.get(code, {"documents": 0, "chunks": 0})
-        if apres_v["documents"] < v["documents"]:
-            pertes.append(f"{code} {v['documents']}->{apres_v['documents']} docs")
+        manque = v["documents"] - docs_ap.get(code, 0)
+        if manque <= 0:
+            continue
+        man = Path(pcfg.per_copro_dir(code)) / "dedup_manifest.json"
+        n_dedup = 0
+        if man.exists():
+            d = json.loads(man.read_text(encoding="utf-8"))
+            n_dedup = sum(len(e["removed"]) for e in d.values())
+        dedup_total += min(manque, n_dedup)
+        if manque > n_dedup:
+            pertes.append(f"{code} -{manque} docs (dedup n'en explique que {n_dedup})")
     note("T3 volumetrie", not pertes,
-         "aucune perte de document" if not pertes else f"PERTES : {pertes}")
+         f"aucune perte inexpliquee ({dedup_total} docs retires par la dedup exacte)"
+         if not pertes else f"PERTES INEXPLIQUEES : {pertes}")
 
     print("\n--- T4 : documents NON flagues inchanges")
     sains = [sf for sf, v in snap["textes"].items()
              if score_texte(v["texte"] or "") < 0.20
              and (not args.copro or v["code"] == args.copro)][:400]
-    modifies = [sf for sf in sains
-                if sf in apres and (apres[sf][1] or "")[:500] != (snap["textes"][sf]["texte"] or "")[:500]]
-    note("T4 docs sains intacts", len(modifies) <= len(sains) * 0.02,
-         f"{len(modifies)}/{len(sains)} documents sains modifies (tolerance 2%)")
+    sains_modifies = [sf for sf in sains
+                      if sf in apres and (apres[sf][1] or "")[:500] != (snap["textes"][sf]["texte"] or "")[:500]]
+    note("T4 docs sains intacts", len(sains_modifies) <= len(sains) * 0.02,
+         f"{len(sains_modifies)}/{len(sains)} documents sains modifies (tolerance 2%)")
 
     print("\n--- T5 : couverture du rattrapage")
-    note("T5 couverture", disparus == 0,
-         f"{len(flagues)} docs flagues, {disparus} absents de la base apres rattrapage")
+    note("T5 couverture", len(disparus) <= dedup_total,
+         f"{len(flagues)} docs flagues, {len(modifies)} re-traites, {len(disparus)} absents "
+         f"(doublons retires par la dedup : {dedup_total})")
 
     print("\n--- T6 : sante globale du parc")
     scores = sorted(score_texte(t or "") for _, t in apres.values())
