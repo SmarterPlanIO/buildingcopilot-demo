@@ -9,8 +9,10 @@ Thumbs.db
 # ─── IDE / Claude settings ──────────────────────────────────────────────────
 # Config locale (settings.local.json, launch.json, worktrees) : jamais versionnée.
 # Exception : .claude/skills/ = skills d'équipe, ils doivent suivre le repo.
+# Exception : .claude/settings.json = settings d'équipe (ex. attribution), versionnés.
 **/.claude/*
 !**/.claude/skills/
+!**/.claude/settings.json
 # Copie locale du skill produit assynco-erp : source de vérité = Scripts/Streamlit Cloud/skills_bundle/ncg/.
 Scripts/.claude/skills/assynco-erp/
 .vscode/
