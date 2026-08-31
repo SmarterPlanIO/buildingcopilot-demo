@@ -1,107 +1,177 @@
-# PLAN — Fiabilité du narratif des fiches de synthèse (copro_synthese)
+# PLAN — Fiche de synthèse v2 : annuaire de la copro, pas narrateur
 
-> Date : 28/08/2026. Statut : PLAN — rien codé.
-> Déclencheur : incident Delacour du 27-28/08 (fiche du 26/08). Le narratif d'une fiche
-> affirmait « l'assemblée a approuvé sans réserve les comptes 2023 (170 215,78 €) » alors
-> que le PV du 30/03/2026 montre la résolution 3 REJETÉE (2 606 tantièmes pour, 4 867
-> contre, 58 abst.) ; il rattachait de plus ce vote à une AG du 16/09/2025 avec un contenu
-> non vérifié, et se contredisait lui-même sur les comptes de dossiers (narratif : 25
-> ouverts + 4 clos ; couche faits de la MÊME fiche : 37 dont 32 en cours + 5 clos).
-> L'assistant client a correctement diagnostiqué : erreur d'INTERPRÉTATION (dispositif
-> soumis au vote pris pour la décision), pas erreur de lecture.
+> v2 du 01/09/2026 (supersede la v1 du 28/08 : le fix du générateur narratif est ABANDONNÉ
+> au profit d'un redesign — décision Thai, « pas de correctifs transitoires »).
+> Statut : PLAN — rien codé.
+> Déclencheur : incident Delacour 27-28/08 (fiche du 26/08) — narratif affirmant
+> l'approbation de comptes 2023 en réalité REJETÉS (PV 30/03/2026, rés. 3 : 2 606 pour /
+> 4 867 contre / 58 abst.), vote rattaché à la mauvaise AG, comptes de dossiers
+> contredisant la couche faits de la même fiche (25+4 vs 37 réels).
 
 ---
 
-## 0. Root cause — CONFIRMÉE dans le code (09_copro_synthese.py, relu le 28/08)
+## 0. Root cause (relue dans 09_copro_synthese.py le 28/08) et leçon de design
 
-| Symptôme | Cause exacte dans le code |
-|---|---|
-| Dispositif pris pour la décision | `_pv_text_block` : les chunks des 2 PV récents sont accumulés puis **tronqués brutalement** par `"\n".join(body)[:PV_TEXT_BUDGET]` (3 500 chars/PV). Le chunking PV_AG par résolution met dispositif + décompte dans le MÊME chunk, mais cette coupe au caractère peut les séparer : Haiku reçoit « l'assemblée approuve… » sans le décompte qui suit. Même sans coupe en plein milieu, 3 500 chars ≈ les 2-4 premières résolutions d'un PV : le narratif généralise depuis un extrait très partiel, sans le savoir. |
-| Vote attribué à la mauvaise AG | Le bloc concatène 2 PV (`[date] fichier` + résolutions tronquées) sans contrainte d'attribution dans le prompt : Haiku peut mélanger les AG. |
-| Comptes de dossiers contradictoires | Le prompt injecte le DÉTAIL de 40 dossiers max (`_dossiers_block`) mais PAS les agrégats (`par_statut`/`par_type`, calculés dans `facts` juste au-dessus et jamais passés au prompt — le commentaire « les comptes couvrent tout » est faux). Rien n'interdit à Haiku de compter lui-même → il compte faux. |
-| Rien ne détecte l'erreur | Aucun contrôle post-génération : le narratif est upserté tel quel, sans statut de fiabilité, et `PALIM_copro_overview` le sert sans mise en garde exploitable. |
+Trois défauts de mécanique : troncature du bloc PV **au caractère** (3 500 chars/PV — peut
+séparer un dispositif de son décompte pourtant dans le même chunk, et ne montre que les
+premières résolutions) ; agrégats dossiers calculés dans `facts` mais **jamais injectés au
+prompt** (Haiku compte lui-même, faux) ; **aucun contrôle** post-génération.
 
-Le prompt actuel a « Aucune invention » et « ne cite pas de montant que tu n'as pas vu » —
-insuffisant : ici le montant ÉTAIT dans les éléments fournis ; c'est le STATUT de la phrase
-(soumise au vote vs votée) qui a été inventé.
+Mais la leçon dépasse la mécanique : demander à Haiku de compresser une copro (jusqu'à
+100 Go de documents) en 250 mots depuis 2 extraits tronqués, c'est une compression avec
+perte dont la perte n'est pas signalée. Corriger le générateur réduit la probabilité
+d'erreur ; il reste un composant qui AFFIRME des contenus qu'il n'a pas les moyens de
+vérifier. On supprime la classe d'erreur au lieu de la raboter.
 
----
+## 1. Décision de design (Thai, 01/09/2026)
 
-## P0 — Contenir (immédiat, zéro régénération, zéro deploy)
+**La fiche de synthèse est un ANNUAIRE, pas un narrateur.** Elle présente les chiffres
+clés et les informations stables de la copro, et elle POINTE vers les dossiers chauds et
+les documents décisifs. L'interprétation (sens d'un vote, chiffre précis d'un tableau mal
+scanné, détail d'un dossier) est déléguée au LLM appelant, qui suit les pointeurs et
+consulte les chunks — c'est le seul composant qui a à la fois l'accès aux sources et les
+garde-fous de lecture (Bloc 4, sourçage, « le PV tranche »).
 
-1. **Instructions clients (template + NCG + Delacour + CSG), Bloc 4** : le narratif d'une
-   fiche de synthèse a le **statut de source le plus bas**. Il sert à s'orienter ; un sens
-   de vote, une décision d'AG, un montant ou un comptage ne se CITENT jamais depuis lui —
-   revalidation obligatoire par recherche documentaire scopée (le PV tranche). Bump des
-   dates (numéro produit inchangé : doctrine d'usage, pas de contrat modifié).
-2. **Signalement pilote** : consigner l'incident (copro, fiche du 26/08, PV du 30/03/2026,
-   résolutions 3 et 4) comme **golden case n°1** du chantier self-learning
-   (PLAN_SELF_LEARNING.md, triage F1). La réponse corrective de l'assistant client montre
-   que la doctrine « le PV tranche » fonctionne en aval — c'est la fiche qu'on répare ici.
+- Principe permanent, gravé dans les instructions : **« la fiche oriente, les sources
+  tranchent »**.
+- Esprit Graph Engineering, exécution pragmatique : le graphe est IMPLICITE, porté par les
+  identifiants existants (fiche → `dossier_id` → `source_file` → `chunk_id`, plus
+  `resolutions` ci-dessous). Pas de base graphe, pas de nouvelle infra : du JSON de
+  pointeurs dans `copro_synthese`.
+- Une affirmation ne peut figurer dans la fiche que si elle est CALCULÉE (SQL, RNIC,
+  Assynco) ou PORTEUSE de son pointeur source avec date. Ce qui ne peut être ni l'un ni
+  l'autre devient une QUESTION avec pointeurs — une fiche qui pose des questions ne peut
+  pas affirmer faux (l'incident, retourné en feature : « Les comptes 2023 sont-ils
+  approuvés ? → PV 30/03/2026, rés. 3, chunks … »).
+- Le narratif de reprise de dossier n'est pas perdu : il devient un produit À LA DEMANDE
+  du LLM appelant, composé en lisant les sources pointées (frais, sourcé, jetable).
 
-## P1 — Corriger le générateur (09_copro_synthese.py, 1 session)
+## 2. Cible — schéma de la fiche v2 (JSON dans `copro_synthese.faits_v2`)
 
-1. **Jamais couper un chunk.** La résolution est l'unité atomique : suppression de la
-   troncature au caractère ; le budget s'applique en CHUNKS ENTIERS (on s'arrête avant le
-   chunk qui déborde). Un dispositif n'est jamais séparé de son décompte.
-2. **Sélection décisionnelle, pas positionnelle.** Remplacer « les N premiers chars du PV »
-   par une priorisation des résolutions : (a) chunks porteurs d'un décompte
-   (regex POUR/CONTRE/tantièmes/abstention), (b) `resolution_category` décisives (comptes,
-   budget, travaux, mandat de syndic, contentieux), (c) reste si budget. Objectif : le
-   modèle voit des résolutions COMPLÈTES et décisives, pas le début du document.
-3. **Prompt durci** (3 règles nouvelles) :
-   - *Statut du dispositif* : « la phrase "l'assemblée approuve/décide…" est le texte SOUMIS
-     au vote ; seul le décompte (pour/contre/abstentions) établit le résultat ; sans
-     décompte visible dans les éléments, ne pas affirmer le sens du vote » ;
-   - *Interdiction de compter* : « n'énonce aucun total (dossiers, documents) : les comptes
-     exacts sont fournis ci-dessous » + **injection des agrégats** `par_statut`/`par_type`
-     dans le prompt (ils existent déjà dans `facts`) ;
-   - *Attribution* : toute décision citée est rattachée à la date d'AG de son en-tête,
-     jamais à une autre.
-4. **Gate post-génération avant upsert** (déterministe, zéro LLM) :
-   - toute affirmation de sens de vote (approuv|adopt|rejet|vot) dans le narratif sans
-     décompte présent dans le pv_block injecté → 1 régénération, puis échec = dégradé ;
-   - tout nombre du narratif absent des inputs (pv_block + dossiers_block + agrégats) →
-     dégradé (attrape aussi les montants inventés) ;
-   - résultat stocké : colonne `narratif_statut` (`ok` / `degrade` / `skip`) dans
-     `copro_synthese` (+ motif). Un narratif dégradé est tronqué à sa partie vérifiable ou
-     remplacé par « synthèse indisponible — consulter les PV ».
-5. **Traçabilité** : stocker les `chunk_id` injectés dans `faits` (audit : « qu'a vu le
-   générateur »), ce qui aurait tranché l'hypothèse du client en 30 secondes.
+```json
+{
+  "identite": {
+    "nom": "…", "adresse": "…", "immatriculation": "AB…",
+    "lots_principaux": 48, "lots_total": 54, "superficie_m2": 7441,
+    "periode_construction": "…",
+    "gestionnaire": {"valeur": "…", "source": "airtable"},
+    "mandat_syndic": {"valeur": "…", "echeance": "…",
+                       "source": {"source_file": "…", "chunk_ids": ["…"], "date_source": "…"}},
+    "conseil_syndical": [{"nom": "…", "role": "…",
+                           "source": {"source_file": "PV AG …", "chunk_ids": ["…"],
+                                       "date_source": "…", "statut": "extrait, à confirmer"}}]
+  },
+  "chiffres_cles": {
+    "nb_documents": 0, "periode_couverte": [2013, 2026],
+    "dossiers": {"total": 0, "par_statut": {}, "par_type": {}},
+    "doc_types": {}
+  },
+  "dossiers_chauds": [
+    {"dossier_id": "…", "titre": "…", "type": "SINISTRE", "statut": "EN_COURS",
+     "montant_estime": 22218, "derniere_activite": "…", "ref_assynco": "A25…",
+     "pointeurs": {"source_files": ["…"], "chunk_ids_entree": ["…"]},
+     "motif_selection": "statut EN_COURS + montant > seuil"}
+  ],
+  "questions_cles": [
+    {"question": "Les comptes 2023 sont-ils approuvés ?",
+     "regle": "exercice sans approbation détectée",
+     "pointeurs": {"resolutions": ["…"], "source_files": ["PV 30/03/2026"], "chunk_ids": ["…"]}}
+  ],
+  "pv_recents": [
+    {"date": "2026-03-30", "source_file": "…",
+     "resolutions_a_decompte": [{"resolution_id": "…", "objet_court": "…", "chunk_ids": ["…"]}]}
+  ]
+}
+```
 
-## P2 — Exposition MCP (avec le deploy v12 déjà prévu pour log_feedback v2)
+Règles de fabrication par section : `identite`/`chiffres_cles` = SQL + RNIC + Airtable,
+zéro LLM (les champs extraits des documents — CS, mandat — portent pointeur, date et
+statut « à confirmer ») ; `dossiers_chauds` = sélection PAR RÈGLES avec `motif_selection`
+explicite ; `questions_cles` = dérivées PAR RÈGLES du structuré (§4) ; `pv_recents` =
+liste + détection de décompte. Seul LLM admis : un TITRAGE court (`titre`, `objet_court`)
+sur texte fourni entier — jamais un fait, jamais un résultat, jamais un compte.
 
-- `PALIM_copro_overview` : renvoyer `narratif_statut` + note machine-lisible (« narratif =
-  orientation ; toute décision d'AG se revalide par recherche documentaire ») ; docstring
-  durcie dans le même sens. Champ de sortie ajouté = **bump produit majeur** des
-  Instructions au moment du deploy (conforme politique versioning du 27/08).
-- Le harness Streamlit agentique hérite via le MCP backend unique : rien à coder côté app.
+## 3. Chantiers
 
-## P3 — Recette + golden cases (1/2 session)
+### C1 — Détecteur de résolutions à décompte (module pur, fondation)
+`resolution_index.py` : sur les chunks PV_AG (déjà chunkés par résolution), détection
+regex du décompte (POUR/CONTRE/abstentions/tantièmes, art. 24/25/26) et du **résultat
+CALCULÉ depuis les nombres** (adoptée/rejetée), jamais déduit du verbe du dispositif —
+c'est le cœur anti-incident. Sortie : {chunk_id, source_file, date, n° résolution,
+décompte, resultat_calcule, confiance}. Décompte illisible (OCR) → `resultat: "indetermine"`
++ pointeur, jamais de devinette. Tests unitaires sur cas réels, dont le PV de l'incident.
 
-- **Golden case n°1** : régénérer la fiche de la copro incident → la fiche ne doit plus
-  affirmer l'approbation des comptes 2023, doit dater rejet (30/03/2026) et approbation
-  2025 (même AG), et ses comptes de dossiers doivent égaler la couche faits.
-- Tests unitaires du gate (module pur) : dispositif sans décompte → dégradé ; décompte de
-  rejet présent + narratif « approuvé » → dégradé ; nombre orphelin → dégradé ; narratif
-  propre → ok.
-- **Batch de requalification** : régénérer les fiches des copros servies (NCG + Delacour,
-  coût = ~0,01 $/fiche), publier le taux de `degrade` — c'est la mesure du problème.
-- Brancher au chantier self-learning : golden case rejoué à chaque deploy.
+### C2 — Table `resolutions` (le nœud décisionnel du graphe)
+Alimentée par C1 à l'ingestion (extension 09 ou étape dédiée post-06b) :
+`(resolution_id, code_ncg, source_file, chunk_ids[], date_ag, numero, objet_court,
+decompte_pour, decompte_contre, decompte_abstention, article_majorite, resultat, confiance)`.
+`objet_court` peut être titré par Haiku (risque faible, texte entier fourni) ; `resultat`
+est TOUJOURS calculé. Sert : questions_cles (approbation des comptes par exercice),
+`*-fiche-decision` (historique décisionnel fiable), et à terme un tool de requête dédié.
 
-## Backlog (hors périmètre, avec déclencheur)
+### C3 — Réécriture de 09_copro_synthese.py → générateur de fiche v2
+Remplace le narratif Haiku par la construction déterministe du JSON §2 (SQL + RNIC via
+l'attribut immatriculation + refs Assynco + C1/C2 + règles §4). Le champ `narratif` est
+retiré (pas conservé « au cas où » : pas de transitoire). Watermark de fraîcheur conservé
+tel quel. Coût de génération ≈ 0 (titrage optionnel seul).
 
-- **Extraction structurée des votes** (table `resolutions` : n°, objet, décompte, résultat,
-  article de majorité) : supprime la génération libre sur les votes — le narratif citerait
-  des résultats CALCULÉS. Déclencheur : si le gate dégrade plus de 20 % des fiches, ou dès
-  que la fiche de décision (`*-fiche-decision`) a besoin de l'historique décisionnel fiable
-  en structuré (même besoin, même table).
+### C4 — Contrat MCP `PALIM_copro_overview` v2 (deploy v12)
+Sortie = fiche v2 + merge Assynco live (inchangé) + `freshness` (inchangé). Docstring
+réécrite : « la fiche est un GUIDE DE CONSULTATION : suivre les pointeurs (get_chunks,
+search_dossiers, get_full_document) avant d'affirmer ; elle ne fonde aucune citation ».
+Champ narratif supprimé + schéma de sortie nouveau = **bump produit MAJEUR** des
+Instructions (politique du 27/08), embarqué avec le deploy v12 déjà prévu (log_feedback v2).
 
-## Ordre et effort
+### C5 — Instructions (template + NCG + Delacour + CSG)
+Bloc « fiche de synthèse » réécrit : pattern d'usage imposé — overview → suivre les
+pointeurs pertinents → répondre sourcé depuis les chunks ; les `questions_cles` sont des
+pistes d'instruction, jamais des réponses ; toute donnée `à confirmer` se revalide avant
+citation externe. Même numéro produit que le deploy v12 (bump majeur commun).
 
-| Étape | Effort | Dépendance |
+### C6 — Recette
+- **Golden case n°1 (l'incident)** : la fiche v2 de la copro Delacour doit produire la
+  question « comptes 2023 approuvés ? » pointant rés. 3 ET l'entrée `resolutions` doit
+  porter `resultat=rejetee` (calculé : 2 606 / 4 867 / 58) ; rés. 4 (comptes 2025) →
+  `adoptee`. Puis test bout-en-bout : le LLM appelant (harness agentique) répond « rejetés
+  le 30/03/2026 » en citant le PV.
+- Tests unitaires C1 (décomptes variés, OCR dégradé → indetermine, unanimité, art. 24/25).
+- Batch de régénération des fiches servies (NCG + Delacour) + spot-check de 5 fiches.
+- Golden case branché au chantier self-learning (rejoué à chaque deploy).
+
+## 4. Questions clés — règles de dérivation initiales (toutes sur données calculées)
+
+| Règle | Source | Exemple produit |
 |---|---|---|
-| P0 instructions + signalement | 1 h | aucune |
-| P1 générateur + gate + tests | 1 session | aucune |
-| P3 recette + batch | 1/2 session | P1 |
-| P2 exposition MCP | portée par le deploy v12 | P1 |
+| Exercice comptable sans approbation `adoptee` détectée | C2 (objet ~ « comptes exercice N ») | « Comptes 2023 et 2024 : aucune approbation acquise — voir rés. 3 PV 30/03/2026 (rejetée) » |
+| Résolution à `resultat=indetermine` (OCR) | C2 | « Rés. 7 du PV … : décompte illisible, vérifier le PV papier » |
+| Mandat de syndic sans échéance future détectée | C2 / documents | pointeur PV du dernier mandat |
+| Contrat à échéance < 12 mois ou sans date connue | documents (statut/dates) | pointeur contrat |
+| Sinistre ouvert depuis > 18 mois | dossiers | pointeur dossier + ref Assynco |
+| Écart dossiers RAG vs Assynco live | overview (déjà mergé) | « 3 sinistres Assynco sans dossier documentaire » |
+
+La liste est extensible ; chaque règle nouvelle doit produire question + pointeurs, jamais
+une conclusion.
+
+## 5. Abandonné (du plan v1 du 28/08) — assumé, sans transition
+
+Gate post-génération, prompt durci, colonne `narratif_statut`, régénération corrigée du
+narratif : sans objet, il n'y a plus de narratif précalculé. L'ancien narratif reste servi
+tel quel jusqu'au deploy v12 — la doctrine d'usage (« la fiche oriente, les sources
+tranchent ») entre elle dans les instructions SANS attendre, car elle est permanente et
+vaut pour v1 comme v2. Backlog lointain : mini-narratif optionnel généré depuis la fiche
+v2 validée elle-même (pas depuis les chunks) — hors chemin, il réintroduirait de la
+génération libre.
+
+## 6. Ordre, effort, dépendances
+
+| Étape | Contenu | Effort | Dépend de |
+|---|---|---|---|
+| 1 | C5 doctrine dans les instructions (dates bumpées) + golden case consigné (self-learning F1) | 1 h | — |
+| 2 | C1 détecteur + tests (dont PV incident) | 1/2 session | — |
+| 3 | C2 table resolutions + alimentation | 1/2 session | C1 |
+| 4 | C3 fiche v2 (09 réécrit) + batch local | 1 session | C1, C2 |
+| 5 | C4 overview v2 + C5 bump majeur | portés par deploy v12 | C3 |
+| 6 | C6 recette bout-en-bout | 1/2 session | C4 |
+
+Total ≈ 2,5 sessions + le deploy v12 déjà planifié. Aucun chantier jetable : C1/C2
+servent aussi `*-fiche-decision` et le futur tool de requête sur les résolutions.
