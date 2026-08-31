@@ -140,6 +140,18 @@ pas établi. » Protocole complet (5 cas) répliqué dans les skills `*-note-jur
 `*-fiche-decision` — pas de skill dédié « lecture PV » (compétence transverse, pas une
 tâche : problème de déclenchement permanent).
 
+**C1 LIVRÉ (01/09)** : `resolution_index.py` + `tests/test_resolution_index.py` (10 cas,
+tous verts). Smoke prod sur 38 541 chunks PV_AG : 5 546 résolutions à résultat établi
+(4 614 adoptées, 352 rejetées, 343 retirées, sources : 2 258 proclamation seule / 2 217
+décompte+proclamation / 834 décompte seul), 236 contradictoires correctement REMONTÉS.
+Leçons pour C2 : (a) le KPI se mesure PAR RÉSOLUTION, pas par chunk — 85,6 % des chunks
+sont des fragments sans vote (feuilles de présence, annexes, suites de longues
+résolutions « [Suite résolution N] ») ; C2 doit REGROUPER les chunks d'une même
+résolution avant d'indexer (marqueurs de suite + chunk_index + resolution_category) ;
+(b) les PV tabulaires modernes portent une « base de calcul : N tantièmes » (assiette,
+pas un vote — garde-fou codé) et des votes détaillés par copropriétaire ; (c) revue
+d'échantillon des 236 contradictoires à faire en C2 après regroupement.
+
 ### C2 — Table `resolutions` (le nœud décisionnel du graphe)
 Alimentée par C1 à l'ingestion (extension 09 ou étape dédiée post-06b) :
 `(resolution_id, code_ncg, source_file, chunk_ids[], date_ag, numero, objet_court,
