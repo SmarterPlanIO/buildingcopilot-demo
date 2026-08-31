@@ -93,13 +93,30 @@ sur texte fourni entier — jamais un fait, jamais un résultat, jamais un compt
 
 ## 3. Chantiers
 
-### C1 — Détecteur de résolutions à décompte (module pur, fondation)
-`resolution_index.py` : sur les chunks PV_AG (déjà chunkés par résolution), détection
-regex du décompte (POUR/CONTRE/abstentions/tantièmes, art. 24/25/26) et du **résultat
-CALCULÉ depuis les nombres** (adoptée/rejetée), jamais déduit du verbe du dispositif —
-c'est le cœur anti-incident. Sortie : {chunk_id, source_file, date, n° résolution,
-décompte, resultat_calcule, confiance}. Décompte illisible (OCR) → `resultat: "indetermine"`
-+ pointeur, jamais de devinette. Tests unitaires sur cas réels, dont le PV de l'incident.
+### C1 — Détecteur de résultat de résolution (module pur, fondation)
+`resolution_index.py` : sur les chunks PV_AG (déjà chunkés par résolution), détection à
+**deux canaux indépendants + réconciliation**. Une résolution contient TROIS objets de
+statuts différents — le distinguo est le cœur anti-incident :
+- le **dispositif** (« L'assemblée approuve… », forme ACTIVE) : texte soumis au vote,
+  JAMAIS utilisé pour le résultat (c'est lui qui a piégé le narratif) ;
+- le **décompte** (POUR/CONTRE/abstentions/tantièmes, art. 24/25/26) → canal A :
+  résultat CALCULÉ depuis les nombres ;
+- la **proclamation** (« Cette résolution est adoptée/rejetée… », « adoptée à
+  l'unanimité/à la majorité », forme PASSIVE, positionnée après le dispositif) → canal B :
+  résultat LU dans le texte du PV. Ce n'est pas une inférence : quand le tableau de votes
+  est illisible (scan/format) mais que la proclamation est nette, le PV lui-même énonce le
+  résultat — « les sources tranchent » inclut ce cas.
+
+Réconciliation : A+B concordants → `resultat` (source `decompte+proclamation`, confiance
+haute) ; A seul → calculé (haute) ; **B seul → résultat proclamé (source `proclamation`,
+confiance moyenne + flag `decompte_illisible`)** ; A et B **discordants** →
+`resultat: "contradictoire"` + question clé générée (jamais tranché en silence) ; ni A ni
+B → `indetermine`. Statut à part `retiree` pour les résolutions retirées / non soumises au
+vote. Les patterns de proclamation exigent la forme passive et rejettent les verbes actifs
+du dispositif (l'asymétrie grammaticale rend la distinction robuste en regex).
+Sortie : {chunk_id, source_file, date, n° résolution, décompte, proclamation_detectee,
+resultat, source_resultat, confiance, flags}. Tests unitaires sur cas réels : PV de
+l'incident, unanimité sans chiffres, tableau illisible + proclamation nette, discordance.
 
 ### C2 — Table `resolutions` (le nœud décisionnel du graphe)
 Alimentée par C1 à l'ingestion (extension 09 ou étape dédiée post-06b) :
