@@ -143,6 +143,50 @@ def test_index_chunks_metadonnees():
     print("OK index_chunks : metadonnees propagees")
 
 
+def test_groupement_suite_resolution():
+    """C2 : les fragments '[Suite resolution N]' se rattachent au chunk precedent ;
+    le decompte arrivant dans le DERNIER fragment etablit le resultat du GROUPE
+    (le cas des 'contradictoires' du smoke par chunk isole)."""
+    from resolution_index import group_chunks, index_document
+    doc = [
+        ("c1", 1, """DIX-NEUVIÈME RÉSOLUTION — TRAVAUX DE REMPLACEMENT COLONNE MONTANTE RDC
+L'assemblée générale décide les travaux de remplacement de la colonne montante,
+pour un montant de 48 000 euros TTC, financés par appel de fonds spécial."""),
+        ("c2", 2, """[Suite résolution 19- TRAVAUX DE REMPLACEMENT COLONNE MONTANTE RDC]
+Modalités de financement : trois appels de fonds aux 1er janvier, 1er avril, 1er juillet."""),
+        ("c3", 3, """[Suite résolution 19- TRAVAUX DE REMPLACEMENT COLONNE MONTANTE RDC]
+Ont voté pour : 5 900 tantièmes. Ont voté contre : 800 tantièmes. Abstention : 0.
+La résolution est adoptée à la majorité de l'article 24."""),
+        ("c4", 4, """VINGTIÈME RÉSOLUTION — Questions diverses
+Aucune décision n'est prise sur ce point."""),
+    ]
+    groups = group_chunks(doc)
+    assert [len(g) for g in groups] == [3, 1], groups
+    out = index_document(doc)
+    assert len(out) == 2, out
+    r19 = out[0]
+    assert r19["chunk_ids"] == ["c1", "c2", "c3"], r19
+    assert r19["resultat"] == "adoptee" and r19["confiance"] == "haute", r19
+    assert r19["numero"] == "19", r19
+    assert "COLONNE MONTANTE" in r19["objet_court"].upper(), r19
+    assert out[1]["resultat"] == "indetermine", out[1]
+    print("OK groupement suites : decompte du dernier fragment -> resultat du GROUPE")
+
+
+def test_groupe_orphelin_et_numero_ordinal():
+    from resolution_index import index_document
+    doc = [("c9", 5, """[Suite résolution 7- RAVALEMENT]
+La résolution est adoptée à la majorité de l'article 24.""")]
+    out = index_document(doc)
+    assert "groupe_orphelin" in out[0]["flags"], out[0]
+    doc2 = [("c1", 1, """TROISIÈME RÉSOLUTION — Approbation des comptes
+Pour : 100 tantièmes. Contre : 900 tantièmes. Rejetée.""")]
+    out2 = index_document(doc2)
+    assert out2[0]["numero"] == "3", out2[0]
+    assert out2[0]["resultat"] == "rejetee", out2[0]
+    print("OK groupe orphelin flague + numero ordinal extrait")
+
+
 if __name__ == "__main__":
     test_incident_res3_rejetee()
     test_incident_res4_adoptee()
@@ -154,4 +198,6 @@ if __name__ == "__main__":
     test_dispositif_seul_jamais_utilise()
     test_retiree_et_tronquee()
     test_index_chunks_metadonnees()
+    test_groupement_suite_resolution()
+    test_groupe_orphelin_et_numero_ordinal()
     print("\nTous les tests C1 resolution_index passent.")

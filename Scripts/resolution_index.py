@@ -50,8 +50,15 @@ def _norm(text):
 # ── Ancre décompte ──
 # Mots-clés d'un décompte. "POUR" seul est trop ambigu en français : l'ancre exige
 # au moins 2 mots-clés distincts dans une même fenêtre, ou 1 mot-clé + "TANTIEMES".
-_KW_POUR = re.compile(r"\b(?:ONT\s+VOTE\s+POUR|VOTES?\s+POUR|VOIX\s+POUR|POUR\s*[:\-–]|POUR\s+\d)")
-_KW_CONTRE = re.compile(r"\b(?:ONT\s+VOTE\s+CONTRE|VOTES?\s+CONTRE|VOIX\s+CONTRE|CONTRE\s*[:\-–]|CONTRE\s+\d|\d\s+CONTRE\b)")
+_KW_POUR_STRONG = r"ONT\s+VOTE\s+POUR|VOTES?\s+POUR|VOIX\s+POUR"
+_KW_CONTRE_STRONG = r"ONT\s+VOTE\s+CONTRE|VOTES?\s+CONTRE|VOIX\s+CONTRE"
+_KW_POUR = re.compile(rf"\b(?:{_KW_POUR_STRONG}|POUR\s*[:\-–]|POUR\s+\d)")
+_KW_CONTRE = re.compile(rf"\b(?:{_KW_CONTRE_STRONG}|CONTRE\s*[:\-–]|CONTRE\s+\d|\d\s+CONTRE\b)")
+_KW_STRONG = re.compile(rf"\b(?:{_KW_POUR_STRONG}|{_KW_CONTRE_STRONG})")
+# Marqueurs des PV tabulaires (ATHOME et similaires) : le vote y est détaillé PAR
+# copropriétaire en colonnes — les nombres proches d'un POUR/CONTRE nu sont des
+# miettes de tableau (tantièmes d'un votant, en-têtes), pas les totaux.
+_TABULAR_RE = re.compile(r"BASE\s+DE\s+CALCUL|TYPE\s+DE\s+VOTE")
 _KW_ABST = re.compile(r"\bABSTENTIONS?\b|\bS'ABSTIEN\w*|\bABSTENANTS?\b")
 _KW_TANT = re.compile(r"\bTANTIEMES?\b|\bMILLIEMES?\b|/\s*10\s*000|\bVOIX\b")
 _ANCHOR_WINDOW = 320   # deux mots-clés à moins de N chars = même décompte
@@ -233,6 +240,17 @@ def index_resolution(text):
     calc, calc_note, proc = None, None, None
     if cluster:
         counts = _extract_counts(tn, cluster)
+        # Plausibilité : (a) en format tabulaire, un décompte issu de POUR/CONTRE
+        # nus est une miette de tableau -> on ne garde que les formes fortes
+        # (« ont voté pour ») ; (b) pour+contre = 0 n'est jamais un vote réel.
+        if counts and _TABULAR_RE.search(tn):
+            strong_zone = any(_KW_STRONG.search(tn, max(0, s - 2), e + 2)
+                              for s, e, k in cluster if k in ("pour", "contre"))
+            if not strong_zone:
+                counts = {}
+        if counts and (counts.get("pour") is not None and counts.get("contre") is not None
+                       and counts["pour"] + counts["contre"] == 0):
+            counts = {}
         cluster_end = cluster[-1][1]
         # la zone de constat commence après le dernier mot-clé du décompte ; on ne
         # saute que le nombre IMMÉDIATEMENT adjacent (ex. « contre : 4 867 ») — une
@@ -286,5 +304,91 @@ def index_chunks(rows):
     for chunk_id, source_file, date, text in rows:
         r = index_resolution(text)
         r.update(chunk_id=chunk_id, source_file=source_file, date=str(date) if date else None)
+        out.append(r)
+    return out
+
+
+# ════════════════════════════════════════════════════════════════
+# C2 — Regroupement des fragments par RÉSOLUTION (les longues résolutions sont
+# éclatées par 03_chunking, qui préfixe chaque sous-chunk de « [Suite résolution
+# {header}] » — marqueur généré par NOTRE chunker, donc fiable). Le KPI de
+# détection se mesure par résolution reconstituée, pas par chunk (smoke 01/09 :
+# 85,6 % des chunks PV sont des fragments sans vote).
+# ════════════════════════════════════════════════════════════════
+
+_SUITE_RE = re.compile(r"^\s*\[SUITE RESOLUTION\b", re.IGNORECASE)
+
+_ORDINAUX = {
+    "PREMIERE": 1, "DEUXIEME": 2, "SECONDE": 2, "TROISIEME": 3, "QUATRIEME": 4,
+    "CINQUIEME": 5, "SIXIEME": 6, "SEPTIEME": 7, "HUITIEME": 8, "NEUVIEME": 9,
+    "DIXIEME": 10, "ONZIEME": 11, "DOUZIEME": 12, "TREIZIEME": 13,
+    "QUATORZIEME": 14, "QUINZIEME": 15, "SEIZIEME": 16, "DIX-SEPTIEME": 17,
+    "DIX-HUITIEME": 18, "DIX-NEUVIEME": 19, "VINGTIEME": 20,
+    "VINGT-ET-UNIEME": 21, "VINGT ET UNIEME": 21, "VINGT-DEUXIEME": 22,
+    "VINGT-TROISIEME": 23, "VINGT-QUATRIEME": 24, "VINGT-CINQUIEME": 25,
+    "VINGT-SIXIEME": 26, "VINGT-SEPTIEME": 27, "VINGT-HUITIEME": 28,
+    "VINGT-NEUVIEME": 29, "TRENTIEME": 30,
+}
+_ORD_RE = re.compile(r"\b(" + "|".join(sorted(_ORDINAUX, key=len, reverse=True))
+                     + r")\s+RESOLUTION")
+_NUMDOT_RE = re.compile(r"^\s*(\d{1,3}(?:[-.]\d{1,2})?)\s*[-–—.: ]\s*\S")
+_RESNUM_RE = re.compile(r"RESOLUTION\s*(?:N\s*°|NO|NUM(?:ERO)?)?\s*[.:]?\s*(\d{1,3})")
+_NUMRES_RE = re.compile(r"\b(\d{1,3})\s*(?:E|EME|ERE)?\s*RESOLUTION")
+
+
+def _extract_numero(head_norm):
+    """Numéro de résolution depuis la tête du texte normalisé (best effort)."""
+    m = _ORD_RE.search(head_norm[:160])
+    if m:
+        return str(_ORDINAUX[m.group(1)])
+    for rx in (_RESNUM_RE, _NUMRES_RE):
+        m = rx.search(head_norm[:160])
+        if m:
+            return m.group(1)
+    m = _NUMDOT_RE.match(head_norm)          # formats tabulaires « 17-1 SONDAGE… »
+    if m:
+        return m.group(1)
+    return None
+
+
+def _objet_court(text):
+    """Première ligne significative du groupe, marqueur de suite retiré. Déterministe
+    (pas de titrage LLM en C2 : suffisant pour l'annuaire, zéro risque)."""
+    for line in text.split("\n"):
+        line = re.sub(r"^\s*\[Suite résolution[^\]]*\]\s*", "", line,
+                      flags=re.IGNORECASE).strip()
+        if len(line) >= 8:
+            return line[:140]
+    return (text.strip()[:140] or None)
+
+
+def group_chunks(doc_chunks):
+    """doc_chunks : [(chunk_id, chunk_index, text)] d'UN document, triés par
+    chunk_index. Retourne [[(chunk_id, chunk_index, text), ...], ...] — un groupe
+    par résolution : un chunk « [Suite résolution …] » se rattache au précédent."""
+    groups = []
+    for row in sorted(doc_chunks, key=lambda r: (r[1] if r[1] is not None else 0)):
+        text = row[2] or ""
+        if groups and _SUITE_RE.match(_norm(text[:60])):
+            groups[-1].append(row)
+        else:
+            groups.append([row])
+    return groups
+
+
+def index_document(doc_chunks):
+    """Regroupe les chunks d'un document PV et indexe chaque RÉSOLUTION reconstituée
+    (texte concaténé du groupe). Retourne [{chunk_ids, numero, objet_court,
+    groupe_orphelin?, ...analyse C1}]."""
+    out = []
+    for group in group_chunks(doc_chunks):
+        full_text = "\n".join((r[2] or "") for r in group)
+        r = index_resolution(full_text)
+        r["chunk_ids"] = [g[0] for g in group]
+        r["numero"] = _extract_numero(_norm(full_text))
+        r["objet_court"] = _objet_court(full_text)
+        if _SUITE_RE.match(_norm((group[0][2] or "")[:60])):
+            # le début de la résolution manque (hors périmètre du doc/chunk 0)
+            r["flags"].append("groupe_orphelin")
         out.append(r)
     return out

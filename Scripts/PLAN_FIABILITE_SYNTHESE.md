@@ -160,6 +160,21 @@ decompte_pour, decompte_contre, decompte_abstention, article_majorite, resultat,
 est TOUJOURS calculé. Sert : questions_cles (approbation des comptes par exercice),
 `*-fiche-decision` (historique décisionnel fiable), et à terme un tool de requête dédié.
 
+**C2 LIVRÉ (01/09)** : regroupement par résolution dans `resolution_index.py`
+(`group_chunks`/`index_document` — marqueur « [Suite résolution …] » du chunker, numéro
+extrait ordinaux/tabulaires, objet_court déterministe, flag groupe_orphelin) ; table
+`resolutions` (06a) ; loader `09b_resolutions.py` (--copro/--all, DELETE+INSERT per-copro,
+resolution_id content-addressed, filtre des groupes hors-vote). Garde-fous de plausibilité
+issus de la revue des contradictoires : décompte pour+contre=0 invalide ; en PV TABULAIRE
+(« base de calcul »/« type de vote », format ATHOME : vote détaillé PAR copropriétaire),
+seules les formes fortes (« ont voté pour ») valent décompte — les POUR/CONTRE nus sont
+des miettes de tableau. Run prod (19 copros NCG) : 12 620 résolutions en table (20 532
+groupes hors-vote écartés), **4 876 résultats établis (38,6 %)** : 4 302 adoptées, 261
+rejetées, 313 retirées ; contradictoires 223 → **66** après plausibilité (revue du solde
+à poursuivre) ; 7 678 indéterminées À SIGNAL = matière des questions clés. 12+2 tests.
+Anomalie data relevée : 5440 ASFL RODIN = 14 040 chunks PV_AG pour 400 m² (classification
+à auditer, hors C2).
+
 ### C3 — Réécriture de 09_copro_synthese.py → générateur de fiche v2
 Remplace le narratif Haiku par la construction déterministe du JSON §2 (SQL + RNIC via
 l'attribut immatriculation + refs Assynco + C1/C2 + règles §4). Le champ `narratif` est
