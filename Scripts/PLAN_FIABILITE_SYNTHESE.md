@@ -101,22 +101,44 @@ statuts différents — le distinguo est le cœur anti-incident :
   JAMAIS utilisé pour le résultat (c'est lui qui a piégé le narratif) ;
 - le **décompte** (POUR/CONTRE/abstentions/tantièmes, art. 24/25/26) → canal A :
   résultat CALCULÉ depuis les nombres ;
-- la **proclamation** (« Cette résolution est adoptée/rejetée… », « adoptée à
-  l'unanimité/à la majorité », forme PASSIVE, positionnée après le dispositif) → canal B :
-  résultat LU dans le texte du PV. Ce n'est pas une inférence : quand le tableau de votes
-  est illisible (scan/format) mais que la proclamation est nette, le PV lui-même énonce le
-  résultat — « les sources tranchent » inclut ce cas.
+- la **proclamation** → canal B : résultat LU dans le texte du PV. Le critère qui la
+  distingue du dispositif est **POSITIONNEL, pas grammatical** (correction Thai 01/09 :
+  des PV réels concluent par un « l'assemblée approuve… » ACTIF après le décompte — la
+  forme passive n'est qu'un signal, pas un critère). Règle : ce qui précède le décompte
+  est la proposition soumise au vote ; ce qui le suit, ou clôt le bloc résolution, est le
+  constat. Ce n'est pas une inférence : quand le tableau de votes est illisible mais que
+  la conclusion est nette, le PV lui-même énonce le résultat — « les sources tranchent »
+  inclut ce cas.
+
+Mécanique positionnelle : le décompte sert d'**ANCRE même illisible** — un tableau
+massacré par le scan laisse des traces localisables (POUR/CONTRE, « tantièmes », lignes de
+chiffres cassées) qui partagent la résolution en avant (dispositif) / après (proclamation),
+même quand les nombres sont incalculables. Sans ancre (unanimité sans chiffres), la phrase
+de CLÔTURE du bloc est une proclamation probable, le lexique (adoptée/rejetée/approuve)
+modulant la confiance. Deux flags dégradent au lieu de parier : `resolution_tronquee`
+(ni décompte ni clôture visibles — le critère « fin de texte » exige de voir la vraie fin,
+d'où les résolutions ENTIÈRES) et `ordre_anormal` (proclamation avant le décompte —
+Textract peut réordonner une mise en page à colonnes).
 
 Réconciliation : A+B concordants → `resultat` (source `decompte+proclamation`, confiance
 haute) ; A seul → calculé (haute) ; **B seul → résultat proclamé (source `proclamation`,
 confiance moyenne + flag `decompte_illisible`)** ; A et B **discordants** →
 `resultat: "contradictoire"` + question clé générée (jamais tranché en silence) ; ni A ni
 B → `indetermine`. Statut à part `retiree` pour les résolutions retirées / non soumises au
-vote. Les patterns de proclamation exigent la forme passive et rejettent les verbes actifs
-du dispositif (l'asymétrie grammaticale rend la distinction robuste en regex).
+vote.
 Sortie : {chunk_id, source_file, date, n° résolution, décompte, proclamation_detectee,
 resultat, source_resultat, confiance, flags}. Tests unitaires sur cas réels : PV de
-l'incident, unanimité sans chiffres, tableau illisible + proclamation nette, discordance.
+l'incident, unanimité sans chiffres, tableau illisible + conclusion nette, proclamation
+ACTIVE post-décompte (« l'assemblée approuve » en clôture = résultat), discordance,
+résolution tronquée.
+
+Règle courte pour le Bloc 4 des instructions (C5) : « le texte d'une résolution se lit
+dans l'ordre : ce qui précède le décompte des voix est la proposition soumise au vote ;
+seule la conclusion qui suit le décompte, ou clôt la résolution, établit le résultat —
+quelle que soit sa formulation. Sans décompte ni conclusion visibles, le résultat n'est
+pas établi. » Protocole complet (5 cas) répliqué dans les skills `*-note-juridique` et
+`*-fiche-decision` — pas de skill dédié « lecture PV » (compétence transverse, pas une
+tâche : problème de déclenchement permanent).
 
 ### C2 — Table `resolutions` (le nœud décisionnel du graphe)
 Alimentée par C1 à l'ingestion (extension 09 ou étape dédiée post-06b) :
