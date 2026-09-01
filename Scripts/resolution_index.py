@@ -76,7 +76,8 @@ _NUM_AFTER = 80        # distance max mot-clé -> nombre associé
 _NEANT_RE = re.compile(r"[\s:—\-–]{0,8}(?:N[E]?ANTS?|AUCUNE?)\b")
 _NUM_RE = re.compile(r"\d[\d\s., ]*\d|\d")
 # c5 : « <n> copropriétaires … totalisant <N> [tantièmes|voix] » -> le compte = N
-_QUALIF_RE = re.compile(r"\s*(?:COPROPRI[E]?TAIRES?|MEMBRES?)\b")
+# ASSOCIES : terme des ASL/AFUL (« votent pour 6 Associés totalisant 84025 tantièmes »)
+_QUALIF_RE = re.compile(r"\s*(?:COPROPRI[E]?TAIRES?|MEMBRES?|ASSOCIES?)\b")
 _TOTALISANT_RE = re.compile(r"TOTALISANT\s*:?\s*(\d[\d\s., ]*\d|\d)")
 # c6 (repli) : « <N> voix POUR »
 _VOIX_AVANT = {

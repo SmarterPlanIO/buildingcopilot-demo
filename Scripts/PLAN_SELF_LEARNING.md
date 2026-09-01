@@ -285,3 +285,20 @@ Toutes lisibles dans Langfuse ou dans la sortie d'`eval_golden.py` :
    flux de feedbacks ne grossisse : c'est le filet sous tous les fixes à venir.
 3. **P2** — process hebdo + section Leçons. Démarre à la première itération réelle.
 4. **P3** — `NOTE_VALIDEE`, sur déclencheur (≥ 3 cas F5).
+
+## Golden case n°1 — fiche de synthèse (branché 01/09/2026)
+
+Incident fondateur : une fiche à narratif généré a affirmé l'approbation de comptes en
+réalité REJETÉS (Delacour, PV du 30/03/2026, rés. 3 : 2 606 pour / 4 867 contre).
+Corrigé par le redesign « fiche = annuaire » (PLAN_FIABILITE_SYNTHESE.md).
+
+**Sonde rejouable, à passer après CHAQUE deploy et sur CHAQUE tenant** :
+`Scripts/tests/recette_fiche_v2.py` (invariants de structure, intégrité référentielle de
+tous les pointeurs, cohérence des chiffres avec la base, contrat MCP `fiche_version=v2`
+sans narratif, golden case « comptes de l'exercice N ») et
+`Scripts/tests/test_resolution_index.py` (22 cas dont les textes réels de la revue du
+01/09 : dispositif pris pour la décision, proclamation active post-décompte, tableau
+illisible, discordance, art. 25).
+
+Critère de sortie d'un rollout tenant : les deux passent, sinon la migration n'est pas
+terminée.
