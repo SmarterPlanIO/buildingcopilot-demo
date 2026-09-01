@@ -243,6 +243,23 @@ v1 : décrire un annuaire qu'ils n'ont pas serait mensonger), avec la note que l
 avec la migration de leur déploiement. Template + AGENTS.md alignés.
 RESTE : C6 (recette golden case + bout-en-bout) puis deploy v12 et recollage des 3 clients.
 
+**C6 LIVRÉ (01/09)** : `tests/recette_fiche_v2.py` — recette REJOUABLE PAR TENANT
+(`PALIM_CLIENT=...`), critère de sortie de chaque rollout et sonde de non-régression après
+chaque deploy. Elle prouve des propriétés, pas l'absence d'exception : I1 structure (5
+sections, aucune clé de prose libre), I2 pointeurs présents, **I3 intégrité référentielle
+de TOUS les pointeurs** (un chunk_id / resolution_id / dossier_id mort enverrait le LLM
+dans le vide), I4 cohérence des chiffres avec la base (le symptôme v1 : narratif 25
+dossiers vs faits 37 dans la même fiche), I5 aucune résolution établie sans source, I6
+contrat MCP (`fiche_version=v2`, aucun narratif servi), G golden case « comptes de
+l'exercice N ». **Run NCG : 19/19 fiches, 54 questions, 110 dossiers chauds, 1 463
+pointeurs vérifiés, 0 échec.**
+Trouvaille de recette (vérification sur pièces) : la question « comptes 2021 » de 5750 est
+un VRAI POSITIF de prudence — le texte s'arrête après « Votent POUR 6 Associés totalisant
+84025/84025 tantièmes », sans contre ni proclamation : l'adoption n'est pas établissable,
+la question est légitime, le lecteur tranche sur pièce. Design validé par le cas réel.
+Au passage : « ASSOCIES » (ASL/AFUL) ajouté aux qualificatifs de décompte. Golden case
+branché à `PLAN_SELF_LEARNING.md` (rejoué à chaque deploy).
+
 ## 4. Questions clés — règles de dérivation initiales (toutes sur données calculées)
 
 | Règle | Source | Exemple produit |
