@@ -228,6 +228,21 @@ citation externe. Même numéro produit que le deploy v12 (bump majeur commun).
 - Batch de régénération des fiches servies (NCG + Delacour) + spot-check de 5 fiches.
 - Golden case branché au chantier self-learning (rejoué à chaque deploy).
 
+**C4+C5 LIVRÉS (01/09, `3b5231c`)** — embarqués au deploy v12.
+C4 : `get_overview` sert 3 régimes explicites via `fiche_version` — v2 (annuaire, champs
+`fiche`+`usage`, plus de narratif), v1 (ancien narratif + champ `avertissement` : statut de
+source le plus bas — pour Delacour/CSG non migrés), aucune (faits live). Repli explicite,
+jamais silencieux : colonnes absentes → try/except → v1. Testé sur les 3 régimes en prod.
+Docstring du tool réécrite (le contrat que lit le LLM) : la fiche oriente et pointe,
+`questions_cles` = pistes d'instruction jamais des réponses, interdiction de citer un vote
+/ montant / comptage depuis la fiche.
+C5 : NCG **v4.0** (bump MAJEUR, contrat de sortie modifié) = bloc complet fiche v2 (5
+sections, pattern d'usage imposé, interdits, rappel du critère positionnel de lecture d'un
+PV). Delacour **v1.2** et CSG **v1.1** = doctrine SEULE (leur base sert encore le narratif
+v1 : décrire un annuaire qu'ils n'ont pas serait mensonger), avec la note que la v2 arrive
+avec la migration de leur déploiement. Template + AGENTS.md alignés.
+RESTE : C6 (recette golden case + bout-en-bout) puis deploy v12 et recollage des 3 clients.
+
 ## 4. Questions clés — règles de dérivation initiales (toutes sur données calculées)
 
 | Règle | Source | Exemple produit |
