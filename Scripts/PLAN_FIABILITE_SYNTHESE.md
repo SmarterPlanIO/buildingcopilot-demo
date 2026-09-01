@@ -189,6 +189,22 @@ minutes). Pour chaque tenant : `06a_init_db.py` (table resolutions) + `09b_resol
 --all` + fiche v2 (C3) + le deploy v12 qui touche déjà toutes les Lambdas. La migration DB
 accompagne le deploy, jamais l'inverse (un tool v2 sans table = dégradé silencieux).
 
+**C3 LIVRÉ (01/09)** : `09_copro_synthese.py` réécrit en générateur d'ANNUAIRE — narratif
+Haiku supprimé, **zéro LLM, 0 $**. Écrit dans les colonnes NEUVES `faits_v2` /
+`fiche_version` / `fiche_v2_generated_at` (06a) : `narratif` et `faits` v1 intacts, donc
+**zéro impact prod avant le deploy v12** (rollback = ignorer les colonnes). Sections :
+identité (immat + POINTEURS mandat/CS vers la dernière résolution adoptée, jamais de nom
+extrait) ; chiffres SQL (docs, chunks, doc_types, dossiers, résolutions par résultat) ;
+dossiers chauds (règles + `motif_selection` + pointeurs source_files/chunk_ids, repli sur
+les documents liés quand `chunks.dossier_id` est vide) ; **questions clés** dérivées par
+règles (R1 exercice sans approbation acquise = le cas de l'incident, R2 résolutions au
+sens non établi, R3 dossiers > 18 mois, R4 AG manquante, R5 sinistre Assynco sans pièce) ;
+PV récents (filtrés : seuls les documents portant ≥1 résolution établie — les feuilles de
+présence et VPC classées PV_AG polluaient l'annuaire). `09b` câblé AVANT `09` dans
+`ingest.py` (même gate PV_AG/SINISTRE). Run prod 19 copros : **54 questions clés, 110
+dossiers chauds, 0 $**. Exemples réels : 5750 « comptes 2021 approuvés ? » + 6 dossiers
+> 18 mois ; 5390 trois exercices sans approbation acquise + 1 sinistre Assynco sans pièce.
+
 ### C4 — Contrat MCP `PALIM_copro_overview` v2 (deploy v12)
 Sortie = fiche v2 + merge Assynco live (inchangé) + `freshness` (inchangé). Docstring
 réécrite : « la fiche est un GUIDE DE CONSULTATION : suivre les pointeurs (get_chunks,

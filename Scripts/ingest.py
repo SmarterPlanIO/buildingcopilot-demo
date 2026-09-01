@@ -207,9 +207,11 @@ def ingest_copro(code, dry=False, keep_shards=False):
     else:
         print("\n[Assynco] pas de donnees Airtable pour cette copro -> 08 saute")
 
-    # --- Tier-2 gate 09 (fiche narratif) : SSI PV_AG ou SINISTRE a change ---
+    # --- Tier-2 gate 09 : SSI PV_AG ou SINISTRE a change. 09b (table
+    # resolutions) tourne AVANT 09 : la fiche v2 (annuaire) la lit. ---
     if delta_types & GATE_09:
         print("\n[Tier-2] delta touche PV_AG/SINISTRE -> regenere la fiche (09)")
+        run("09b_resolutions.py", code, dry)
         run("09_copro_synthese.py", code, dry)
     else:
         print("\n[Tier-2] ni PV_AG ni SINISTRE dans le delta -> 09 SAUTE (faits live restent a jour)")
