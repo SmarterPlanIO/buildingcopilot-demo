@@ -118,13 +118,49 @@ def _fetch_immatriculation(conn, code):
         return None
 
 
-def get_overview(conn, code, assynco_nb_sinistres=None):
-    """Fiche synthèse d'une copro. Toujours {ok:True} : dégradé utile si non pré-calculée.
+# Doctrine servie AVEC la fiche : elle vaut pour la v2 (annuaire) comme pour le
+# narratif v1 encore servi aux tenants non migrés — c'est la leçon de l'incident
+# du 27/08 (un narratif affirmait l'approbation de comptes en réalité rejetés).
+_USAGE_V2 = ("ANNUAIRE : cette fiche oriente, elle n'établit rien. Suivre les pointeurs "
+             "(chunk_ids, source_files, dossier_id, resolution_id) et lire les sources "
+             "avant toute affirmation. Un sens de vote se vérifie sur le PV.")
+_USAGE_V1 = ("Fiche de génération ANCIENNE (narratif rédigé automatiquement) : statut de "
+             "source le plus bas. Ne JAMAIS en citer un sens de vote, une décision d'AG, "
+             "un montant ni un comptage — revalider par recherche documentaire scopée.")
 
-    Retourne narratif + faits + fraîcheur. Si la fiche n'existe pas encore, renvoie les
-    faits live (SQL) avec precomputed=False et narratif=None (jamais d'échec dur).
+
+def _fetch_fiche_v2(conn, code):
+    """(faits_v2, fiche_version, generated_at) ou (None, None, None) si le tenant
+    n'a pas encore la fiche v2 (colonnes absentes = RDS non migrée)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT faits_v2, fiche_version, fiche_v2_generated_at
+                FROM copro_synthese WHERE code_ncg = %s
+            """, (code,))
+            row = cur.fetchone()
+            return row if row else (None, None, None)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return (None, None, None)
+
+
+def get_overview(conn, code, assynco_nb_sinistres=None):
+    """Fiche d'une copro. Toujours {ok:True} : dégradé utile, jamais d'échec dur.
+
+    Deux régimes selon ce que porte la base du tenant :
+    - `fiche_version="v2"` : ANNUAIRE (identité, chiffres calculés, dossiers chauds,
+      questions clés, PV récents), tout en pointeurs — champ `fiche`.
+    - `fiche_version="v1"` : ancien narratif généré (tenant pas encore migré) —
+      champs `narratif`/`faits`, servis avec un `avertissement` explicite.
+    - `fiche_version="aucune"` : ni l'une ni l'autre, faits live seulement.
     """
     immatriculation = _fetch_immatriculation(conn, code)
+    faits_v2, fiche_version, v2_generated_at = _fetch_fiche_v2(conn, code)
+
     with conn.cursor() as cur:
         cur.execute("""
             SELECT nom, narratif, faits, nb_documents, nb_chunks, nb_dossiers,
@@ -135,25 +171,44 @@ def get_overview(conn, code, assynco_nb_sinistres=None):
         row = cur.fetchone()
 
     live_faits, live_wm = _collect_live(conn, code)
-
-    if not row:
-        fresh = _freshness(None, live_wm, assynco_nb_sinistres)
-        return {"ok": True, "code_ncg": code, "immatriculation": immatriculation,
-                "precomputed": False,
-                "nom": live_wm["nom"], "narratif": None, "faits": live_faits,
-                "generated_at": None,
-                "freshness": {"stale": True, "reasons": fresh["reasons"],
-                              "note": "Fiche non pré-calculée : faits live, sans narratif. "
-                                      "Lancer 09_copro_synthese.py --copro pour générer le narratif."}}
-
-    stored = {"nb_documents": row[3], "dernier_pv_date": row[7], "nb_sinistres_assynco": row[6]}
+    stored = ({"nb_documents": row[3], "dernier_pv_date": row[7],
+               "nb_sinistres_assynco": row[6]} if row else None)
     fresh = _freshness(stored, live_wm, assynco_nb_sinistres)
-    return {
-        "ok": True, "code_ncg": code, "immatriculation": immatriculation,
-        "precomputed": True,
-        "nom": row[0], "narratif": row[1], "faits": row[2],
-        "generated_at": str(row[11]) if row[11] else None,
-        "model_used": row[9],
-        "freshness": {"stale": fresh["stale"], "reasons": fresh["reasons"],
-                      "generated_at": str(row[11]) if row[11] else None},
-    }
+    base = {"ok": True, "code_ncg": code, "immatriculation": immatriculation,
+            "nom": (row[0] if row else live_wm["nom"])}
+
+    # ── Régime v2 : annuaire (zéro phrase générée) ──
+    if faits_v2 and fiche_version == "v2":
+        base.update({
+            "fiche_version": "v2", "precomputed": True, "usage": _USAGE_V2,
+            "fiche": faits_v2,
+            "generated_at": str(v2_generated_at) if v2_generated_at else None,
+            "freshness": {"stale": fresh["stale"], "reasons": fresh["reasons"],
+                          "note": "les chiffres de la fiche datent de sa génération ; "
+                                  "les pointeurs, eux, restent valides"},
+        })
+        return base
+
+    # ── Régime v1 : ancien narratif, servi AVEC son avertissement ──
+    if row and row[1]:
+        base.update({
+            "fiche_version": "v1", "precomputed": True,
+            "avertissement": _USAGE_V1,
+            "narratif": row[1], "faits": row[2],
+            "generated_at": str(row[11]) if row[11] else None,
+            "model_used": row[9],
+            "freshness": {"stale": fresh["stale"], "reasons": fresh["reasons"],
+                          "generated_at": str(row[11]) if row[11] else None},
+        })
+        return base
+
+    # ── Ni v2 ni narratif : faits live seuls ──
+    base.update({
+        "fiche_version": "aucune", "precomputed": False,
+        "narratif": None, "faits": (row[2] if row else live_faits),
+        "generated_at": None,
+        "freshness": {"stale": True, "reasons": fresh["reasons"],
+                      "note": "Fiche non pré-calculée : faits live uniquement. "
+                              "Lancer 09_copro_synthese.py --copro pour la générer."},
+    })
+    return base
