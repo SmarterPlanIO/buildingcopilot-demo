@@ -187,6 +187,122 @@ Pour : 100 tantièmes. Contre : 900 tantièmes. Rejetée.""")]
     print("OK groupe orphelin flague + numero ordinal extrait")
 
 
+# ── Correctifs 01/09 : cas REELS de la revue sur pieces (non-regression) ──
+
+def test_c1_formulaire_vierge_8050():
+    """A1 reel : gabarit a trous 'ADOPTEE /REJETEE A L UNANIMITE / LA MAJORITE'."""
+    text = """7. AUTORISATION DONNEE AU SYNDIC DE SIGNER UNE CONVENTION AVEC VINCI
+Le conseil syndical validera le montant définitif de l'indemnité.
+POUR :  CONTRE :  ABSTENTIONS :
+CETTE RESOLUTION EST ADOPTEE /REJETEE A L'UNANIMITE / LA MAJORITE"""
+    r = index_resolution(text)
+    assert r["resultat"] == "indetermine", r
+    assert "formulaire_vierge" in r["flags"], r
+    r2 = index_resolution("""06 - QUITUS
+POUR .. COPROPRITAIRE(S) TOTALISANT ./.. TANTIMES. CONTRE .. SABSTIENNENT ..
+RSOLUTION ADOPTE/REJETE LA MAJORIT/LUNANIMIT DES VOIX""")
+    assert r2["resultat"] == "indetermine" and "formulaire_vierge" in r2["flags"], r2
+    print("OK c1 formulaire vierge (2 variantes reelles) -> indetermine + flag")
+
+
+def test_c2_revote_5548():
+    """A2 reel : 'Resolution revotee a l article 25.1 ci-apres' = pas de resultat ici."""
+    text = """08 - DESIGNATION DU SYNDIC
+Majorité requise: article 25
+Pour: 61 copropriétaire(s) totalisant 45757/100000 tantièmes
+Contre :  Néant  Abstention :  Néant
+RESOLUTION REVOTEE A L'ARTICLE 25.1 CI-APRES."""
+    r = index_resolution(text)
+    assert r["resultat"] == "indetermine", r
+    assert "revote_25_1" in r["flags"], r
+    print("OK c2 revote 25-1 -> indetermine + flag (jamais adoptee via revotEE)")
+
+
+def test_c3_faux_numero_exclu():
+    from resolution_index import _extract_numero, _norm
+    assert _extract_numero(_norm("61 copropriétaire(s) totalisant 45757 tantièmes")) is None
+    assert _extract_numero(_norm("11 MEMBRES TITULAIRES  TYPE DE VOTE")) is None
+    assert _extract_numero(_norm("17-1 SONDAGE ET PURGE DES ELEMENTS")) == "17-1"
+    assert _extract_numero(_norm("11 - DESIGNATION DU SCRUTATEUR")) == "11"
+    print("OK c3 faux numeros exclus, vrais numeros conserves")
+
+
+def test_c45_sonde_C1_5499():
+    """C1 reel (etait REJETEE 0/7 haute confiance !) : adoption art. 25 proclamee."""
+    text = """13- MONTANT DES MARCHES DE TRAVAUX A PARTIR DUQUEL UNE MISE EN
+CONCURRENCE EST RENDUE OBLIGATOIRE
+L'assemblée générale, statuant dans les conditions de majorité de l'article 25,
+fixe à 1500 euros H.T. le montant à partir duquel la mise en concurrence est obligatoire.
+Votent pour : 7 copropriétaires présents ou représentés totalisant 713 tantièmes.
+Vote contre : 0 copropriétaire présent ou représenté totalisant 0 tantième.
+S'abstient : 0 copropriétaire présent ou représenté totalisant 0 tantième.
+Absents : 3 copropriétaires totalisant 287 tantièmes.
+En vertu de quoi, cette résolution est adoptée dans les conditions de majorité de l'article 25."""
+    r = index_resolution(text)
+    assert r["resultat"] == "adoptee", r
+    assert r["decompte"]["pour"] == 713 and r["decompte"]["contre"] == 0, r
+    print("OK sonde C1 (5499) : ex-faux rejet -> ADOPTEE, decompte 713/0 (totalisant)")
+
+
+def test_c45_sonde_C2_5548():
+    """C2 reel (etait REJETEE 0/3907) : appels de fonds pourcents AVANT le decompte."""
+    text = """52 - APPELS DE PROVISIONS
+Le 1er janvier 2021 pour 40 % Le 1er avril 2021 pour 30 % Le 1er juillet 2021 pour 30%
+Pour le Bâtiment Messine 15% Pour Bätiment Hoche 35% Pour escalier Hoche A 50%
+POUR : 36874 sur 40781 tantièmes. CONTRE : 3907 sur 40781 tantièmes. RAMASSAMY
+FRANCOIS (969), FRANCILLARD EMMANUEL (909) ABSTENTIONS : 2768 tantièmes.
+Majorité de l'article 24 : cette résolution est adoptée."""
+    r = index_resolution(text)
+    assert r["resultat"] == "adoptee", r
+    assert r["decompte"]["pour"] == 36874 and r["decompte"]["contre"] == 3907, r
+    print("OK sonde C2 (5548) : dernier-gagne -> ADOPTEE 36874/3907 (pas les 40 pourcents)")
+
+
+def test_c5_sonde_B1_5427():
+    """B1 reel (contradictoire fantome) : Votent pour 33 coproprietaires...605 tantiemes."""
+    text = """9. ANNULATION DE LA RESOLUTION N°11 DE L'A.G. DU 8 AVRIL 2010
+L'assemblée générale, décide d'annuler la résolution n°11.
+Votent pour 33 copropriétaires présents ou représentés totalisant 605 tantièmes.
+Vote contre : 4 copropriétaires présent ou représenté totalisant 70 tantièmes.
+S'abstient : 1 copropriétaire présent ou représenté totalisant 13 tantièmes.
+En vertu de quoi, cette résolution est adoptée dans les conditions de majorité de l'article 25."""
+    r = index_resolution(text)
+    assert r["resultat"] == "adoptee", r
+    assert r["decompte"] == {"pour": 605, "contre": 70, "abstention": 13}, r
+    print("OK sonde B1 (5427) : tantiemes preferes au nb de coproprietaires -> ADOPTEE")
+
+
+def test_c7_sonde_B3_zone_bornee():
+    """B3 reel : la proclamation de la resolution SUIVANTE ne contamine plus la res.11."""
+    seule = """11 REALISATION DES TRAVAUX DE REPARATION DES PORTAILS
+Votent pour : 2 copropriétaires présents ou représentés totalisant 100000 tantièmes.
+Vote contre : 0 copropriétaire présent ou représenté totalisant 0 tantième.
+S'abstient : 0 copropriétaire présent ou représenté totalisant 0 tantième.
+En vertu de quoi, cette résolution est adoptée."""
+    r11 = index_resolution(seule)
+    assert r11["resultat"] == "adoptee", r11
+    assert r11["decompte"]["pour"] == 100000 and r11["decompte"]["contre"] == 0, r11
+    print("OK sonde B3 (5752) : res.11 -> ADOPTEE 100000/0 (plus de fantome)")
+
+
+def test_c89_neant_et_desaccentue_5548():
+    """D reel : OCR sans accents — Contre: Nant, Rsolution adopte la majorit."""
+    text = """06 - Approbation des comptes arrts du 01/01/2012 au 31/12/2012
+Majorit requise: article 24
+L'assemble gnrale approuve les comptes de l'exercice pour un montant de 198.934,53.
+Mise aux voix, cette rsolution a donn lieu au vote suivant:
+Pour: 70 copropritaire(s) totalisant 55664 / 55730 tantimes
+Contre: Nant
+Abstention: KHELIFI (66), soit 1 copropritaire totalisant 66 / 55730 tantimes
+Rsolution adopte la majorit des copropritaires prsents et reprsents."""
+    r = index_resolution(text)
+    assert r["resultat"] == "adoptee", r
+    assert r["decompte"]["contre"] == 0, r
+    assert r["decompte"]["pour"] == 55664, r
+    assert r["source_resultat"] == "decompte+proclamation", r
+    print("OK sonde D (5548-2013) : Nant=0 + Rsolution adopte desaccentue -> ADOPTEE haute")
+
+
 if __name__ == "__main__":
     test_incident_res3_rejetee()
     test_incident_res4_adoptee()
@@ -200,4 +316,12 @@ if __name__ == "__main__":
     test_index_chunks_metadonnees()
     test_groupement_suite_resolution()
     test_groupe_orphelin_et_numero_ordinal()
+    test_c1_formulaire_vierge_8050()
+    test_c2_revote_5548()
+    test_c3_faux_numero_exclu()
+    test_c45_sonde_C1_5499()
+    test_c45_sonde_C2_5548()
+    test_c5_sonde_B1_5427()
+    test_c7_sonde_B3_zone_bornee()
+    test_c89_neant_et_desaccentue_5548()
     print("\nTous les tests C1 resolution_index passent.")
