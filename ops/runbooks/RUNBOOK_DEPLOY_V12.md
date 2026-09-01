@@ -1,4 +1,4 @@
-# RUNBOOK — Déploiement image MCP PALIM v12 (fiche v2 « annuaire »)
+# RUNBOOK — Déploiement image MCP PALIM v12 (fiche v2 « annuaire ») — **CLOS 01/09/2026**
 
 > Date : 01/09/2026. À exécuter en **AWS CloudShell** (console, compte 046004768626,
 > région eu-west-1, Docker préinstallé, creds héritées). Durée ~10 min.
@@ -99,3 +99,22 @@ le rollback est complet et sans perte.
 6. Puis **recoller les Project Instructions** NCG v4.0 / Delacour v1.2 / CSG v1.1 en
    **bumpant la date au jour du recollage**, et vérifier l'écho de version en conversation
    neuve pour chacun.
+
+
+---
+
+## CLÔTURE — post-deploy exécuté le 01/09/2026 (tous verts)
+
+| Contrôle | Résultat |
+|---|---|
+| Images | `palim-mcp` / `palim-delacour-mcp` / `palim-csg-mcp` = **v12**, State=Active, LastUpdateStatus=Successful |
+| Fiche v2 NCG (`8050`) | `fiche_version="v2"`, `usage` présent, **aucun `narratif`**, 5 sections, assurance Assynco mergée |
+| Pointeur suivi | `get_chunks("2b9ce2c29946")` (rés. 11, `rejetee`, confiance haute) → texte réel : double vote art. 25 puis 25-1, « **cette résolution est rejetée dans les conditions de majorité de l'article 25-1** ». Le détecteur avait retenu le DERNIER décompte et la proclamation finale : règle « le dernier gagne » validée sur un cas à deux votes |
+| Repli v1 Delacour (`AE3913340`) | `fiche_version="v1"` + `avertissement` servi. Le narratif figé contient encore « l'AG précédente a approuvé les comptes 2023 » — **l'affirmation de l'incident est désormais livrée avec sa mise en garde**, en attendant le rollout Delacour |
+| Régression analytique | `run_analytical_query` sur 3 copros GE → couverture `3/3 demandées` (dénominateur corrigé), facettes présentes, `trace_ref` OK |
+| Régression Assynco | `assynco_get_copro("5390")` → LES TERRASSES DE TIVOLI, 2 polices, isolation tenant intacte |
+| Recette | `tests/recette_fiche_v2.py` : 19/19 fiches, 1 463 pointeurs, **0 échec** ; `test_resolution_index.py` 22/22 |
+
+**Reste après ce deploy** : recoller les Project Instructions (NCG v4.0, Delacour v1.2,
+CSG v1.1) en bumpant la DATE au jour du recollage, puis rollout Delacour et CSG
+(06a + 09b + 09 sur leur RDS, recette comme critère de sortie).
