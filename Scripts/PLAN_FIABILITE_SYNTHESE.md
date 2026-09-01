@@ -181,6 +181,14 @@ l'attribut immatriculation + refs Assynco + C1/C2 + règles §4). Le champ `narr
 retiré (pas conservé « au cas où » : pas de transitoire). Watermark de fraîcheur conservé
 tel quel. Coût de génération ≈ 0 (titrage optionnel seul).
 
+### Déploiement multi-tenant (décision Thai 01/09)
+L'ordre de rollout : **NCG (+ NGE) d'abord** — C1/C2 y sont déjà en prod — puis, une fois
+les résultats validés, **Delacour** (via sa branche `PALIM_Delacour_Patrimoine` et sa RDS)
+et **CSG Cabinet Saint Germain** (sa RDS, 1 copro Lacépède — migration de quelques
+minutes). Pour chaque tenant : `06a_init_db.py` (table resolutions) + `09b_resolutions.py
+--all` + fiche v2 (C3) + le deploy v12 qui touche déjà toutes les Lambdas. La migration DB
+accompagne le deploy, jamais l'inverse (un tool v2 sans table = dégradé silencieux).
+
 ### C4 — Contrat MCP `PALIM_copro_overview` v2 (deploy v12)
 Sortie = fiche v2 + merge Assynco live (inchangé) + `freshness` (inchangé). Docstring
 réécrite : « la fiche est un GUIDE DE CONSULTATION : suivre les pointeurs (get_chunks,
