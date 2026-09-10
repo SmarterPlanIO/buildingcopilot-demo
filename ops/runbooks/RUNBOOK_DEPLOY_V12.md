@@ -43,6 +43,31 @@ de la base d'un tenant. Vérifié avant d'écrire ce runbook :
 - **Delacour et CSG → `v1`** : ancien narratif, servi avec `avertissement` (statut de
   source le plus bas) tant que leur rollout n'est pas fait.
 
+## Rollout fiche v2 par tenant — SÉQUENCE OBLIGATOIRE (leçon du 10/09)
+
+Le deploy v12 a mis à jour les **3 Lambdas** mais n'a migré le schéma que du tenant
+NCG : au rollout Delacour du 10/09 (veille de livraison client), `09b_resolutions.py`
+a échoué sur `UndefinedTable: relation "resolutions" does not exist` — la table C1
+n'existait que sur la RDS NCG. Le code d'une image est commun aux tenants, **les
+schémas ne le sont pas** : chaque RDS se migre séparément.
+
+Séquence par tenant, dans cet ordre, aucune étape optionnelle :
+
+```bash
+export PALIM_CLIENT=<tenant> PYTHONIOENCODING=utf-8 DB_PASSWORD=...
+python 06a_init_db.py               # 1. migration schéma (idempotent) — TOUJOURS en premier
+python 09b_resolutions.py --all     # 2. table resolutions (DELETE + INSERT par copro)
+python 09_copro_synthese.py --all   # 3. fiches v2 annuaire (zéro LLM)
+python tests/recette_fiche_v2.py    # 4. critère de sortie : tous invariants PASS
+```
+
+Puis smoke par le chemin client : `PALIM_copro_overview` via la Function URL du tenant
+→ `fiche_version="v2"` sans champ `avertissement`.
+
+État des rollouts : **NCG fait le 01/09** (1 463 pointeurs), **Delacour fait le 10/09**
+(25 fiches, 78 questions clés, 71 dossiers chauds, recette 1 308 pointeurs, smoke
+`AE8711459` v2 sans avertissement). **CSG restant** — commencer par le `06a`.
+
 ## Script (coller tel quel dans CloudShell)
 
 ```bash
