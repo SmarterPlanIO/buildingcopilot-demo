@@ -276,18 +276,65 @@ def extract_pdf_native(filepath):
         log.debug(f"Erreur lecture PDF {filepath}: {e}")
         return "", False
 
+def _antiword_bin():
+    """antiword : livré avec Git for Windows (mingw64), sur le PATH Git Bash ET PowerShell."""
+    found = shutil.which("antiword")
+    if found:
+        return found
+    for cand in (r"C:\Program Files\Git\mingw64\bin\antiword.exe",
+                 r"C:\Program Files\Git\usr\bin\antiword.exe"):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def extract_doc_legacy(filepath):
+    """Word 97-2003 (.doc, conteneur OLE2) : antiword, table UTF-8.
+
+    python-docx ne lit que l'OOXML : sur un .doc il lève toujours. L'ancien repli
+    décodait le binaire du fichier en « texte » (charabia OLE2, `isprintable()`
+    laissant passer l'Unicode exotique) : 1 082 .doc NCG → 53 458 chunks de bruit,
+    19 % du RAG (diag 10/09/2026). Un échec d'extraction doit rester un échec.
+    Copie temporaire à chemin ASCII : antiword échoue sur les chemins accentués
+    du Drive (cf. règle 3.4 CLAUDE.md).
+    """
+    import subprocess
+    import tempfile
+    binary = _antiword_bin()
+    if not binary:
+        log.warning("antiword introuvable : .doc non extrait (%s)", filepath)
+        return ""
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = os.path.join(td, "doc.doc")
+            shutil.copy2(filepath, tmp)
+            r = subprocess.run([binary, "-m", "UTF-8.txt", tmp],
+                               capture_output=True, timeout=120)
+        if r.returncode != 0:
+            log.debug("antiword rc=%s sur %s : %s", r.returncode, filepath,
+                      r.stderr[:160].decode("utf-8", "ignore"))
+            return ""
+        return r.stdout.decode("utf-8", errors="replace")
+    except Exception as e:
+        log.debug("Erreur antiword %s: %s", filepath, e)
+        return ""
+
+
 def extract_docx(filepath):
+    """Word : .doc (OLE2) → antiword ; .docx (OOXML) → python-docx.
+
+    AUCUN repli binaire : un fichier illisible rend "" et est compté « vide »
+    (jamais ingéré), au lieu de polluer le RAG avec son contenu brut.
+    """
+    if str(filepath).lower().endswith(".doc"):
+        return extract_doc_legacy(filepath)
     try:
         doc = DocxDocument(filepath)
         return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-    except Exception:
-        try:
-            with open(filepath, "rb") as f:
-                raw = f.read()
-            text = raw.decode("utf-8", errors="ignore")
-            return "".join(c for c in text if c.isprintable() or c in "\n\r\t")
-        except Exception:
-            return ""
+    except Exception as e:
+        # .docx illisible : parfois un vrai .doc mal nommé → une tentative antiword
+        log.debug("python-docx a échoué sur %s (%s) : tentative antiword", filepath, e)
+        return extract_doc_legacy(filepath)
 
 def extract_excel(filepath):
     try:
