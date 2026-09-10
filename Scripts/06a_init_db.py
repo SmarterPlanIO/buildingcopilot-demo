@@ -422,6 +422,17 @@ cur.execute("""
 conn.commit()
 print("✅ Table copro_synthese créée (ou déjà existante)")
 
+# ── Fiche v2 « annuaire » (C3, PLAN_FIABILITE_SYNTHESE) ──
+# Colonnes NEUVES : la v2 n'écrase ni `narratif` ni `faits` (zéro impact sur la prod
+# tant que l'image MCP v12 n'est pas déployée ; rollback = ignorer ces colonnes).
+# faits_v2 = JSON d'ANNUAIRE : identité + chiffres calculés + pointeurs (dossiers
+# chauds, questions clés, PV récents). Aucune phrase générée : que du SQL.
+cur.execute("ALTER TABLE copro_synthese ADD COLUMN IF NOT EXISTS faits_v2 JSONB;")
+cur.execute("ALTER TABLE copro_synthese ADD COLUMN IF NOT EXISTS fiche_version TEXT;")
+cur.execute("ALTER TABLE copro_synthese ADD COLUMN IF NOT EXISTS fiche_v2_generated_at TIMESTAMPTZ;")
+conn.commit()
+print("OK Colonnes fiche v2 (faits_v2, fiche_version) ajoutees")
+
 # ── Table copros : registre annuaire (identité, pas retrieval) ──
 # Lue par PALIM_list_copros (adresse/aliases optionnels) et PALIM_copro_overview.
 # immatriculation = attribut RNIC (AA0000000), jamais une clé interne pour les
@@ -514,6 +525,36 @@ cur.execute("""
     );
 """)
 print("OK Table ingestion_runs creee (ou deja existante)")
+
+# ── Table resolutions : le nœud décisionnel du graphe (C2, PLAN_FIABILITE_SYNTHESE) ──
+# Une ligne par RÉSOLUTION reconstituée (fragments « [Suite résolution …] » regroupés),
+# résultat CALCULÉ (décompte) ou LU (proclamation) par resolution_index.py — jamais
+# généré par LLM. Peuplée par 09b_resolutions.py (DELETE WHERE code_ncg + INSERT).
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS resolutions (
+        resolution_id       TEXT PRIMARY KEY,
+        code_ncg            TEXT NOT NULL,
+        source_file         TEXT NOT NULL,
+        date_ag             DATE,
+        numero              TEXT,
+        objet_court         TEXT,
+        chunk_ids           TEXT[] NOT NULL DEFAULT '{}',
+        decompte_pour       NUMERIC,
+        decompte_contre     NUMERIC,
+        decompte_abstention NUMERIC,
+        article_majorite    TEXT,
+        resultat            TEXT NOT NULL,
+        source_resultat     TEXT,
+        confiance           TEXT,
+        flags               TEXT[] NOT NULL DEFAULT '{}',
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+""")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_resolutions_copro ON resolutions (code_ncg);")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_resolutions_source ON resolutions (source_file);")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_resolutions_resultat ON resolutions (code_ncg, resultat);")
+conn.commit()
+print("OK Table resolutions creee (noeud decisionnel, C2)")
 
 cur.close()
 conn.close()

@@ -762,27 +762,41 @@ def PALIM_assynco_search_sinistres(code_ncg: str, query: str | None = None,
 
 @mcp.tool()
 def PALIM_copro_overview(code_ncg: str) -> dict:
-    """Fiche synthèse d'une copropriété en un appel : narratif (PV d'AG + dossiers) + faits + assurance live.
+    """ANNUAIRE d'une copropriété en un appel : identité, chiffres calculés, dossiers chauds, questions clés, PV récents, assurance live. La fiche ORIENTE, elle n'établit rien.
 
-    Vue d'ensemble RAPIDE et HOLISTIQUE, à privilégier AVANT d'enchaîner des recherches :
-    narratif de situation (décisions d'AG récentes, dossiers en cours), inventaire
-    documentaire, et synthèse assurance Assynco LIVE.
+    Point d'entrée à privilégier AVANT d'enchaîner des recherches : elle dit où
+    regarder. Chaque entrée porte ses POINTEURS (`chunk_ids`, `source_files`,
+    `dossier_id`, `resolution_id`) : les suivre avec PALIM_get_chunks,
+    PALIM_search_chunks scopé, PALIM_get_full_document ou PALIM_search_dossiers,
+    et fonder la réponse sur CES sources.
 
-    Le narratif est pré-calculé (lookup direct, pas de génération à la volée). Le champ
-    `freshness.stale` signale une fiche périmée (nouveaux documents/PV, ou nouveaux
-    sinistres Assynco depuis la génération) : le narratif reste exploitable, mais le
-    signaler à l'utilisateur. Si la fiche n'est pas encore calculée, `precomputed=false` :
-    les faits et l'assurance restent fournis, sans narratif.
+    RÈGLE D'USAGE (impérative) : ne JAMAIS citer depuis cette fiche un sens de vote,
+    une décision d'AG, un montant ou un comptage comme s'il était établi. Les
+    `questions_cles` sont des PISTES D'INSTRUCTION (« les comptes 2023 ont-ils été
+    approuvés ? »), pas des réponses : y répondre suppose de lire le PV pointé.
+    Un sens de vote se vérifie toujours sur le PV.
 
-    Pour le détail (passages sourcés, dossiers, polices), enchaîner sur PALIM_search_chunks,
-    PALIM_search_dossiers ou PALIM_assynco_list_polices.
+    Régimes possibles, lire `fiche_version` :
+    - "v2" : annuaire (champ `fiche`) — sections identite / chiffres_cles /
+      dossiers_chauds / questions_cles / pv_recents, tout en pointeurs, zéro phrase
+      générée. Les champs `identite.*_pointeur` renvoient à une résolution : lire le
+      PV pour le contenu (nom du syndic, composition du conseil syndical), ne rien
+      déduire du seul intitulé. `identite.champs_absents` dit ce qui n'est pas connu.
+    - "v1" : ancienne fiche à narratif généré (tenant pas encore migré). Le champ
+      `avertissement` l'accompagne : statut de source le plus bas, revalidation
+      obligatoire avant toute citation.
+    - "aucune" : faits live seulement.
+
+    `freshness.stale` signale des documents/sinistres postérieurs à la génération :
+    les chiffres datent, les pointeurs restent valides — le signaler à l'utilisateur.
 
     Args:
         code_ncg: Code de la copropriété : immatriculation RNIC (ex: "AE3-410-578", toutes graphies acceptées) ou code interne syndic (ex: "5390"). Utiliser PALIM_list_copros pour le trouver.
 
     Returns:
-        {ok, code_ncg, precomputed, nom, narratif, faits, assurance, freshness, generated_at}.
-        narratif=null si non pré-calculé ; assurance=null si Assynco indisponible/désactivé.
+        {ok, code_ncg, immatriculation, nom, fiche_version, usage, fiche, assurance,
+        freshness, generated_at} en v2 ; {..., avertissement, narratif, faits} en v1.
+        assurance=null si Assynco indisponible/désactivé.
     """
     t0 = time.time()
     codes = scope.normalize_copro_codes(code_ncg)

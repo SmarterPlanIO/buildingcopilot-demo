@@ -127,6 +127,7 @@ stats = {
 # Une couche embarquee volumineuse mais pourrie ne doit plus court-circuiter
 # Textract. Rejets traces dans ocr_quality_manifest.json (a cote du checkpoint)
 # en attendant le cablage registre (motif COUCHE_OCR_DEGRADEE).
+import layout_text
 import ocr_quality
 
 _bedrock_client = None
@@ -520,6 +521,7 @@ def _reconstruct_from_word_blocks(textract_response):
                 "text": block["Text"],
                 "top": bbox.get("Top", 0),
                 "left": bbox.get("Left", 0),
+                "width": bbox.get("Width", 0),   # ecart horizontal -> colonnes
                 "height": bbox.get("Height", 0),
             })
 
@@ -548,7 +550,7 @@ def _reconstruct_from_word_blocks(textract_response):
     prev_bottom = 0
     for line_words in lines:
         line_words.sort(key=lambda w: w["left"])
-        line_text = " ".join(w["text"] for w in line_words)
+        line_text = layout_text.assembler_ligne(line_words)
 
         line_top = line_words[0]["top"]
         line_h = max(w["height"] for w in line_words)
@@ -643,6 +645,7 @@ def collect_result(job_id):
                     "page": block.get("Page", 1),
                     "top": bbox.get("Top", 0),
                     "left": bbox.get("Left", 0),
+                    "width": bbox.get("Width", 0),   # ecart horizontal -> colonnes
                     "height": bbox.get("Height", 0),
                 })
         next_token = result.get("NextToken")
@@ -685,7 +688,7 @@ def collect_result(job_id):
         prev_line_bottom = 0
         for line_words in lines:
             line_words.sort(key=lambda w: w["left"])
-            line_text = " ".join(w["text"] for w in line_words)
+            line_text = layout_text.assembler_ligne(line_words)
 
             # Détecter les sauts de paragraphe (gap vertical important)
             line_top = line_words[0]["top"]
