@@ -64,9 +64,12 @@ python tests/recette_fiche_v2.py    # 4. critère de sortie : tous invariants PA
 Puis smoke par le chemin client : `PALIM_copro_overview` via la Function URL du tenant
 → `fiche_version="v2"` sans champ `avertissement`.
 
-État des rollouts : **NCG fait le 01/09** (1 463 pointeurs), **Delacour fait le 10/09**
+État des rollouts : **TOUS FAITS**. NCG le 01/09 (1 463 pointeurs) ; Delacour le 10/09
 (25 fiches, 78 questions clés, 71 dossiers chauds, recette 1 308 pointeurs, smoke
-`AE8711459` v2 sans avertissement). **CSG restant** — commencer par le `06a`.
+`AE8711459` v2 sans avertissement) ; CSG le 10/09 (1 fiche, 495 résolutions dont 43,8 %
+à résultat établi, recette 121 pointeurs, smoke `AB0835843` v2 — `stale` avec raison
+`sinistres_assynco_live` : attendu et permanent sur le tenant courtier, l'Airtable vit
+plus vite que l'instantané de la fiche).
 
 ## Script (coller tel quel dans CloudShell)
 
