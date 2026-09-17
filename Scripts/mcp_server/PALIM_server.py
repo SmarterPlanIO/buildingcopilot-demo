@@ -13,7 +13,7 @@ PALIM_server.py — Serveur MCP FastMCP exposant le retrieval PALIM à Claude Te
   PALIM_assynco_get_copro     — fiche assurance Assynco (live)
   PALIM_assynco_list_polices  — polices d'assurance (live)
   PALIM_assynco_search_sinistres — sinistres Assynco (live)
-  PALIM_copro_overview        — fiche synthèse pré-calculée (narratif + faits + assurance)
+  PALIM_copro_overview        — annuaire copro pré-calculé (fiche v2 : pointeurs + chiffres SQL, zéro narratif) + assurance live
   PALIM_log_feedback          — feedback utilisateur (Langfuse)
 
 Invariants serveur : scope validé en amont, retours structurés {ok,...},
