@@ -3397,7 +3397,7 @@ Code dans `Scripts/mcp_server/`. Base posée commits `624076f` (serveur P0/P1) e
 
 Constantes (`PALIM_config.py`) : `EMBEDDING_MODEL=amazon.titan-embed-text-v2:0`, `EMBED_DIM=1024`, `RRF_K=60`, `SIMILARITY_THRESHOLD=0.15`, `MAX_CHUNKS_PER_SOURCE=3`, `RERANK_CANDIDATES=200`, `RCP_MIN_SLOTS=3`. Caps serveur : `MAX_CHUNKS_CAP=30`, `MAX_RESULTS_CAP=50`, `MAX_CHARS_CAP=50000`, `GET_FULL_DOC_DEFAULT_CHARS=20000`, `GET_CHUNKS_CAP=20`, `DISCOVERY_TOP_K=10`. Modes : `cible` (2 / sim 0.20), `equilibre` (3 / 0.15), `inventaire` (6 / 0.10).
 
-## Section 14 — Les 12 tools MCP
+## Section 14 — Les 13 tools MCP
 
 Décorateurs `@mcp.tool()` dans `PALIM_server.py`. Tous renvoient un dict `{ok, ...}` (jamais d'exception brute). Le scope est dérivé serveur-side via `PALIM_scope` (jamais reçu de Claude).
 
@@ -3413,10 +3413,9 @@ Décorateurs `@mcp.tool()` dans `PALIM_server.py`. Tous renvoient un dict `{ok, 
 10. **`PALIM_assynco_search_sinistres`**`(code_ncg, query?, max_results=20)` : sinistres dans Assynco (live, plus riche que la table `dossiers`), filtre texte insensible casse/accents.
 11. **`PALIM_copro_overview`**`(code_ncg)` : annuaire de la copro en un appel. Lit la fiche v2 pré-calculée par `09_copro_synthese.py` (table `copro_synthese.faits_v2`, zéro LLM) : 5 sections en pointeurs et chiffres SQL (`identite`, `chiffres_cles`, `dossiers_chauds`, `questions_cles`, `pv_recents`), plus l'assurance Assynco live et le flag `freshness.stale`. `fiche_version` = `v2` (annuaire) / `v1` (ancien narratif Haiku, servi avec `avertissement`, tenant non migré) / `aucune` (faits live seuls). Le narratif généré est supprimé depuis l'image v12 (incident du 27/08 : une fiche affirmait l'approbation de comptes rejetés). La fiche oriente, les sources tranchent.
 12. **`PALIM_log_feedback`**`(rating, comment?, question?, copro_codes?, mode?, utilisateur?, trace_ref?)` : enregistre un retour utilisateur (score Langfuse `utile`/`a_ameliorer`), rattaché à la trace via `trace_ref`.
+13. **`PALIM_run_analytical_query`**`(operation, source, select_field?, metric?, doc_type?, sous_type?, statut?, type_dossier?, annee?, annee_min?, annee_max?, copro_codes?, gestionnaire?)` : analytique inter-copro (count / sum / list par copro) sur whitelist `PALIM_analytics.py` (SQL pur read-only, zéro Bedrock). Seul tool sans scope obligatoire (`copro_codes=None` = parc entier). Renvoie `rows` + `coverage` + `facets` ; spec invalide → `INVALID_ANALYTICAL_SPEC` avec `allowed`.
 
 Commits clés : `64a2a4d` (Project Instructions + 5 tools), `337bb75` (visite 3D en tool), `75ccf5b` (search_dossiers en énumération scopée, fin faux négatif), `9be2fa2` (get_chunks + sourçage), `5894d25` (copro_overview), `62c662a` (log_feedback), `e3ab09e` (Assynco R1 : 3 tools).
-
-> NB : le docstring d'en-tête de `PALIM_server.py` annonce encore "5 tools" (obsolète, 12 décorateurs présents).
 
 ## Section 15 — Livrable client : Project Instructions v1.9 + 3 skills
 

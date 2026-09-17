@@ -1,8 +1,11 @@
 """
 PALIM_overview.py — Fiche synthèse d'une copropriété (lookup direct, pas de génération).
 
-Lit la table `copro_synthese` pré-calculée par 09_copro_synthese.py (narratif Haiku +
-faits SQL). Le tool MCP PALIM_copro_overview y ajoute la synthèse assurance LIVE (Assynco).
+Lit la table `copro_synthese` pré-calculée par 09_copro_synthese.py : fiche v2 « annuaire »
+dans `faits_v2` (identite, chiffres_cles, dossiers_chauds, questions_cles, pv_recents ;
+pointeurs + chiffres SQL, zéro LLM). Repli v1 (ancien narratif, servi avec `avertissement`)
+pour un tenant non migré, sinon faits live seuls. Le tool MCP PALIM_copro_overview y
+ajoute la synthèse assurance LIVE (Assynco).
 
 Fraîcheur : la fiche fige une photo à `generated_at`. On recalcule un watermark live
 depuis la DB (nb_documents, dernier_pv_date, dossiers Airtable) et on flague `stale` si
