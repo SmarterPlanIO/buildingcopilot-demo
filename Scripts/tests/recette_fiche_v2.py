@@ -66,6 +66,18 @@ def main():
     check(len(fiches) == n_copros,
           f"I0 couverture : {len(fiches)} fiches pour {n_copros} copros", dur=False)
 
+    # I0b registre : toute copro ayant des chunks a sa ligne dans copros, avec un
+    # nom_residence — sinon elle est introuvable par son nom dans l'annuaire.
+    # Bloquant : aurait attrapé Nocard (AJ6978050) le 10/09/2026.
+    cur.execute("""SELECT k.code_ncg
+                   FROM (SELECT DISTINCT code_ncg FROM chunks WHERE code_ncg IS NOT NULL) k
+                   LEFT JOIN copros r ON r.code_ncg = k.code_ncg
+                   WHERE r.code_ncg IS NULL OR r.nom_residence IS NULL
+                   ORDER BY 1""")
+    sans_registre = [r[0] for r in cur.fetchall()]
+    check(not sans_registre,
+          f"I0b registre : copro(s) avec chunks sans ligne copros/nom_residence : {sans_registre}")
+
     # référentiels pour l'intégrité (I3)
     cur.execute("SELECT chunk_id FROM chunks")
     chunks_ref = {r[0] for r in cur.fetchall()}

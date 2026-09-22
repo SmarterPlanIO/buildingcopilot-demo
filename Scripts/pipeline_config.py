@@ -43,7 +43,10 @@ CLIENT_CODE = _cfg["client_code"]
 CLIENT_NAME = _cfg["client_name"]
 
 # Racine projet : null dans le profil = racine du clone (parent de Scripts/).
-PROJECT_ROOT = Path(_cfg["project_root"]) if _cfg.get("project_root") else _SCRIPTS_DIR.parent
+# PALIM_PROJECT_ROOT (env) prime sur le profil : permet de lancer les étapes DB (06b, 08...)
+# depuis un autre hôte (palim-louise) avec une copie des shards, sans toucher au profil.
+PROJECT_ROOT = (Path(os.environ["PALIM_PROJECT_ROOT"]) if os.environ.get("PALIM_PROJECT_ROOT")
+                else Path(_cfg["project_root"]) if _cfg.get("project_root") else _SCRIPTS_DIR.parent)
 
 # Sources documentaires : "raw_root" du profil permet de lire DIRECTEMENT un Drive
 # partagé client (lecture seule, zéro recopie). Défaut : Données brutes/ du projet.
@@ -155,6 +158,25 @@ def immatriculation_of(code: str):
     jamais de clé interne pour les clients à codes courts."""
     return _COPROS[resolve(code)].get("immatriculation")
 
+
+
+def registre_row(code: str, meta=None) -> tuple:
+    """Ligne du registre `copros` écrite par 06b :
+    (code_ncg, immatriculation, nom_residence, adresse).
+
+    Contrat (handoff 06B, C1 — relevé Delacour du 21/09/2026) :
+    - nom_residence = `label` du profil s'il existe, sinon `folder` : JAMAIS None,
+      c'est ce que l'annuaire (PALIM_list_copros) affiche et sur quoi il filtre ;
+    - adresse = `label` (chez Delacour le label EST l'adresse postale complète) ;
+      None quand le profil n'a pas de label (NCG : annuaire par code, acceptable).
+    `meta` (dict du profil) permet de tester le contrat sans profil chargé.
+    """
+    if meta is None:
+        code = resolve(code)
+        meta = _COPROS[code]
+    label = (meta.get("label") or "").strip() or None
+    folder = (meta.get("folder") or "").strip()
+    return (code, meta.get("immatriculation") or None, label or folder or code, label)
 
 def raw_source_dir(code: str) -> Path:
     """Source documentaire de la copro : `raw_dir` absolu (share VPN, disque

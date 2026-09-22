@@ -403,6 +403,27 @@ if os.path.exists(METADATA_FILE):
         """, doc_batch)
         conn.commit()
 
+    # ── C3 : propager doc_type_corrige (04) aux chunks ──────────────────────────
+    # 03 classe par dossier Drive d'origine ; 04 corrige dans documents.doc_type_corrige ;
+    # la recherche filtre bien sur COALESCE(doc_type_corrige, doc_type) mais
+    # chunks.doc_type (celui des citations) restait figé — le PV du 25/03/2026
+    # d'Escudier ressortait en COMPTABILITE (relevé Delacour du 21/09/2026).
+    # Restreint à la copro chargée, jamais global. BORDEREAU_AR n'est jamais une
+    # valeur corrigée : on ne le touche pas.
+    if COPRO:
+        cur.execute("""
+            UPDATE chunks c
+            SET doc_type = d.doc_type_corrige
+            FROM documents d
+            WHERE d.source_file = c.source_file
+              AND c.code_ncg = %s
+              AND d.doc_type_corrige IS NOT NULL
+              AND d.doc_type_corrige <> c.doc_type
+              AND c.doc_type <> 'BORDEREAU_AR'
+        """, (COPRO,))
+        conn.commit()
+        print(f"✅ doc_type réaligné sur doc_type_corrige pour {cur.rowcount} chunk(s) de {COPRO}")
+
     cur.execute("SELECT COUNT(*) FROM documents;")
     doc_count = cur.fetchone()[0]
     cur.execute("SELECT COUNT(*) FROM documents WHERE annee IS NOT NULL;")
@@ -513,22 +534,32 @@ else:
     print(f"   Lance d'abord : python 05c_entity_extraction.py")
 
 # =====================================================
-# Registre copros : immatriculation RNIC en attribut (annuaire)
+# Registre copros : identité (libellé, adresse, immatriculation RNIC) — annuaire
 # =====================================================
 # Upsert depuis le profil client (per-copro : la copro chargée ; legacy : tout le
 # profil). Jamais de purge : la table copros survit aux TRUNCATE/DELETE ci-dessus.
+# Contrat des lignes : pipeline_config.registre_row (testé par tests/test_06b_registre.py).
+# BLOQUANT (C2) : un registre incomplet = copro introuvable par son nom (Escudier) ou
+# sans immatriculation (Nocard, ligne jamais écrite le 27/08 — l'échec était avalé).
+# Toute erreur arrête 06b avec un code de sortie non nul ; ingest.py (check=True) suit.
+_reg_codes = [COPRO] if COPRO else sorted(pcfg.COPRO_META)
+_reg_rows = [pcfg.registre_row(c) for c in _reg_codes]
 try:
-    _reg_codes = [COPRO] if COPRO else sorted(pcfg.COPRO_META)
-    _reg_rows = [(c, pcfg.immatriculation_of(c)) for c in _reg_codes]
     execute_values(cur, """
-        INSERT INTO copros (code_ncg, immatriculation) VALUES %s
-        ON CONFLICT (code_ncg) DO UPDATE SET immatriculation = EXCLUDED.immatriculation
+        INSERT INTO copros (code_ncg, immatriculation, nom_residence, adresse) VALUES %s
+        ON CONFLICT (code_ncg) DO UPDATE SET
+            immatriculation = EXCLUDED.immatriculation,
+            nom_residence   = EXCLUDED.nom_residence,
+            adresse         = COALESCE(EXCLUDED.adresse, copros.adresse)
     """, _reg_rows)
-    conn.commit()
-    print(f"✅ Registre copros mis à jour ({len(_reg_rows)} ligne(s), attribut immatriculation)")
-except Exception as _e:
+except psycopg2.errors.UndefinedTable:
     conn.rollback()
-    print(f"⚠️  Registre copros non mis à jour ({_e}) — lancer 06a_init_db.py pour créer la table copros")
+    print("❌ Table copros absente — lancer 06a_init_db.py pour la créer, puis relancer 06b.")
+    raise
+conn.commit()
+print(f"✅ Registre copros mis à jour ({len(_reg_rows)} ligne(s)) :")
+for _code, _immat, _nom, _adresse in _reg_rows:
+    print(f"   {_code}  immat={_immat or '—'}  nom={_nom!r}  adresse={_adresse or '—'}")
 
 cur.close()
 conn.close()
