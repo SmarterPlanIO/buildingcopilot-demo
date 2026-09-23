@@ -50,7 +50,10 @@ PROJECT_ROOT = (Path(os.environ["PALIM_PROJECT_ROOT"]) if os.environ.get("PALIM_
 
 # Sources documentaires : "raw_root" du profil permet de lire DIRECTEMENT un Drive
 # partagé client (lecture seule, zéro recopie). Défaut : Données brutes/ du projet.
-RAW_ROOT       = Path(_cfg["raw_root"]) if _cfg.get("raw_root") else PROJECT_ROOT / "Données brutes"
+# PALIM_RAW_ROOT (env) prime sur le profil : copie locale du Drive partagé (rclone) sur un
+# hôte qui ne monte pas GoogleDriveFS (palim-louise). Les noms de dossiers sont ceux du Drive.
+RAW_ROOT       = (Path(os.environ["PALIM_RAW_ROOT"]) if os.environ.get("PALIM_RAW_ROOT")
+                  else Path(_cfg["raw_root"]) if _cfg.get("raw_root") else PROJECT_ROOT / "Données brutes")
 RESULTS_ROOT   = PROJECT_ROOT / "Résultats bruts"
 FILTERED_ROOT  = RESULTS_ROOT / "Archives_Filtrees"
 EXTRACTED_ROOT = RESULTS_ROOT / "Archives_Extraites"
