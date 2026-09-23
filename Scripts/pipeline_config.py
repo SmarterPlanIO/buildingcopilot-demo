@@ -93,7 +93,7 @@ for _k, _v in (_cfg.get("included_copros") or {}).items():
             f"❌ Copro {_ck} : `folder` doit être un nom RELATIF ({_meta['folder']!r}). "
             f"Pour une source externe (share VPN, disque), utiliser `raw_dir`."
         )
-    if _meta.get("raw_dir") and not Path(str(_meta["raw_dir"])).is_absolute():
+    if _meta.get("raw_dir") and not (Path(str(_meta["raw_dir"])).is_absolute() or str(_meta["raw_dir"]).startswith("/")):
         raise SystemExit(
             f"❌ Copro {_ck} : `raw_dir` doit être un chemin ABSOLU (local ou UNC), "
             f"reçu {_meta['raw_dir']!r}."

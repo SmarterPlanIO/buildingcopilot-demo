@@ -44,6 +44,11 @@
     "AA8785875": {"folder": "SDC 94 Boulevard Victor Hugo - 92200", "lobby_code": "0204", "label": "SDC 94 boulevard Victor Hugo, 92200 Neuilly-sur-Seine"},
     "AE3913340": {"folder": "SDC 99 Avenue de Verdun - 92130", "lobby_code": "0154", "label": "SDC 99 avenue de Verdun, 92130 Issy-les-Moulineaux"},
     "AF8745119": {"folder": "4 rue des Villas - 94800 Villejuif", "label": "Résidence 4/6 rue des Villas, 94800 Villejuif"},
-    "AC0390328": {"folder": "SDC 1 rue de crillon - 92210", "lobby_code": "0325", "label": "SDC 1 rue de Crillon, 92210 Saint-Cloud"}
+    "AC0390328": {"folder": "SDC 1 rue de crillon - 92210", "lobby_code": "0325", "label": "SDC 1 rue de Crillon, 92210 Saint-Cloud"},
+    "AC8312977": {"folder": "21bis Rue Pasteur - 93400", "label": "SDC 21 bis rue Pasteur, 93400 Saint-Ouen-sur-Seine", "raw_dir": "/home/thai-binh/palim-delacour/raw/21bis Rue Pasteur - 93400"},
+    "AC1168715": {"folder": "40 rue Blomet - 75015", "label": "SDC 40 rue Blomet, 75015 Paris", "raw_dir": "/home/thai-binh/palim-delacour/raw/40 rue Blomet - 75015"},
+    "AD1265248": {"folder": "45 rue de l’Alma - 92400", "label": "SDC 45 rue de l'Alma, 92400 Courbevoie", "raw_dir": "/home/thai-binh/palim-delacour/raw/45 rue de l’Alma - 92400"},
+    "AB8763831": {"folder": "2-2 bis avenue stade de coubertin - 92100", "label": "SDC 2-2 bis avenue du Stade de Coubertin, 92100 Boulogne-Billancourt", "raw_dir": "/home/thai-binh/palim-delacour/raw/2-2 bis avenue stade de coubertin - 92100"},
+    "AA0624973": {"folder": "Résidence Stalingrad - 92320", "label": "SDC Résidence Stalingrad, 15 boulevard de Stalingrad, 92320 Châtillon", "raw_dir": "/home/thai-binh/palim-delacour/raw/Résidence Stalingrad - 92320"}
   }
 }
