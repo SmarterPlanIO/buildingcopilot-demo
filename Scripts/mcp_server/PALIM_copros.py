@@ -136,9 +136,18 @@ def list_copros(conn, query=None):
     if qn:
         scored = [(_score({**e, "aliases": e.get("aliases", [])}, qn), e) for e in entries]
         matched = [e for sc, e in sorted(scored, key=lambda x: x[0], reverse=True) if sc > 0]
-        # Si aucun match, renvoyer la liste complète (Claude reste informé)
-        result = matched if matched else sorted(entries, key=lambda e: e["code_ncg"])
+        # Aucun match => liste VIDE (v13). Renvoyer le portefeuille entier laissait croire
+        # que la recherche avait abouti : un immeuble absent de l'index ressortait comme
+        # "25 resultats" (releve client Delacour du 21/09/2026). Une liste vide + un
+        # avertissement disent la verite : ce nom n'est pas dans l'annuaire.
+        if not matched:
+            return {"ok": True, "copros": [], "n_results": 0,
+                    "warnings": [f"Aucune copropriete ne correspond a '{query}'. "
+                                 f"{len(entries)} coproprietes sont indexees : verifier "
+                                 f"l'orthographe, essayer la rue seule ou le code, ou "
+                                 f"appeler PALIM_list_copros() sans argument pour la liste complete."]}
+        result = matched
     else:
         result = sorted(entries, key=lambda e: e["code_ncg"])
 
-    return {"ok": True, "copros": result}
+    return {"ok": True, "copros": result, "n_results": len(result)}

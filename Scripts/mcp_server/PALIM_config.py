@@ -77,6 +77,8 @@ AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
 AIRTABLE_PAT_SECRET_ARN = os.environ.get("AIRTABLE_PAT_SECRET_ARN", "")
 ASSYNCO_MAX_RECORDS_CAP = int(os.environ.get("ASSYNCO_MAX_RECORDS_CAP", "50"))
 ASSYNCO_HTTP_TIMEOUT = int(os.environ.get("ASSYNCO_HTTP_TIMEOUT", "15"))
+ASSYNCO_HTTP_RETRIES = int(os.environ.get("ASSYNCO_HTTP_RETRIES", "2"))   # v13 : reprises sur timeout/429/5xx
+ASSYNCO_HTTP_BACKOFF = float(os.environ.get("ASSYNCO_HTTP_BACKOFF", "0.8"))  # secondes, double a chaque essai
 # Isolation tenant : la base Airtable est multi-syndic (base du courtier Assynco,
 # partagée entre clients PALIM). Les tools n'autorisent QUE les copros dont le champ
 # `Syndic` correspond à une entité du client courant. Libellés (champ primaire

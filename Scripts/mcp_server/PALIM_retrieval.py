@@ -132,6 +132,8 @@ def _citation(r):
         "doc": r[_C_FILE],
         "doc_type": r[_C_DOCTYPE],
         "date": str(date) if date else None,
+        # v13 : nom du registre (copros.nom_residence), pas le nom du dossier Drive
+        # -- "SDC - 92100" ressortait dans les citations d'Escudier (releve du 21/09/2026).
         "copro": r[_C_COPRO],
         "code_ncg": r[_C_CODE_NCG],
         "source_file": r[_C_SRC],
@@ -215,7 +217,9 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
 
         sql = f"""
             WITH base AS (
-                SELECT c.chunk_id, c.code_ncg, c.copropriete, c.source_file, c.nom_fichier,
+                SELECT c.chunk_id, c.code_ncg,
+                       COALESCE(r.nom_residence, c.copropriete) AS copropriete,
+                       c.source_file, c.nom_fichier,
                        c.doc_type, c.text, c.chunk_index, c.resolution_category,
                        d.date_document,
                        COALESCE(d.groupe_doc, c.source_file) AS groupe_doc,
@@ -224,6 +228,7 @@ def hybrid_search(conn, bedrock, query, *, copro_codes, doc_type=None,
                        CASE WHEN c.doc_type = %s THEN %s ELSE 0 END AS doc_type_boost
                 FROM chunks c
                 LEFT JOIN documents d ON c.source_file = d.source_file
+                LEFT JOIN copros r ON r.code_ncg = c.code_ncg
                 {where_sql}
             ),
             with_ranks AS (
@@ -339,10 +344,13 @@ def get_chunks_by_id(conn, chunk_ids):
         return [], []
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT c.chunk_id, c.code_ncg, c.copropriete, c.source_file, c.nom_fichier,
+            SELECT c.chunk_id, c.code_ncg,
+                   COALESCE(r.nom_residence, c.copropriete) AS copropriete,
+                   c.source_file, c.nom_fichier,
                    c.doc_type, c.text, c.chunk_index, d.date_document
             FROM chunks c
             LEFT JOIN documents d ON c.source_file = d.source_file
+            LEFT JOIN copros r ON r.code_ncg = c.code_ncg
             WHERE c.chunk_id = ANY(%s)
         """, (ids,))
         rows = cur.fetchall()

@@ -20,6 +20,8 @@ en réponse MCP structurée) :
   - search_sinistres(code_ncg, query, max_records) -> list[dict]
 """
 import json
+import time
+import socket
 import re
 import unicodedata
 import urllib.parse
@@ -58,6 +60,29 @@ def _get_pat():
 # ──────────────────────────────────────────────────────────────
 # Client Airtable read générique
 # ──────────────────────────────────────────────────────────────
+def _http_json(req):
+    """GET Airtable avec reprise sur incident transitoire (v13).
+
+    Airtable rend parfois un timeout ou un 429/5xx sous charge : 3 occurrences en 21 jours
+    remontaient a l'utilisateur en "erreur interne" (releve client Delacour du 21/09/2026).
+    On retente ASSYNCO_HTTP_RETRIES fois avec un backoff court ; seul un echec repete
+    remonte, et il remonte explicite.
+    """
+    last = None
+    for essai in range(cfg.ASSYNCO_HTTP_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=cfg.ASSYNCO_HTTP_TIMEOUT) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            last = exc
+            if exc.code not in (429, 500, 502, 503, 504):
+                raise
+        except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+            last = exc
+        if essai < cfg.ASSYNCO_HTTP_RETRIES:
+            time.sleep(cfg.ASSYNCO_HTTP_BACKOFF * (2 ** essai))
+    raise last
+
 def _airtable_list(table_id, formula=None, fields=None, max_records=None):
     """GET paginé sur une table. Retourne une liste de records bruts {id, fields}.
 
@@ -79,8 +104,7 @@ def _airtable_list(table_id, formula=None, fields=None, max_records=None):
             params.append(("offset", offset))
         url = f"{_AT_API}/{cfg.ASSYNCO_BASE_ID}/{table_id}?" + urllib.parse.urlencode(params)
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {pat}"})
-        with urllib.request.urlopen(req, timeout=cfg.ASSYNCO_HTTP_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        data = _http_json(req)
         out.extend(data.get("records", []))
         offset = data.get("offset")
         if not offset:
