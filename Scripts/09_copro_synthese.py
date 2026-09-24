@@ -37,6 +37,7 @@ import psycopg2
 from psycopg2.extras import Json
 
 import pipeline_config as pcfg
+from pv_exemplaires import selectionner_pv
 
 FICHE_VERSION = "v2"
 MAX_DOSSIERS_CHAUDS = 10      # au-delà, l'annuaire cesse d'orienter
@@ -332,16 +333,22 @@ def build_pv_recents(code):
     # Seuls les documents portant AU MOINS UNE résolution à résultat établi sont des
     # PV exploitables : les feuilles de présence, VPC et récapitulatifs sont classés
     # PV_AG en amont mais n'ont aucun vote — ils polluaient l'annuaire.
+    # Un PV par AG : les exemplaires d'une même AG (PDF signé, .doc, PDF non signé)
+    # sont regroupés par pv_exemplaires.selectionner_pv, l'écarté reste pointé.
     cur.execute("""
-        SELECT source_file, MAX(date_ag) AS d FROM resolutions
+        SELECT source_file, MAX(date_ag) AS d,
+               COUNT(*) FILTER (WHERE resultat IN ('adoptee','rejetee','retiree')) AS n_etablies,
+               array_agg(objet_court) FILTER (WHERE objet_court IS NOT NULL) AS objets
+        FROM resolutions
         WHERE code_ncg = %s AND date_ag IS NOT NULL
         GROUP BY source_file
         HAVING COUNT(*) FILTER (WHERE resultat IN ('adoptee','rejetee','retiree')) > 0
-        ORDER BY d DESC LIMIT %s
-    """, (code, MAX_PV_RECENTS))
-    pvs = cur.fetchall()
+    """, (code,))
+    fichiers = [{"source_file": r[0], "date": r[1], "n_etablies": int(r[2]), "objets": list(r[3] or [])}
+                for r in cur.fetchall()]
     out = []
-    for source_file, dag in pvs:
+    for pv in selectionner_pv(fichiers, MAX_PV_RECENTS):
+        source_file, dag = pv["source_file"], pv["date"]
         cur.execute("""
             SELECT resolution_id, date_ag, numero, objet_court, chunk_ids, resultat, confiance
             FROM resolutions
@@ -356,7 +363,8 @@ def build_pv_recents(code):
         n_non_etablies = int((cur.fetchone() or [0])[0] or 0)
         out.append({"date": str(dag), "source_file": source_file,
                     "resolutions_etablies": etablies,
-                    "n_resolutions_sans_resultat_etabli": n_non_etablies})
+                    "n_resolutions_sans_resultat_etabli": n_non_etablies,
+                    "autres_exemplaires": pv["autres_exemplaires"]})
     return out
 
 
