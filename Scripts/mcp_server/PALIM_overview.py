@@ -12,6 +12,7 @@ déclaré dans Airtable entre deux runs du pipeline.
 
 Module read-only, self-contained (aucune dépendance au pipeline d'ingestion).
 """
+import PALIM_copros as _copros
 
 
 def _scalar(cur, sql, params):
@@ -160,6 +161,11 @@ def get_overview(conn, code, assynco_nb_sinistres=None):
     """
     immatriculation = _fetch_immatriculation(conn, code)
     faits_v2, fiche_version, v2_generated_at = _fetch_fiche_v2(conn, code)
+    # Nom du registre (copros.nom_residence), pas le nom du dossier Drive figé dans la
+    # fiche au calcul -- "SDC - 92100" pour Escudier (relevé Delacour du 21/09/2026).
+    nom_registre = _copros.registry_names(conn).get(code)
+    if nom_registre and isinstance(faits_v2, dict) and isinstance(faits_v2.get("identite"), dict):
+        faits_v2["identite"]["nom"] = nom_registre
 
     with conn.cursor() as cur:
         cur.execute("""
@@ -175,7 +181,7 @@ def get_overview(conn, code, assynco_nb_sinistres=None):
                "nb_sinistres_assynco": row[6]} if row else None)
     fresh = _freshness(stored, live_wm, assynco_nb_sinistres)
     base = {"ok": True, "code_ncg": code, "immatriculation": immatriculation,
-            "nom": (row[0] if row else live_wm["nom"])}
+            "nom": nom_registre or (row[0] if row else live_wm["nom"])}
 
     # ── Régime v2 : annuaire (zéro phrase générée) ──
     if faits_v2 and fiche_version == "v2":

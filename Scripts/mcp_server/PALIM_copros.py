@@ -75,6 +75,24 @@ def _fetch_registry(conn):
         return {}
 
 
+def registry_names(conn):
+    """{code_ncg: nom_residence} du registre copros, noms non vides seulement.
+    {} si la table est absente (tenant non migré) : l'appelant garde alors le nom
+    du dossier Drive. Sert aux tools qui affichent un nom de copro hors annuaire
+    (fiche, analytique, découverte, document complet)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT code_ncg, nom_residence FROM copros "
+                        "WHERE nom_residence IS NOT NULL AND nom_residence <> ''")
+            return dict(cur.fetchall())
+    except Exception:
+        try:
+            conn.rollback()  # ne pas laisser la transaction abortée
+        except Exception:
+            pass
+        return {}
+
+
 def _score(entry, qn):
     """Score de pertinence d'une copro vs requête normalisée qn."""
     if not qn:

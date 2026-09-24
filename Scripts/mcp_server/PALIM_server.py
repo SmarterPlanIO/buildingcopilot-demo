@@ -34,7 +34,7 @@ import PALIM_tracing as lf
 from PALIM_db import get_conn
 from PALIM_retrieval import hybrid_search, get_chunks_by_id as _get_chunks_by_id
 from PALIM_discovery import discover_copros
-from PALIM_copros import list_copros as _list_copros
+from PALIM_copros import list_copros as _list_copros, registry_names as _registry_names
 from PALIM_dossiers import search_dossiers as _search_dossiers
 from PALIM_visites import match_visites as _match_visites
 from PALIM_analytics import run_analytical_query as _run_analytical_query
@@ -440,7 +440,9 @@ def PALIM_get_full_document(
             hi = chunk_end if chunk_end is not None else 10**9
             rows = [r for r in rows if r[4] is not None and lo <= r[4] <= hi]
 
-        meta = {"code_ncg": rows[0][0], "copropriete": rows[0][1],
+        # nom du registre, pas du dossier Drive (relevé Delacour du 21/09/2026)
+        nom_registre = _registry_names(get_conn()).get(rows[0][0])
+        meta = {"code_ncg": rows[0][0], "copropriete": nom_registre or rows[0][1],
                 "doc_type": rows[0][2], "nom_fichier": rows[0][3]}
         full = "\n\n".join((r[5] or "") for r in rows)
         total = len(full)

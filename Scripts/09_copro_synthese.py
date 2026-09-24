@@ -100,10 +100,13 @@ def build_identite(code):
 
     immat, adresse, rue = None, None, None
     try:
-        cur.execute("SELECT immatriculation, adresse, rue FROM copros WHERE code_ncg = %s", (code,))
+        cur.execute("SELECT immatriculation, adresse, rue, nom_residence FROM copros WHERE code_ncg = %s", (code,))
         row = cur.fetchone()
         if row:
-            immat, adresse, rue = row
+            immat, adresse, rue = row[:3]
+            # Nom du registre, pas le nom du dossier Drive ("SDC - 92100" pour Escudier,
+            # relevé Delacour du 21/09/2026). Repli sur le dossier si le registre est muet.
+            nom = row[3] or nom
     except Exception:
         conn.rollback()
 

@@ -20,6 +20,8 @@ chaque ligne d'agrégat reste rattachée à son code_ncg (GROUP BY).
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import PALIM_copros as _copros
+
 # ──────────────────────────────────────────────────────────────
 # LISTE BLANCHE — identique à Streamlit Cloud/analytics.py (source de vérité
 # du contrat ; toute évolution se fait DES DEUX CÔTÉS).
@@ -263,7 +265,8 @@ def run_analytical_query(conn, spec: Dict[str, Any],
         raise
 
     copros_avec_donnees = {r[0] for r in rows if r[0]}
-    out_rows = [{"code_ncg": r[0], "copro_nom": r[1],
+    noms = _copros.registry_names(conn)  # nom du registre, pas du dossier Drive
+    out_rows = [{"code_ncg": r[0], "copro_nom": noms.get(r[0]) or r[1],
                  "valeur": float(r[2]) if isinstance(r[2], Decimal) else r[2]}
                 for r in rows[:_MAX_ROWS_RETURNED]]
     truncated = len(rows) > _MAX_ROWS_RETURNED

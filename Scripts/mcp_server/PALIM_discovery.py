@@ -6,6 +6,7 @@ réponse de fond. Retour orienté triage : match_count, doc_types, years,
 snippet court. final_answer_allowed=false (cf. PLAN_ACTION §3.3).
 """
 import PALIM_config as cfg
+import PALIM_copros as _copros
 import PALIM_tracing as lf
 from PALIM_retrieval import embed_query
 
@@ -74,11 +75,12 @@ def discover_copros(conn, bedrock, query, doc_type=None, year_min=None,
         rows = cur.fetchall()
     lf.end_span(_sp, n_candidates=len(rows))
 
+    noms = _copros.registry_names(conn)  # nom du registre, pas du dossier Drive
     candidates = []
     for code_ncg, nom, match_count, doc_types, years, snippet, top_sim in rows:
         candidates.append({
             "code_ncg": code_ncg,
-            "nom": nom,
+            "nom": noms.get(code_ncg) or nom,
             "match_count": int(match_count),
             "doc_types": sorted([t for t in (doc_types or []) if t]),
             "years": sorted([int(y) for y in (years or [])]),
